@@ -36,7 +36,7 @@ ROMFS		:=	romfs
 APP_TITLE		:=	romm3ds
 APP_DESCRIPTION	:=	Romm Save Sync for Nintendo 3DS
 APP_AUTHOR		:=	owenlejeune
-APP_ICON		:=	
+APP_ICON		:=	icon.png
 
 #---------------------------------------------------------------------------------
 # options for code generation
