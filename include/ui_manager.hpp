@@ -3,13 +3,14 @@
 #include <3ds.h>
 #include <citro2d.h>
 #include <string>
+#include <vector>
 
 namespace RomM3DS {
 
 class ConfigManager;
 class NetworkManager;
 class SaveManager;
-struct InstalledTitle;
+class SyncManager;
 
 enum class UIState {
     FIRST_LAUNCH,
@@ -23,7 +24,10 @@ public:
     UIManager();
     ~UIManager();
 
-    void init(C3D_RenderTarget* topTarget, C3D_RenderTarget* bottomTarget, ConfigManager* configMgr, NetworkManager* netMgr = nullptr, SaveManager* saveMgr = nullptr);
+    void init(C3D_RenderTarget* topTarget, C3D_RenderTarget* bottomTarget,
+              ConfigManager* configMgr, NetworkManager* netMgr = nullptr,
+              SaveManager* saveMgr = nullptr, SyncManager* syncMgr = nullptr);
+
     void handleInput(u32 kDown, const touchPosition& touch);
     void render();
     void cleanup();
@@ -32,8 +36,13 @@ public:
     UIState getState() const { return m_state; }
 
     void setStatusMessage(const std::string& msg) { m_statusMessage = msg; }
+
     void runConnectionTest();
-    void runTitleScan();
+    void runLibraryRefresh();
+    void syncSelectedGame();
+    void syncAllGames();
+    void forceUploadSelected();
+    void forceDownloadSelected();
 
 private:
     void renderTopScreen();
@@ -45,11 +54,21 @@ private:
     void renderMainMenuTop();
     void renderMainMenuBottom();
 
+    void renderMatchingTop();
+    void renderMatchingBottom();
+
+    void renderConflictTop();
+    void renderConflictBottom();
+
     void drawInputBox(float x, float y, float w, float h, const char* label, const std::string& value, bool selected);
-    void drawButton(float x, float y, float w, float h, const char* label, bool selected);
+    void drawButton(float x, float y, float w, float h, const char* label, bool selected, u32 accentColor = 0);
 
     std::string launchKeyboard(const std::string& hint, const std::string& initial, int maxLen = 256);
     void executeSaveAction();
+
+    void openManualMatch();
+    void confirmManualMatch();
+    void resolveConflict(int choice);
 
     static bool isTouchInside(const touchPosition& touch, float x, float y, float w, float h);
 
@@ -57,6 +76,7 @@ private:
     ConfigManager* m_configMgr = nullptr;
     NetworkManager* m_netMgr = nullptr;
     SaveManager* m_saveMgr = nullptr;
+    SyncManager* m_syncMgr = nullptr;
 
     C3D_RenderTarget* m_topTarget = nullptr;
     C3D_RenderTarget* m_bottomTarget = nullptr;
@@ -66,6 +86,11 @@ private:
     std::string m_enteredEndpoint;
     std::string m_enteredApiKey;
     std::string m_statusMessage;
+
+    size_t m_selectedGameIndex = 0;
+    size_t m_selectedRemoteIndex = 0;
+    int m_conflictChoiceIndex = 0;
+    size_t m_conflictGameIndex = 0;
 };
 
 } // namespace RomM3DS
