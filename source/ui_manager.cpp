@@ -751,7 +751,19 @@ void UIManager::drawButton(float x, float y, float w, float h, const char* label
     C2D_Text btnText;
     C2D_TextParse(&btnText, m_textBuf, label);
     C2D_TextOptimize(&btnText);
-    C2D_DrawText(&btnText, C2D_WithColor, x + 12.0f, y + 8.0f, 0.5f, 0.48f, 0.48f, CLR_TEXT_WHITE);
+
+    float scale = (h <= 22.0f) ? 0.38f : (h <= 28.0f ? 0.42f : 0.46f);
+    float textW = 0.0f, textH = 0.0f;
+    C2D_TextGetDimensions(&btnText, scale, scale, &textW, &textH);
+
+    if (textW > w - 8.0f && textW > 0.0f) {
+        scale *= (w - 8.0f) / textW;
+        C2D_TextGetDimensions(&btnText, scale, scale, &textW, &textH);
+    }
+
+    float textX = x + (w - textW) / 2.0f;
+    float textY = y + (h - textH) / 2.0f;
+    C2D_DrawText(&btnText, C2D_WithColor, textX, textY, 0.5f, scale, scale, CLR_TEXT_WHITE);
 }
 
 void UIManager::renderFirstLaunchTop() {
@@ -925,7 +937,7 @@ void UIManager::renderMainMenuBottom() {
     drawButton(16.0f, 163.0f, 138.0f, 26.0f, "[ Sync (A) ]", false);
     drawButton(166.0f, 163.0f, 138.0f, 26.0f, "[ Sync All (X) ]", false);
 
-    drawButton(16.0f, 193.0f, 138.0f, 26.0f, "[ RomM Library (SELECT) ]", false);
+    drawButton(16.0f, 193.0f, 138.0f, 26.0f, "[ RomM Lib (SELECT) ]", false);
 
     bool isCurrentlyIgnored = (!m_filteredLocalIndices.empty() &&
                                m_selectedGameIndex < m_filteredLocalIndices.size() &&
