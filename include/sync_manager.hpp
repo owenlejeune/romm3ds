@@ -43,6 +43,7 @@ public:
     std::vector<SyncItem>& getItems() { return m_items; }
     const std::vector<SyncItem>& getItems() const { return m_items; }
     const std::vector<RommGame>& getRemoteLibrary() const { return m_remoteGames; }
+    const std::vector<RommPlatform>& getPlatforms() const { return m_platforms; }
 
     bool manualMatch(size_t itemIndex, const RommGame& remoteGame);
     SyncAction evaluateItem(const SyncItem& item);
@@ -54,9 +55,12 @@ public:
     const std::string& getLastMessage() const { return m_lastMessage; }
 
     static std::string getStagingDirectory(uint64_t titleId);
+    static std::string getFriendlyPlatformName(const std::string& slug);
+    static bool isPlatformCompatible(const std::string& localConsole, const std::string& remotePlatformSlug);
 
 private:
     void autoMatchTitles();
+    void consolidatePlatforms();
     static std::string normalizeName(const std::string& str);
     static bool matchesFuzzy(const std::string& s1, const std::string& s2);
 
@@ -66,6 +70,7 @@ private:
 
     std::vector<SyncItem> m_items;
     std::vector<RommGame> m_remoteGames;
+    std::vector<RommPlatform> m_platforms;
     std::string m_lastMessage;
 };
 

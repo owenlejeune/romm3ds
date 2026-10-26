@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <map>
 
 namespace RomM3DS {
 
@@ -171,7 +172,8 @@ void UIManager::updateLocalFilteredList() {
         if (!m_localFilterText.empty()) {
             if (!containsIgnoreCase(item.localTitle.name, m_localFilterText) &&
                 !containsIgnoreCase(item.localTitle.titleIdHex, m_localFilterText) &&
-                !containsIgnoreCase(item.localTitle.productCode, m_localFilterText)) {
+                !containsIgnoreCase(item.localTitle.productCode, m_localFilterText) &&
+                !containsIgnoreCase(item.localTitle.console, m_localFilterText)) {
                 continue;
             }
         }
@@ -190,6 +192,16 @@ void UIManager::updateRemoteFilteredList() {
 
     const auto& remote = m_syncMgr->getRemoteLibrary();
     for (size_t i = 0; i < remote.size(); ++i) {
+        if (!m_selectedConsoleSlug.empty()) {
+            if (m_selectedConsoleSlug == "other") {
+                if (!remote[i].platform.empty()) continue;
+            } else {
+                if (strcasecmp(remote[i].platform.c_str(), m_selectedConsoleSlug.c_str()) != 0) {
+                    continue;
+                }
+            }
+        }
+
         if (!m_remoteFilterText.empty()) {
             if (!containsIgnoreCase(remote[i].title, m_remoteFilterText)) {
                 continue;
@@ -387,10 +399,52 @@ void UIManager::openManualMatch() {
     if (!m_syncMgr || m_filteredLocalIndices.empty()) return;
     if (m_selectedGameIndex >= m_filteredLocalIndices.size()) return;
 
+    size_t localActualIdx = m_filteredLocalIndices[m_selectedGameIndex];
+    const auto& localItem = m_syncMgr->getItems()[localActualIdx];
+
+    m_availableConsoles = m_syncMgr->getPlatforms();
+    if (m_availableConsoles.empty()) {
+        std::map<std::string, int> counts;
+        for (const auto& g : m_syncMgr->getRemoteLibrary()) {
+            if (!g.platform.empty()) counts[g.platform]++;
+            else counts["other"]++;
+        }
+        for (const auto& pair : counts) {
+            RommPlatform p;
+            p.slug = pair.first;
+            p.name = SyncManager::getFriendlyPlatformName(pair.first);
+            p.romCount = pair.second;
+            m_availableConsoles.push_back(p);
+        }
+        std::sort(m_availableConsoles.begin(), m_availableConsoles.end(),
+            [](const RommPlatform& a, const RommPlatform& b) {
+                return a.name < b.name;
+            });
+    }
+
+    // Default console selection based on local game console
+    m_selectedConsoleIndex = 0;
+    for (size_t i = 0; i < m_availableConsoles.size(); ++i) {
+        if (SyncManager::isPlatformCompatible(localItem.localTitle.console, m_availableConsoles[i].slug)) {
+            m_selectedConsoleIndex = i;
+            break;
+        }
+    }
+
+    m_matchingSubState = MatchingSubState::SELECT_CONSOLE;
+    m_state = UIState::MATCHING;
+}
+
+void UIManager::selectConsole(size_t index) {
+    if (index >= m_availableConsoles.size()) return;
+    m_selectedConsoleIndex = index;
+    m_selectedConsoleSlug = m_availableConsoles[index].slug;
+    m_selectedConsoleName = m_availableConsoles[index].name;
+
     m_remoteFilterText.clear();
     updateRemoteFilteredList();
     m_selectedRemoteIndex = 0;
-    m_state = UIState::MATCHING;
+    m_matchingSubState = MatchingSubState::SELECT_GAME;
 }
 
 void UIManager::confirmManualMatch() {
@@ -529,62 +583,105 @@ void UIManager::handleInput(u32 kDown, const touchPosition& touch) {
             }
         }
     } else if (m_state == UIState::MATCHING) {
-        size_t remoteTotal = m_filteredRemoteIndices.size();
-        if (remoteTotal > 0) {
-            if (kDown & KEY_UP) {
-                m_selectedRemoteIndex = (m_selectedRemoteIndex > 0) ? (m_selectedRemoteIndex - 1) : (remoteTotal - 1);
-            } else if (kDown & KEY_DOWN) {
-                m_selectedRemoteIndex = (m_selectedRemoteIndex + 1 < remoteTotal) ? (m_selectedRemoteIndex + 1) : 0;
-            } else if (kDown & KEY_LEFT) {
-                m_selectedRemoteIndex = (m_selectedRemoteIndex >= 5) ? (m_selectedRemoteIndex - 5) : 0;
-            } else if (kDown & KEY_RIGHT) {
-                m_selectedRemoteIndex = (m_selectedRemoteIndex + 5 < remoteTotal) ? (m_selectedRemoteIndex + 5) : (remoteTotal - 1);
+        if (m_matchingSubState == MatchingSubState::SELECT_CONSOLE) {
+            size_t consoleTotal = m_availableConsoles.size();
+            if (consoleTotal > 0) {
+                if (kDown & KEY_UP) {
+                    m_selectedConsoleIndex = (m_selectedConsoleIndex > 0) ? (m_selectedConsoleIndex - 1) : (consoleTotal - 1);
+                } else if (kDown & KEY_DOWN) {
+                    m_selectedConsoleIndex = (m_selectedConsoleIndex + 1 < consoleTotal) ? (m_selectedConsoleIndex + 1) : 0;
+                } else if (kDown & KEY_LEFT) {
+                    m_selectedConsoleIndex = (m_selectedConsoleIndex >= 5) ? (m_selectedConsoleIndex - 5) : 0;
+                } else if (kDown & KEY_RIGHT) {
+                    m_selectedConsoleIndex = (m_selectedConsoleIndex + 5 < consoleTotal) ? (m_selectedConsoleIndex + 5) : (consoleTotal - 1);
+                }
             }
-        }
 
-        if (kDown & KEY_A) {
-            confirmManualMatch();
-        } else if (kDown & KEY_B) {
-            m_state = UIState::MAIN_MENU;
-        } else if (kDown & KEY_X) {
-            std::string q = launchKeyboard("Search RomM library...", m_remoteFilterText, 64);
-            if (q != m_remoteFilterText) {
-                m_remoteFilterText = q;
-                updateRemoteFilteredList();
+            if (kDown & KEY_A) {
+                selectConsole(m_selectedConsoleIndex);
+            } else if (kDown & KEY_B) {
+                m_state = UIState::MAIN_MENU;
+            } else if (kDown & KEY_X) {
+                runLibraryRefresh();
+                m_availableConsoles = m_syncMgr ? m_syncMgr->getPlatforms() : std::vector<RommPlatform>();
             }
-        } else if (kDown & KEY_Y) {
-            if (!m_remoteFilterText.empty()) {
-                m_remoteFilterText.clear();
-                updateRemoteFilteredList();
-            }
-        }
 
-        if (kDown & KEY_TOUCH) {
-            if (isTouchInside(touch, 16.0f, 28.0f, 230.0f, 22.0f)) {
-                std::string q = launchKeyboard("Search RomM library...", m_remoteFilterText, 64);
+            if (kDown & KEY_TOUCH) {
+                if (isTouchInside(touch, 16.0f, 194.0f, 138.0f, 30.0f)) {
+                    selectConsole(m_selectedConsoleIndex);
+                } else if (isTouchInside(touch, 166.0f, 194.0f, 138.0f, 30.0f)) {
+                    m_state = UIState::MAIN_MENU;
+                } else {
+                    size_t pageOffset = (m_selectedConsoleIndex / 5) * 5;
+                    for (size_t i = 0; i < 5 && (pageOffset + i) < consoleTotal; ++i) {
+                        float rowY = 36.0f + static_cast<float>(i * 30.0f);
+                        if (isTouchInside(touch, 16.0f, rowY, 288.0f, 26.0f)) {
+                            selectConsole(pageOffset + i);
+                            break;
+                        }
+                    }
+                }
+            }
+        } else {
+            size_t remoteTotal = m_filteredRemoteIndices.size();
+            if (remoteTotal > 0) {
+                if (kDown & KEY_UP) {
+                    m_selectedRemoteIndex = (m_selectedRemoteIndex > 0) ? (m_selectedRemoteIndex - 1) : (remoteTotal - 1);
+                } else if (kDown & KEY_DOWN) {
+                    m_selectedRemoteIndex = (m_selectedRemoteIndex + 1 < remoteTotal) ? (m_selectedRemoteIndex + 1) : 0;
+                } else if (kDown & KEY_LEFT) {
+                    m_selectedRemoteIndex = (m_selectedRemoteIndex >= 5) ? (m_selectedRemoteIndex - 5) : 0;
+                } else if (kDown & KEY_RIGHT) {
+                    m_selectedRemoteIndex = (m_selectedRemoteIndex + 5 < remoteTotal) ? (m_selectedRemoteIndex + 5) : (remoteTotal - 1);
+                }
+            }
+
+            if (kDown & KEY_A) {
+                confirmManualMatch();
+            } else if (kDown & KEY_B) {
+                m_matchingSubState = MatchingSubState::SELECT_CONSOLE;
+            } else if (kDown & KEY_X) {
+                std::string prompt = "Search in " + m_selectedConsoleName + "...";
+                std::string q = launchKeyboard(prompt, m_remoteFilterText, 64);
                 if (q != m_remoteFilterText) {
                     m_remoteFilterText = q;
                     updateRemoteFilteredList();
                 }
-            } else if (isTouchInside(touch, 252.0f, 28.0f, 52.0f, 22.0f)) {
+            } else if (kDown & KEY_Y) {
                 if (!m_remoteFilterText.empty()) {
                     m_remoteFilterText.clear();
                     updateRemoteFilteredList();
                 }
-            } else if (isTouchInside(touch, 16.0f, 194.0f, 138.0f, 30.0f)) {
-                confirmManualMatch();
-            } else if (isTouchInside(touch, 166.0f, 194.0f, 138.0f, 30.0f)) {
-                m_state = UIState::MAIN_MENU;
-            } else {
-                for (size_t i = 0; i < 5 && i < remoteTotal; ++i) {
-                    float rowY = 54.0f + static_cast<float>(i * 26.0f);
-                    if (isTouchInside(touch, 16.0f, rowY, 288.0f, 24.0f)) {
-                        size_t pageOffset = (m_selectedRemoteIndex / 5) * 5;
-                        size_t target = pageOffset + i;
-                        if (target < remoteTotal) {
-                            m_selectedRemoteIndex = target;
+            }
+
+            if (kDown & KEY_TOUCH) {
+                if (isTouchInside(touch, 16.0f, 28.0f, 230.0f, 22.0f)) {
+                    std::string prompt = "Search in " + m_selectedConsoleName + "...";
+                    std::string q = launchKeyboard(prompt, m_remoteFilterText, 64);
+                    if (q != m_remoteFilterText) {
+                        m_remoteFilterText = q;
+                        updateRemoteFilteredList();
+                    }
+                } else if (isTouchInside(touch, 252.0f, 28.0f, 52.0f, 22.0f)) {
+                    if (!m_remoteFilterText.empty()) {
+                        m_remoteFilterText.clear();
+                        updateRemoteFilteredList();
+                    }
+                } else if (isTouchInside(touch, 16.0f, 194.0f, 138.0f, 30.0f)) {
+                    confirmManualMatch();
+                } else if (isTouchInside(touch, 166.0f, 194.0f, 138.0f, 30.0f)) {
+                    m_matchingSubState = MatchingSubState::SELECT_CONSOLE;
+                } else {
+                    for (size_t i = 0; i < 5 && i < remoteTotal; ++i) {
+                        float rowY = 54.0f + static_cast<float>(i * 26.0f);
+                        if (isTouchInside(touch, 16.0f, rowY, 288.0f, 24.0f)) {
+                            size_t pageOffset = (m_selectedRemoteIndex / 5) * 5;
+                            size_t target = pageOffset + i;
+                            if (target < remoteTotal) {
+                                m_selectedRemoteIndex = target;
+                            }
+                            break;
                         }
-                        break;
                     }
                 }
             }
@@ -701,7 +798,7 @@ void UIManager::renderMainMenuTop() {
         size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
         const auto& item = m_syncMgr->getItems()[actualIdx];
 
-        std::string displayName = item.localTitle.name;
+        std::string displayName = item.localTitle.name + "  [" + item.localTitle.console + "]";
         if (item.isIgnored) {
             displayName += " [IGNORED / HIDDEN]";
         }
@@ -712,14 +809,15 @@ void UIManager::renderMainMenuTop() {
         C2D_DrawText(&nameText, C2D_WithColor, 16.0f, 50.0f, 0.5f, 0.58f, 0.58f, nameColor);
 
         std::string matchDesc = item.isIgnored ? "Status: Ignored / Excluded from Sync"
-                                : (item.isMatched ? ("Matched: " + item.remoteTitle) : "Unmatched (Press SELECT or Tap Match)");
+                                : (item.isMatched ? ("Matched: " + item.remoteTitle) : "Unmatched (Press SELECT for RomM Library)");
         u32 matchColor = item.isIgnored ? CLR_TEXT_MUTED : (item.isMatched ? CLR_GREEN : CLR_YELLOW);
         C2D_Text matchText;
         C2D_TextParse(&matchText, m_textBuf, matchDesc.c_str());
         C2D_TextOptimize(&matchText);
         C2D_DrawText(&matchText, C2D_WithColor, 16.0f, 74.0f, 0.5f, 0.45f, 0.45f, matchColor);
 
-        std::string details = "Title ID: " + item.localTitle.titleIdHex +
+        std::string details = "Console: " + item.localTitle.console +
+                              " | Title ID: " + item.localTitle.titleIdHex +
                               (!item.localTitle.productCode.empty() ? (" (" + item.localTitle.productCode + ")") : "") +
                               " | Local Save: " + (item.localTitle.hasSave ? "YES" : "NO") +
                               " | Remote Save: " + (item.remoteHasSave ? "YES" : "NO");
@@ -731,7 +829,7 @@ void UIManager::renderMainMenuTop() {
         std::string controls = "Controls:\n"
                                "  (A) Sync Selected       (X) Batch Sync All\n"
                                "  (L) Force Upload Save   (R) Force Download Save\n"
-                               "  (SELECT) Manual Match   (Y) Search Filter\n"
+                               "  (SELECT) RomM Library   (Y) Search Filter\n"
                                "  (D-Pad L/R) Prev/Next Page | Tap [Hide] to ignore app";
         C2D_Text ctrlText;
         C2D_TextParse(&ctrlText, m_textBuf, controls.c_str());
@@ -796,9 +894,9 @@ void UIManager::renderMainMenuBottom() {
         u32 dotColor = item.isIgnored ? CLR_TEXT_MUTED : (item.isMatched ? CLR_GREEN : CLR_YELLOW);
         C2D_DrawRectSolid(22.0f, y + 7.0f, 0.5f, 8.0f, 8.0f, dotColor);
 
-        std::string rowLabel = item.localTitle.name;
-        if (rowLabel.length() > 24) {
-            rowLabel = rowLabel.substr(0, 22) + "..";
+        std::string rowLabel = "[" + item.localTitle.console + "] " + item.localTitle.name;
+        if (rowLabel.length() > 26) {
+            rowLabel = rowLabel.substr(0, 24) + "..";
         }
         if (item.localTitle.hasSave) {
             rowLabel += " [S]";
@@ -816,7 +914,7 @@ void UIManager::renderMainMenuBottom() {
     drawButton(16.0f, 163.0f, 138.0f, 26.0f, "[ Sync (A) ]", false);
     drawButton(166.0f, 163.0f, 138.0f, 26.0f, "[ Sync All (X) ]", false);
 
-    drawButton(16.0f, 193.0f, 138.0f, 26.0f, "[ Match (SELECT) ]", false);
+    drawButton(16.0f, 193.0f, 138.0f, 26.0f, "[ RomM Library (SELECT) ]", false);
 
     bool isCurrentlyIgnored = (!m_filteredLocalIndices.empty() &&
                                m_selectedGameIndex < m_filteredLocalIndices.size() &&
@@ -834,11 +932,27 @@ void UIManager::renderMainMenuBottom() {
 }
 
 void UIManager::renderMatchingTop() {
+    if (m_matchingSubState == MatchingSubState::SELECT_CONSOLE) {
+        renderMatchingConsolesTop();
+    } else {
+        renderMatchingGamesTop();
+    }
+}
+
+void UIManager::renderMatchingBottom() {
+    if (m_matchingSubState == MatchingSubState::SELECT_CONSOLE) {
+        renderMatchingConsolesBottom();
+    } else {
+        renderMatchingGamesBottom();
+    }
+}
+
+void UIManager::renderMatchingConsolesTop() {
     C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 42.0f, CLR_HEADER);
-    C2D_DrawRectSolid(0.0f, 40.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f, CLR_YELLOW);
+    C2D_DrawRectSolid(0.0f, 40.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f, CLR_ACCENT);
 
     C2D_Text headerText;
-    C2D_TextParse(&headerText, m_textBuf, "romm3ds - Manual Library Match");
+    C2D_TextParse(&headerText, m_textBuf, "romm3ds - RomM Consoles");
     C2D_TextOptimize(&headerText);
     C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 10.0f, 0.5f, 0.75f, 0.75f, CLR_TEXT_WHITE);
 
@@ -846,13 +960,94 @@ void UIManager::renderMatchingTop() {
         size_t localActualIdx = m_filteredLocalIndices[m_selectedGameIndex];
         const auto& item = m_syncMgr->getItems()[localActualIdx];
 
-        std::string guide = "Local 3DS Game:\n  " + item.localTitle.name +
-                            "\n\nSelect corresponding game from RomM server:\n"
-                            "  (A) Pair Selected Game\n"
-                            "  (X) Search RomM Library\n"
-                            "  (B) Cancel and return";
+        std::string guide = "Target Local Game:\n  " + item.localTitle.name + " [" + item.localTitle.console + "]\n\n"
+                            "Select console to browse in RomM library:\n"
+                            "  (A) Open Selected Console\n"
+                            "  (B) Back to Main Menu\n"
+                            "  (X) Refresh Consoles & Library";
+        C2D_Text guideText;
+        C2D_TextParse(&guideText, m_textBuf, guide.c_str());
+        C2D_TextOptimize(&guideText);
+        C2D_DrawText(&guideText, C2D_WithColor, 16.0f, 56.0f, 0.5f, 0.48f, 0.48f, CLR_TEXT_WHITE);
+    }
+}
+
+void UIManager::renderMatchingConsolesBottom() {
+    C2D_DrawRectSolid(8.0f, 4.0f, 0.5f, RomM3DS::SCREEN_BOTTOM_WIDTH - 16.0f, RomM3DS::SCREEN_BOTTOM_HEIGHT - 8.0f, CLR_CARD);
+
+    size_t consoleTotal = m_availableConsoles.size();
+    std::string header = "RomM Consoles (" + std::to_string(consoleTotal > 0 ? (m_selectedConsoleIndex + 1) : 0) +
+                         "/" + std::to_string(consoleTotal) + ")";
+    C2D_Text titleText;
+    C2D_TextParse(&titleText, m_textBuf, header.c_str());
+    C2D_TextOptimize(&titleText);
+    C2D_DrawText(&titleText, C2D_WithColor, 16.0f, 9.0f, 0.5f, 0.48f, 0.48f, CLR_TEXT_WHITE);
+
+    size_t pageOffset = (m_selectedConsoleIndex / 5) * 5;
+    for (size_t i = 0; i < 5 && (pageOffset + i) < consoleTotal; ++i) {
+        size_t idx = pageOffset + i;
+        const auto& c = m_availableConsoles[idx];
+        bool selected = (idx == m_selectedConsoleIndex);
+
+        float y = 36.0f + static_cast<float>(i * 30.0f);
+        u32 rowBg = selected ? CLR_HEADER : CLR_INPUT_BG;
+        u32 borderColor = selected ? CLR_ACCENT : CLR_BORDER_OFF;
+
+        C2D_DrawRectSolid(16.0f, y, 0.5f, 288.0f, 26.0f, borderColor);
+        C2D_DrawRectSolid(17.5f, y + 1.5f, 0.5f, 285.0f, 23.0f, rowBg);
+
+        u32 dotColor = selected ? CLR_YELLOW : CLR_ACCENT;
+        C2D_DrawRectSolid(24.0f, y + 8.0f, 0.5f, 8.0f, 8.0f, dotColor);
+
+        std::string nameLabel = c.name;
+        if (nameLabel.length() > 22) {
+            nameLabel = nameLabel.substr(0, 20) + "..";
+        }
+        C2D_Text nameText;
+        C2D_TextParse(&nameText, m_textBuf, nameLabel.c_str());
+        C2D_TextOptimize(&nameText);
+        C2D_DrawText(&nameText, C2D_WithColor, 38.0f, y + 5.0f, 0.5f, 0.44f, 0.44f, CLR_TEXT_WHITE);
+
+        std::string countLabel = std::to_string(c.romCount) + " ROMs";
+        C2D_Text countText;
+        C2D_TextParse(&countText, m_textBuf, countLabel.c_str());
+        C2D_TextOptimize(&countText);
+        C2D_DrawText(&countText, C2D_WithColor, 230.0f, y + 6.0f, 0.5f, 0.40f, 0.40f, CLR_TEXT_MUTED);
+    }
+
+    if (consoleTotal == 0) {
+        C2D_Text emptyTxt;
+        C2D_TextParse(&emptyTxt, m_textBuf, "No consoles found in RomM library.\nCheck connection or refresh (X).");
+        C2D_TextOptimize(&emptyTxt);
+        C2D_DrawText(&emptyTxt, C2D_WithColor, 24.0f, 80.0f, 0.5f, 0.45f, 0.45f, CLR_TEXT_MUTED);
+    }
+
+    drawButton(16.0f, 194.0f, 138.0f, 30.0f, "[ Open Console (A) ]", false);
+    drawButton(166.0f, 194.0f, 138.0f, 30.0f, "[ Back (B) ]", false);
+}
+
+void UIManager::renderMatchingGamesTop() {
+    C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 42.0f, CLR_HEADER);
+    C2D_DrawRectSolid(0.0f, 40.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f, CLR_YELLOW);
+
+    std::string header = "romm3ds - " + m_selectedConsoleName;
+    if (header.length() > 36) header = header.substr(0, 34) + "..";
+    C2D_Text headerText;
+    C2D_TextParse(&headerText, m_textBuf, header.c_str());
+    C2D_TextOptimize(&headerText);
+    C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 10.0f, 0.5f, 0.75f, 0.75f, CLR_TEXT_WHITE);
+
+    if (m_syncMgr && !m_filteredLocalIndices.empty() && m_selectedGameIndex < m_filteredLocalIndices.size()) {
+        size_t localActualIdx = m_filteredLocalIndices[m_selectedGameIndex];
+        const auto& item = m_syncMgr->getItems()[localActualIdx];
+
+        std::string guide = "Local Target: " + item.localTitle.name + " [" + item.localTitle.console + "]\n"
+                            "Console: " + m_selectedConsoleName + " (" + m_selectedConsoleSlug + ")\n\n"
+                            "Controls:\n"
+                            "  (A) Pair Selected Game     (B) Back to Consoles\n"
+                            "  (X) Search Filter Games    (Y) Clear Filter";
         if (!m_remoteFilterText.empty()) {
-            guide += "\n\nActive Filter: \"" + m_remoteFilterText + "\" (Press Y to clear)";
+            guide += "\n\nActive Filter: \"" + m_remoteFilterText + "\"";
         }
         C2D_Text guideText;
         C2D_TextParse(&guideText, m_textBuf, guide.c_str());
@@ -861,11 +1056,11 @@ void UIManager::renderMatchingTop() {
     }
 }
 
-void UIManager::renderMatchingBottom() {
+void UIManager::renderMatchingGamesBottom() {
     C2D_DrawRectSolid(8.0f, 4.0f, 0.5f, RomM3DS::SCREEN_BOTTOM_WIDTH - 16.0f, RomM3DS::SCREEN_BOTTOM_HEIGHT - 8.0f, CLR_CARD);
 
     size_t remoteTotal = m_filteredRemoteIndices.size();
-    std::string header = "RomM Games (" + std::to_string(remoteTotal > 0 ? (m_selectedRemoteIndex + 1) : 0) +
+    std::string header = m_selectedConsoleName + " (" + std::to_string(remoteTotal > 0 ? (m_selectedRemoteIndex + 1) : 0) +
                          "/" + std::to_string(remoteTotal) + ")";
     C2D_Text titleText;
     C2D_TextParse(&titleText, m_textBuf, header.c_str());
@@ -913,13 +1108,14 @@ void UIManager::renderMatchingBottom() {
 
     if (remoteTotal == 0) {
         C2D_Text noMatches;
-        C2D_TextParse(&noMatches, m_textBuf, "No RomM games match search query.\nTap [Clr] to reset filter.");
+        std::string noMsg = m_remoteFilterText.empty() ? "No games found for this console." : "No games match search query.\nTap [Clr] to reset filter.";
+        C2D_TextParse(&noMatches, m_textBuf, noMsg.c_str());
         C2D_TextOptimize(&noMatches);
         C2D_DrawText(&noMatches, C2D_WithColor, 24.0f, 80.0f, 0.5f, 0.45f, 0.45f, CLR_TEXT_MUTED);
     }
 
     drawButton(16.0f, 194.0f, 138.0f, 30.0f, "[ Pair Game (A) ]", false);
-    drawButton(166.0f, 194.0f, 138.0f, 30.0f, "[ Cancel (B) ]", false);
+    drawButton(166.0f, 194.0f, 138.0f, 30.0f, "[ Consoles (B) ]", false);
 }
 
 void UIManager::renderConflictTop() {

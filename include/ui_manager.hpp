@@ -1,5 +1,7 @@
 #pragma once
 
+#include "network_manager.hpp"
+
 #include <3ds.h>
 #include <citro2d.h>
 #include <string>
@@ -8,7 +10,6 @@
 namespace RomM3DS {
 
 class ConfigManager;
-class NetworkManager;
 class SaveManager;
 class SyncManager;
 
@@ -17,6 +18,11 @@ enum class UIState {
     MAIN_MENU,
     MATCHING,
     CONFLICT_PROMPT
+};
+
+enum class MatchingSubState {
+    SELECT_CONSOLE,
+    SELECT_GAME
 };
 
 enum class LocalFilterMode {
@@ -69,6 +75,11 @@ private:
 
     void renderMatchingTop();
     void renderMatchingBottom();
+    void renderMatchingConsolesTop();
+    void renderMatchingConsolesBottom();
+    void renderMatchingGamesTop();
+    void renderMatchingGamesBottom();
+    void selectConsole(size_t index);
 
     void renderConflictTop();
     void renderConflictBottom();
@@ -86,6 +97,7 @@ private:
     static bool isTouchInside(const touchPosition& touch, float x, float y, float w, float h);
 
     UIState m_state = UIState::FIRST_LAUNCH;
+    MatchingSubState m_matchingSubState = MatchingSubState::SELECT_CONSOLE;
     ConfigManager* m_configMgr = nullptr;
     NetworkManager* m_netMgr = nullptr;
     SaveManager* m_saveMgr = nullptr;
@@ -102,6 +114,11 @@ private:
 
     size_t m_selectedGameIndex = 0;
     size_t m_selectedRemoteIndex = 0;
+    size_t m_selectedConsoleIndex = 0;
+    std::string m_selectedConsoleSlug;
+    std::string m_selectedConsoleName;
+    std::vector<RommPlatform> m_availableConsoles;
+
     int m_conflictChoiceIndex = 0;
     size_t m_conflictGameIndex = 0;
 

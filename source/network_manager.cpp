@@ -186,6 +186,82 @@ NetworkResult NetworkManager::testConnection() {
     return result;
 }
 
+NetworkResult NetworkManager::fetchPlatforms(std::vector<RommPlatform>& outPlatforms) {
+    NetworkResult result;
+
+    if (!s_networkInitialized) {
+        result.errorMessage = "Network is not initialized.";
+        return result;
+    }
+
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        result.errorMessage = "Failed to initialize curl.";
+        return result;
+    }
+
+    std::string url = buildUrl("/api/platforms");
+    std::string responseData;
+
+    struct curl_slist* headers = nullptr;
+    headers = curl_slist_append(headers, "Accept: application/json");
+
+    std::string apiKey = getApiKey();
+    if (!apiKey.empty()) {
+        std::string authHeader = "Authorization: Bearer " + apiKey;
+        std::string xApiKeyHeader = "X-API-Key: " + apiKey;
+        headers = curl_slist_append(headers, authHeader.c_str());
+        headers = curl_slist_append(headers, xApiKeyHeader.c_str());
+    }
+
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, stringWriteCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseData);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "romm3ds/0.1.0");
+
+    CURLcode res = curl_easy_perform(curl);
+    if (res == CURLE_OK) {
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &result.httpCode);
+        result.responseBody = responseData;
+        if (result.httpCode >= 200 && result.httpCode < 300) {
+            result.success = true;
+
+            json parsed = json::parse(responseData, nullptr, false);
+            if (!parsed.is_discarded()) {
+                json items = parsed.is_array() ? parsed :
+                             (parsed.contains("items") ? parsed["items"] :
+                             (parsed.contains("platforms") ? parsed["platforms"] : json::array()));
+                for (const auto& item : items) {
+                    RommPlatform p;
+                    p.id = item.value("id", (uint64_t)0);
+                    p.name = item.value("name", item.value("display_name", item.value("custom_name", "")));
+                    p.slug = item.value("slug", item.value("platform_slug", ""));
+                    p.romCount = item.value("rom_count", item.value("roms_count", 0));
+                    if (p.name.empty()) {
+                        p.name = p.slug;
+                    }
+                    if (!p.slug.empty() || !p.name.empty()) {
+                        outPlatforms.push_back(p);
+                    }
+                }
+            }
+        } else {
+            result.errorMessage = "HTTP Error " + std::to_string(result.httpCode);
+        }
+    } else {
+        result.errorMessage = curl_easy_strerror(res);
+    }
+
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+    return result;
+}
+
 NetworkResult NetworkManager::fetchLibrary(std::vector<RommGame>& outGames, const std::string& platform) {
     NetworkResult result;
 

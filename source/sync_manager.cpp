@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cstring>
 #include <dirent.h>
+#include <map>
 
 namespace RomM3DS {
 
@@ -36,16 +37,108 @@ bool SyncManager::matchesFuzzy(const std::string& s1, const std::string& s2) {
     return (n1 == n2) || (n1.find(n2) != std::string::npos) || (n2.find(n1) != std::string::npos);
 }
 
+std::string SyncManager::getFriendlyPlatformName(const std::string& slug) {
+    std::string s = slug;
+    for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+    if (s == "3ds") return "Nintendo 3DS";
+    if (s == "nds" || s == "ds") return "Nintendo DS";
+    if (s == "gba") return "Game Boy Advance";
+    if (s == "gbc") return "Game Boy Color";
+    if (s == "gb" || s == "dmg") return "Game Boy";
+    if (s == "nes" || s == "famicom" || s == "fc") return "Nintendo NES";
+    if (s == "snes" || s == "sfc") return "Super Nintendo";
+    if (s == "n64") return "Nintendo 64";
+    if (s == "gg" || s == "gamegear") return "Sega Game Gear";
+    if (s == "genesis" || s == "megadrive" || s == "md") return "Sega Genesis";
+    if (s == "sms" || s == "mastersystem") return "Sega Master System";
+    if (s == "pce" || s == "tg16" || s == "turbografx16") return "PC Engine / TG16";
+    if (s == "psx" || s == "ps1" || s == "playstation") return "PlayStation";
+    if (s == "psp") return "PlayStation Portable";
+
+    if (!s.empty()) {
+        s[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(s[0])));
+    }
+    return s.empty() ? "Other" : s;
+}
+
+bool SyncManager::isPlatformCompatible(const std::string& localConsole, const std::string& remotePlatformSlug) {
+    if (localConsole.empty() || remotePlatformSlug.empty()) return true;
+
+    std::string lc = localConsole;
+    for (char& c : lc) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    std::string rp = remotePlatformSlug;
+    for (char& c : rp) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+    if (lc == "3ds" && rp == "3ds") return true;
+    if (lc == "ds" && (rp == "nds" || rp == "ds")) return true;
+    if (lc == "gba" && rp == "gba") return true;
+    if (lc == "gbc" && rp == "gbc") return true;
+    if (lc == "gb" && (rp == "gb" || rp == "dmg")) return true;
+    if (lc == "nes" && (rp == "nes" || rp == "famicom" || rp == "fc")) return true;
+    if (lc == "snes" && (rp == "snes" || rp == "sfc")) return true;
+    if (lc == "gg" && (rp == "gg" || rp == "gamegear")) return true;
+    if (lc == "pce" && (rp == "pce" || rp == "tg16" || rp == "turbografx16")) return true;
+
+    return false;
+}
+
+void SyncManager::consolidatePlatforms() {
+    std::map<std::string, int> slugCounts;
+    for (const auto& g : m_remoteGames) {
+        if (!g.platform.empty()) {
+            slugCounts[g.platform]++;
+        } else {
+            slugCounts["other"]++;
+        }
+    }
+
+    for (auto& p : m_platforms) {
+        if (p.name.empty()) {
+            p.name = getFriendlyPlatformName(p.slug);
+        }
+        auto it = slugCounts.find(p.slug);
+        if (it != slugCounts.end()) {
+            p.romCount = it->second;
+            slugCounts.erase(it);
+        }
+    }
+
+    for (const auto& pair : slugCounts) {
+        RommPlatform p;
+        p.slug = pair.first;
+        p.name = getFriendlyPlatformName(pair.first);
+        p.romCount = pair.second;
+        m_platforms.push_back(p);
+    }
+
+    if (!m_remoteGames.empty()) {
+        m_platforms.erase(
+            std::remove_if(m_platforms.begin(), m_platforms.end(),
+                [](const RommPlatform& p) { return p.romCount <= 0; }),
+            m_platforms.end()
+        );
+    }
+
+    std::sort(m_platforms.begin(), m_platforms.end(),
+        [](const RommPlatform& a, const RommPlatform& b) {
+            return a.name < b.name;
+        });
+}
+
 bool SyncManager::refresh() {
     m_items.clear();
     m_remoteGames.clear();
+    m_platforms.clear();
 
     if (m_configMgr) {
         m_configMgr->loadMappings();
     }
 
     if (m_netMgr) {
-        m_netMgr->fetchLibrary(m_remoteGames, "3ds");
+        m_netMgr->fetchPlatforms(m_platforms);
+        m_netMgr->fetchLibrary(m_remoteGames, "");
+        consolidatePlatforms();
     }
 
     std::vector<InstalledTitle> localTitles;
@@ -73,23 +166,38 @@ bool SyncManager::refresh() {
                     }
                 }
             } else {
+                // First attempt match with platform-compatible games
+                const RommGame* matchTarget = nullptr;
                 for (const auto& r : m_remoteGames) {
-                    if (matchesFuzzy(local.name, r.title)) {
-                        item.isMatched = true;
-                        item.remoteGameId = r.id;
-                        item.remoteTitle = r.title;
-                        item.remoteHasSave = !r.savePath.empty();
-                        item.remoteSaveUpdatedAt = r.updatedAt;
-
-                        if (m_configMgr) {
-                            GameMapping newMap;
-                            newMap.titleId = local.titleIdHex;
-                            newMap.localName = local.name;
-                            newMap.remoteGameId = r.id;
-                            newMap.remoteTitle = r.title;
-                            m_configMgr->addOrUpdateMapping(newMap);
-                        }
+                    if (isPlatformCompatible(local.console, r.platform) && matchesFuzzy(local.name, r.title)) {
+                        matchTarget = &r;
                         break;
+                    }
+                }
+                // Fallback: match any title
+                if (!matchTarget) {
+                    for (const auto& r : m_remoteGames) {
+                        if (matchesFuzzy(local.name, r.title)) {
+                            matchTarget = &r;
+                            break;
+                        }
+                    }
+                }
+
+                if (matchTarget) {
+                    item.isMatched = true;
+                    item.remoteGameId = matchTarget->id;
+                    item.remoteTitle = matchTarget->title;
+                    item.remoteHasSave = !matchTarget->savePath.empty();
+                    item.remoteSaveUpdatedAt = matchTarget->updatedAt;
+
+                    if (m_configMgr) {
+                        GameMapping newMap;
+                        newMap.titleId = local.titleIdHex;
+                        newMap.localName = local.name;
+                        newMap.remoteGameId = matchTarget->id;
+                        newMap.remoteTitle = matchTarget->title;
+                        m_configMgr->addOrUpdateMapping(newMap);
                     }
                 }
             }
@@ -103,6 +211,7 @@ bool SyncManager::refresh() {
     }
 
     m_lastMessage = "Found " + std::to_string(m_items.size()) + " local titles, " +
+                    std::to_string(m_platforms.size()) + " consoles, " +
                     std::to_string(m_remoteGames.size()) + " remote games.";
     return true;
 }

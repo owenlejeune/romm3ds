@@ -11,6 +11,7 @@ struct InstalledTitle {
     std::string titleIdHex;
     std::string name;
     std::string productCode;
+    std::string console = "3DS";
     uint8_t mediaType = 0;
     bool hasSave = false;
 };
@@ -27,6 +28,7 @@ public:
 
     static std::string formatTitleId(uint64_t titleId);
     static uint64_t parseTitleId(const std::string& hexStr);
+    static std::string determineConsole(const std::string& productCode, uint64_t titleId);
 
 private:
 #if defined(__3DS__) || defined(_3DS)

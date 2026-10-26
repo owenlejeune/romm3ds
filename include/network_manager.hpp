@@ -17,6 +17,13 @@ struct RommGame {
     std::string updatedAt;
 };
 
+struct RommPlatform {
+    uint64_t id = 0;
+    std::string name;
+    std::string slug;
+    int romCount = 0;
+};
+
 struct NetworkResult {
     bool success = false;
     long httpCode = 0;
@@ -36,7 +43,8 @@ public:
     void setConfigManager(ConfigManager* configMgr) { m_configMgr = configMgr; }
 
     NetworkResult testConnection();
-    NetworkResult fetchLibrary(std::vector<RommGame>& outGames, const std::string& platform = "3ds");
+    NetworkResult fetchPlatforms(std::vector<RommPlatform>& outPlatforms);
+    NetworkResult fetchLibrary(std::vector<RommGame>& outGames, const std::string& platform = "");
     NetworkResult uploadSave(uint64_t gameId, const std::string& filePath);
     NetworkResult downloadSave(uint64_t gameId, const std::string& destPath);
 

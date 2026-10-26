@@ -109,6 +109,32 @@ uint64_t SaveManager::parseTitleId(const std::string& hexStr) {
     return std::strtoull(hexStr.c_str(), nullptr, 16);
 }
 
+std::string SaveManager::determineConsole(const std::string& productCode, uint64_t titleId) {
+    if (!productCode.empty()) {
+        std::string p = productCode;
+        for (char& c : p) {
+            c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        }
+
+        if (p.rfind("CTR", 0) == 0 || p.rfind("KTR", 0) == 0) return "3DS";
+        if (p.rfind("TWL", 0) == 0 || p.rfind("NTR", 0) == 0 || p.rfind("DS", 0) == 0) return "DS";
+        if (p.rfind("AGB", 0) == 0) return "GBA";
+        if (p.rfind("DMG", 0) == 0) return "GB";
+        if (p.rfind("CGB", 0) == 0) return "GBC";
+        if (p.rfind("NES", 0) == 0 || p.rfind("FAM", 0) == 0 || p.rfind("FC", 0) == 0) return "NES";
+        if (p.rfind("SNS", 0) == 0 || p.rfind("SHVC", 0) == 0 || p.rfind("SFC", 0) == 0 || p.rfind("SNES", 0) == 0) return "SNES";
+        if (p.rfind("GG", 0) == 0 || p.rfind("SEG", 0) == 0) return "GG";
+        if (p.rfind("PCE", 0) == 0 || p.rfind("TGX", 0) == 0) return "PCE";
+    }
+
+    uint32_t tidHigh = static_cast<uint32_t>((titleId >> 32) & 0xFFFFFFFF);
+    if (tidHigh == 0x00048004 || tidHigh == 0x00048005 || tidHigh == 0x0004800F) {
+        return "DS";
+    }
+
+    return "3DS";
+}
+
 #if defined(__3DS__) || defined(_3DS)
 
 std::string SaveManager::getTitleNameFromSmdh(uint64_t titleId, uint8_t mediaType) {
@@ -320,7 +346,7 @@ std::vector<InstalledTitle> SaveManager::scanInstalledTitles() {
             u64 tid = ids[i];
             u32 tidHigh = static_cast<u32>((tid >> 32) & 0xFFFFFFFF);
 
-            if (tidHigh != 0x00040000 && tidHigh != 0x00040002) {
+            if (tidHigh != 0x00040000 && tidHigh != 0x00040002 && tidHigh != 0x00048004) {
                 continue;
             }
 
@@ -334,6 +360,8 @@ std::vector<InstalledTitle> SaveManager::scanInstalledTitles() {
             if (R_SUCCEEDED(AM_GetTitleProductCode(mediaType, tid, prodCode)) && prodCode[0] != '\0') {
                 title.productCode = prodCode;
             }
+
+            title.console = determineConsole(title.productCode, tid);
 
             if (title.name.empty()) {
                 title.name = !title.productCode.empty() ? title.productCode : ("Title " + title.titleIdHex);
