@@ -171,10 +171,18 @@ bool SyncManager::refresh() {
         m_configMgr->loadMappings();
     }
 
+    std::map<uint64_t, RommSave> remoteSaveMap;
     if (m_netMgr) {
         m_netMgr->fetchPlatforms(m_platforms);
         m_netMgr->fetchLibrary(m_remoteGames, 0, "");
         consolidatePlatforms();
+
+        std::vector<RommSave> allSaves;
+        if (m_netMgr->fetchSaves(allSaves).success) {
+            for (const auto& s : allSaves) {
+                remoteSaveMap[s.romId] = s;
+            }
+        }
     }
 
     std::vector<InstalledTitle> localTitles;
@@ -194,12 +202,12 @@ bool SyncManager::refresh() {
                 item.remoteGameId = mapping->remoteGameId;
                 item.remoteTitle = mapping->remoteTitle;
 
-                for (const auto& r : m_remoteGames) {
-                    if (r.id == item.remoteGameId) {
-                        item.remoteHasSave = !r.savePath.empty();
-                        item.remoteSaveUpdatedAt = r.updatedAt;
-                        break;
-                    }
+                auto it = remoteSaveMap.find(item.remoteGameId);
+                if (it != remoteSaveMap.end()) {
+                    item.remoteHasSave = true;
+                    item.remoteSaveUpdatedAt = it->second.updatedAt;
+                } else {
+                    item.remoteHasSave = false;
                 }
             } else {
                 // First attempt match with platform-compatible games
@@ -224,8 +232,14 @@ bool SyncManager::refresh() {
                     item.isMatched = true;
                     item.remoteGameId = matchTarget->id;
                     item.remoteTitle = matchTarget->title;
-                    item.remoteHasSave = !matchTarget->savePath.empty();
-                    item.remoteSaveUpdatedAt = matchTarget->updatedAt;
+
+                    auto it = remoteSaveMap.find(matchTarget->id);
+                    if (it != remoteSaveMap.end()) {
+                        item.remoteHasSave = true;
+                        item.remoteSaveUpdatedAt = it->second.updatedAt;
+                    } else {
+                        item.remoteHasSave = false;
+                    }
 
                     if (m_configMgr) {
                         GameMapping newMap;
@@ -261,8 +275,15 @@ bool SyncManager::manualMatch(size_t itemIndex, const RommGame& remoteGame) {
     item.isMatched = true;
     item.remoteGameId = remoteGame.id;
     item.remoteTitle = remoteGame.title;
-    item.remoteHasSave = !remoteGame.savePath.empty();
-    item.remoteSaveUpdatedAt = remoteGame.updatedAt;
+
+    std::vector<RommSave> existingSaves;
+    if (m_netMgr && m_netMgr->fetchSaves(existingSaves, remoteGame.id).success && !existingSaves.empty()) {
+        item.remoteHasSave = true;
+        item.remoteSaveUpdatedAt = existingSaves[0].updatedAt;
+    } else {
+        item.remoteHasSave = false;
+        item.remoteSaveUpdatedAt = "";
+    }
 
     if (m_configMgr) {
         GameMapping map;
@@ -335,7 +356,43 @@ bool SyncManager::forceUpload(SyncItem& item) {
         return false;
     }
 
-    NetworkResult res = m_netMgr->uploadSave(item.remoteGameId, targetFile);
+    std::string remoteFileName;
+    // 1. If RomM already has a save for this ROM, match that exact filename
+    std::vector<RommSave> existingSaves;
+    m_netMgr->fetchSaves(existingSaves, item.remoteGameId);
+    if (!existingSaves.empty() && !existingSaves[0].fileName.empty()) {
+        remoteFileName = existingSaves[0].fileName;
+    } else {
+        // 2. Otherwise determine appropriate filename
+        size_t slashPos = targetFile.find_last_of("/\\");
+        std::string localBaseName = (slashPos != std::string::npos) ? targetFile.substr(slashPos + 1) : targetFile;
+        if (localBaseName.find('.') != std::string::npos && localBaseName != "main") {
+            remoteFileName = localBaseName;
+        } else if (item.localTitle.console == "3DS") {
+            remoteFileName = "main";
+        } else {
+            // For emulated / VC consoles (GBA, NDS, etc.), use the game's ROM filename or title + .sav
+            const RommGame* rGame = nullptr;
+            for (const auto& rg : m_remoteGames) {
+                if (rg.id == item.remoteGameId) {
+                    rGame = &rg;
+                    break;
+                }
+            }
+            if (rGame && !rGame->romPath.empty()) {
+                std::string base = rGame->romPath;
+                size_t dotPos = base.find_last_of('.');
+                if (dotPos != std::string::npos) {
+                    base = base.substr(0, dotPos);
+                }
+                remoteFileName = base + ".sav";
+            } else {
+                remoteFileName = item.localTitle.name + ".sav";
+            }
+        }
+    }
+
+    NetworkResult res = m_netMgr->uploadSave(item.remoteGameId, targetFile, remoteFileName);
     if (res.success) {
         item.remoteHasSave = true;
         m_lastMessage = "Successfully uploaded save for " + item.localTitle.name;
@@ -359,8 +416,33 @@ bool SyncManager::forceDownload(SyncItem& item) {
     std::string stagingDir = getStagingDirectory(item.localTitle.titleId);
     ConfigManager::ensureDirectories(stagingDir + "/");
 
-    std::string targetFile = stagingDir + "/main";
-    NetworkResult res = m_netMgr->downloadSave(item.remoteGameId, targetFile);
+    std::vector<RommSave> saves;
+    m_netMgr->fetchSaves(saves, item.remoteGameId);
+    if (saves.empty()) {
+        m_lastMessage = "No remote save found in RomM for " + item.remoteTitle;
+        return false;
+    }
+
+    std::string localFileName = "main";
+    if (item.localTitle.console != "3DS") {
+        DIR* d = opendir(stagingDir.c_str());
+        if (d) {
+            struct dirent* ent = nullptr;
+            while ((ent = readdir(d)) != nullptr) {
+                if (std::strcmp(ent->d_name, ".") != 0 && std::strcmp(ent->d_name, "..") != 0) {
+                    localFileName = ent->d_name;
+                    break;
+                }
+            }
+            closedir(d);
+        }
+        if (localFileName == "main" && !saves[0].fileName.empty()) {
+            localFileName = saves[0].fileName;
+        }
+    }
+
+    std::string targetFile = stagingDir + "/" + localFileName;
+    NetworkResult res = m_netMgr->downloadSaveById(saves[0].id, targetFile);
     if (!res.success) {
         m_lastMessage = "Download failed: " + res.errorMessage;
         return false;

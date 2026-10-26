@@ -375,7 +375,80 @@ NetworkResult NetworkManager::fetchLibrary(std::vector<RommGame>& outGames, uint
     return result;
 }
 
-NetworkResult NetworkManager::uploadSave(uint64_t gameId, const std::string& filePath) {
+NetworkResult NetworkManager::fetchSaves(std::vector<RommSave>& outSaves, uint64_t romId) {
+    NetworkResult result;
+    outSaves.clear();
+
+    if (!s_networkInitialized) {
+        result.errorMessage = "Network is not initialized.";
+        return result;
+    }
+
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        result.errorMessage = "Failed to initialize curl.";
+        return result;
+    }
+
+    std::string endpoint = "/api/saves";
+    if (romId != 0) {
+        endpoint += "?rom_id=" + std::to_string(romId);
+    }
+    std::string url = buildUrl(endpoint);
+    std::string responseData;
+
+    struct curl_slist* headers = nullptr;
+    headers = curl_slist_append(headers, "Accept: application/json");
+
+    std::string apiKey = getApiKey();
+    if (!apiKey.empty()) {
+        std::string authHeader = "Authorization: Bearer " + apiKey;
+        headers = curl_slist_append(headers, authHeader.c_str());
+    }
+
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, stringWriteCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseData);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "romm3ds/0.1.0");
+
+    CURLcode res = curl_easy_perform(curl);
+    if (res == CURLE_OK) {
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &result.httpCode);
+        result.responseBody = responseData;
+        result.success = (result.httpCode >= 200 && result.httpCode < 300);
+
+        if (result.success && !responseData.empty()) {
+            json parsed = json::parse(responseData, nullptr, false);
+            if (!parsed.is_discarded()) {
+                json items = parsed.is_array() ? parsed : (parsed.contains("items") ? parsed["items"] : json::array());
+                for (const auto& item : items) {
+                    RommSave s;
+                    s.id = item.value("id", (uint64_t)0);
+                    s.romId = item.value("rom_id", (uint64_t)0);
+                    s.fileName = item.value("file_name", item.value("filename", ""));
+                    s.updatedAt = item.value("updated_at", "");
+                    outSaves.push_back(s);
+                }
+            } else {
+                result.success = false;
+                result.errorMessage = "Failed to parse saves JSON response.";
+            }
+        }
+    } else {
+        result.errorMessage = curl_easy_strerror(res);
+    }
+
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+    return result;
+}
+
+NetworkResult NetworkManager::uploadSave(uint64_t gameId, const std::string& filePath, const std::string& remoteFileName) {
     NetworkResult result;
 
     if (!s_networkInitialized) {
@@ -389,7 +462,8 @@ NetworkResult NetworkManager::uploadSave(uint64_t gameId, const std::string& fil
         return result;
     }
 
-    std::string url = buildUrl("/api/roms/" + std::to_string(gameId) + "/saves");
+    // RomM endpoint: POST /api/saves?rom_id={gameId}
+    std::string url = buildUrl("/api/saves?rom_id=" + std::to_string(gameId));
     std::string responseData;
 
     struct curl_slist* headers = nullptr;
@@ -402,9 +476,28 @@ NetworkResult NetworkManager::uploadSave(uint64_t gameId, const std::string& fil
     }
 
     curl_mime* mime = curl_mime_init(curl);
-    curl_mimepart* part = curl_mime_addpart(mime);
-    curl_mime_name(part, "file");
-    curl_mime_filedata(part, filePath.c_str());
+
+    // Form field: rom_id
+    curl_mimepart* partRomId = curl_mime_addpart(mime);
+    curl_mime_name(partRomId, "rom_id");
+    curl_mime_data(partRomId, std::to_string(gameId).c_str(), CURL_ZERO_TERMINATED);
+
+    // Form field: slot
+    curl_mimepart* partSlot = curl_mime_addpart(mime);
+    curl_mime_name(partSlot, "slot");
+    curl_mime_data(partSlot, "0", CURL_ZERO_TERMINATED);
+
+    // File field: saveFile (required by RomM FastAPI backend)
+    curl_mimepart* partFile = curl_mime_addpart(mime);
+    curl_mime_name(partFile, "saveFile");
+    curl_mime_filedata(partFile, filePath.c_str());
+
+    std::string uploadName = remoteFileName;
+    if (uploadName.empty()) {
+        size_t slashPos = filePath.find_last_of("/\\");
+        uploadName = (slashPos != std::string::npos) ? filePath.substr(slashPos + 1) : filePath;
+    }
+    curl_mime_filename(partFile, uploadName.c_str());
 
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
@@ -424,6 +517,9 @@ NetworkResult NetworkManager::uploadSave(uint64_t gameId, const std::string& fil
         result.success = (result.httpCode >= 200 && result.httpCode < 300);
         if (!result.success) {
             result.errorMessage = "Upload failed with HTTP " + std::to_string(result.httpCode);
+            if (!responseData.empty()) {
+                result.errorMessage += ": " + responseData;
+            }
         }
     } else {
         result.errorMessage = curl_easy_strerror(res);
@@ -436,6 +532,20 @@ NetworkResult NetworkManager::uploadSave(uint64_t gameId, const std::string& fil
 }
 
 NetworkResult NetworkManager::downloadSave(uint64_t gameId, const std::string& destPath) {
+    std::vector<RommSave> saves;
+    NetworkResult res = fetchSaves(saves, gameId);
+    if (!res.success) {
+        return res;
+    }
+    if (saves.empty()) {
+        NetworkResult err;
+        err.errorMessage = "No remote save found in RomM for game ID " + std::to_string(gameId);
+        return err;
+    }
+    return downloadSaveById(saves[0].id, destPath);
+}
+
+NetworkResult NetworkManager::downloadSaveById(uint64_t saveId, const std::string& destPath) {
     NetworkResult result;
 
     if (!s_networkInitialized) {
@@ -456,7 +566,7 @@ NetworkResult NetworkManager::downloadSave(uint64_t gameId, const std::string& d
         return result;
     }
 
-    std::string url = buildUrl("/api/roms/" + std::to_string(gameId) + "/saves/download");
+    std::string url = buildUrl("/api/saves/" + std::to_string(saveId) + "/content");
 
     struct curl_slist* headers = nullptr;
     std::string apiKey = getApiKey();
