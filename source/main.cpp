@@ -3,6 +3,7 @@
 
 #include "common.hpp"
 #include "config_manager.hpp"
+#include "network_manager.hpp"
 #include "ui_manager.hpp"
 
 int main(int argc, char *argv[]) {
@@ -12,6 +13,7 @@ int main(int argc, char *argv[]) {
   bool fsInitialized = R_SUCCEEDED(fsInit());
   bool amInitialized = R_SUCCEEDED(amInit());
   bool ndmuInitialized = R_SUCCEEDED(ndmuInit());
+  bool netInitialized = RomM3DS::NetworkManager::initNetwork();
 
   C3D_Init(C3D_DEFAULT_CMDBUF_SIZE);
   C2D_Init(C2D_DEFAULT_MAX_OBJECTS);
@@ -23,8 +25,10 @@ int main(int argc, char *argv[]) {
   RomM3DS::ConfigManager configMgr;
   configMgr.loadConfig();
 
+  RomM3DS::NetworkManager netMgr(&configMgr);
+
   RomM3DS::UIManager uiMgr;
-  uiMgr.init(topTarget, bottomTarget, &configMgr);
+  uiMgr.init(topTarget, bottomTarget, &configMgr, &netMgr);
 
   touchPosition touch;
 
@@ -47,6 +51,8 @@ int main(int argc, char *argv[]) {
   C2D_Fini();
   C3D_Fini();
 
+  if (netInitialized)
+    RomM3DS::NetworkManager::exitNetwork();
   if (ndmuInitialized)
     ndmuExit();
   if (amInitialized)

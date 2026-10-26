@@ -7,6 +7,7 @@
 namespace RomM3DS {
 
 class ConfigManager;
+class NetworkManager;
 
 enum class UIState {
     FIRST_LAUNCH,
@@ -20,7 +21,7 @@ public:
     UIManager();
     ~UIManager();
 
-    void init(C3D_RenderTarget* topTarget, C3D_RenderTarget* bottomTarget, ConfigManager* configMgr);
+    void init(C3D_RenderTarget* topTarget, C3D_RenderTarget* bottomTarget, ConfigManager* configMgr, NetworkManager* netMgr = nullptr);
     void handleInput(u32 kDown, const touchPosition& touch);
     void render();
     void cleanup();
@@ -29,6 +30,7 @@ public:
     UIState getState() const { return m_state; }
 
     void setStatusMessage(const std::string& msg) { m_statusMessage = msg; }
+    void runConnectionTest();
 
 private:
     void renderTopScreen();
@@ -50,6 +52,7 @@ private:
 
     UIState m_state = UIState::FIRST_LAUNCH;
     ConfigManager* m_configMgr = nullptr;
+    NetworkManager* m_netMgr = nullptr;
 
     C3D_RenderTarget* m_topTarget = nullptr;
     C3D_RenderTarget* m_bottomTarget = nullptr;

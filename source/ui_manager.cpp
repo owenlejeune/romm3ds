@@ -1,4 +1,5 @@
 #include "ui_manager.hpp"
+#include "network_manager.hpp"
 #include "config_manager.hpp"
 #include "common.hpp"
 
@@ -26,10 +27,11 @@ UIManager::~UIManager() {
     cleanup();
 }
 
-void UIManager::init(C3D_RenderTarget* topTarget, C3D_RenderTarget* bottomTarget, ConfigManager* configMgr) {
+void UIManager::init(C3D_RenderTarget* topTarget, C3D_RenderTarget* bottomTarget, ConfigManager* configMgr, NetworkManager* netMgr) {
     m_topTarget = topTarget;
     m_bottomTarget = bottomTarget;
     m_configMgr = configMgr;
+    m_netMgr = netMgr;
 
     m_textBuf = C2D_TextBufNew(4096);
 
@@ -76,6 +78,23 @@ std::string UIManager::launchKeyboard(const std::string& hint, const std::string
     return initial;
 }
 
+void UIManager::runConnectionTest() {
+    if (!m_netMgr) {
+        m_statusMessage = "Network subsystem not available.";
+        return;
+    }
+
+    m_statusMessage = "Testing connection to RomM...";
+    render();
+
+    NetworkResult res = m_netMgr->testConnection();
+    if (res.success) {
+        m_statusMessage = "Connection OK! RomM reachable.";
+    } else {
+        m_statusMessage = "Conn Failed: " + res.errorMessage;
+    }
+}
+
 void UIManager::executeSaveAction() {
     if (m_enteredEndpoint.empty() || m_enteredEndpoint == "http://") {
         m_statusMessage = "Error: Endpoint cannot be empty!";
@@ -89,8 +108,20 @@ void UIManager::executeSaveAction() {
     if (m_configMgr) {
         m_configMgr->setEndpoint(m_enteredEndpoint);
         m_configMgr->setApiKey(m_enteredApiKey);
+
+        if (m_netMgr) {
+            m_statusMessage = "Testing server connection...";
+            render();
+
+            NetworkResult res = m_netMgr->testConnection();
+            if (!res.success) {
+                m_statusMessage = "Conn Failed: " + res.errorMessage;
+                return;
+            }
+        }
+
         if (m_configMgr->saveConfig()) {
-            m_statusMessage = "Config saved! Server ready.";
+            m_statusMessage = "Connected & Saved successfully!";
             m_state = UIState::MAIN_MENU;
         } else {
             m_statusMessage = "Error: Failed to write config to SD.";
@@ -129,13 +160,19 @@ void UIManager::handleInput(u32 kDown, const touchPosition& touch) {
             }
         }
     } else if (m_state == UIState::MAIN_MENU) {
+        if (kDown & KEY_X) {
+            runConnectionTest();
+        }
+
         if (kDown & KEY_Y) {
             m_state = UIState::FIRST_LAUNCH;
             m_statusMessage = "Editing configuration.";
         }
 
         if (kDown & KEY_TOUCH) {
-            if (isTouchInside(touch, 16.0f, 174.0f, 288.0f, 34.0f)) {
+            if (isTouchInside(touch, 16.0f, 126.0f, 288.0f, 34.0f)) {
+                runConnectionTest();
+            } else if (isTouchInside(touch, 16.0f, 174.0f, 288.0f, 34.0f)) {
                 m_state = UIState::FIRST_LAUNCH;
                 m_statusMessage = "Editing configuration.";
             }
@@ -222,41 +259,41 @@ void UIManager::renderMainMenuTop() {
     C2D_DrawRectSolid(0.0f, 40.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f, CLR_GREEN);
 
     C2D_Text headerText;
-    C2D_TextParse(&headerText, m_textBuf, "romm3ds - Ready for Sync");
+    C2D_TextParse(&headerText, m_textBuf, "romm3ds - Main Menu");
     C2D_TextOptimize(&headerText);
     C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 10.0f, 0.5f, 0.75f, 0.75f, CLR_TEXT_WHITE);
 
     std::string info = "Active RomM Server:\n  " +
                        (m_configMgr ? m_configMgr->getConfig().serverEndpoint : "") +
-                       "\n\nStatus: Config valid and loaded.\n" +
-                       "Next steps: Network authentication & title scan.\n\n" +
+                       "\n\nStatus: Configured & Network Ready.\n" +
+                       "Next Step: Title scan & save mounting (Step 4).\n\n" +
                        "Controls:\n" +
+                       "  (X) Test Server Connection\n" +
                        "  (Y) Edit Configuration\n" +
                        "  (START) Exit to Homebrew Menu";
 
     C2D_Text infoText;
     C2D_TextParse(&infoText, m_textBuf, info.c_str());
     C2D_TextOptimize(&infoText);
-    C2D_DrawText(&infoText, C2D_WithColor, 16.0f, 56.0f, 0.5f, 0.50f, 0.50f, CLR_TEXT_WHITE);
+    C2D_DrawText(&infoText, C2D_WithColor, 16.0f, 56.0f, 0.5f, 0.48f, 0.48f, CLR_TEXT_WHITE);
 }
 
 void UIManager::renderMainMenuBottom() {
     C2D_DrawRectSolid(8.0f, 6.0f, 0.5f, RomM3DS::SCREEN_BOTTOM_WIDTH - 16.0f, RomM3DS::SCREEN_BOTTOM_HEIGHT - 12.0f, CLR_CARD);
 
     C2D_Text titleText;
-    C2D_TextParse(&titleText, m_textBuf, "Main Menu");
+    C2D_TextParse(&titleText, m_textBuf, "Network & Sync Hub");
     C2D_TextOptimize(&titleText);
-    C2D_DrawText(&titleText, C2D_WithColor, 16.0f, 16.0f, 0.5f, 0.65f, 0.65f, CLR_TEXT_WHITE);
+    C2D_DrawText(&titleText, C2D_WithColor, 16.0f, 14.0f, 0.5f, 0.65f, 0.65f, CLR_TEXT_WHITE);
 
-    C2D_Text statusDesc;
-    C2D_TextParse(&statusDesc, m_textBuf,
-                  "Config file loaded from SD card.\n"
-                  "Ready for Step 3: NetworkManager\n"
-                  "(curl authentication test).");
-    C2D_TextOptimize(&statusDesc);
-    C2D_DrawText(&statusDesc, C2D_WithColor, 16.0f, 52.0f, 0.5f, 0.48f, 0.48f, CLR_TEXT_MUTED);
-
+    drawButton(16.0f, 126.0f, 288.0f, 34.0f, "[ Test Connection (X) ]", false);
     drawButton(16.0f, 174.0f, 288.0f, 34.0f, "[ Edit Settings (Y) ]", false);
+
+    u32 statusColor = (m_statusMessage.find("Error") != std::string::npos || m_statusMessage.find("Failed") != std::string::npos) ? CLR_ERROR : CLR_GREEN;
+    C2D_Text statusText;
+    C2D_TextParse(&statusText, m_textBuf, m_statusMessage.c_str());
+    C2D_TextOptimize(&statusText);
+    C2D_DrawText(&statusText, C2D_WithColor, 16.0f, 52.0f, 0.5f, 0.46f, 0.46f, statusColor);
 }
 
 void UIManager::renderTopScreen() {
