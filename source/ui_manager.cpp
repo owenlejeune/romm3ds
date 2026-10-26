@@ -192,7 +192,11 @@ void UIManager::updateRemoteFilteredList() {
 
     const auto& remote = m_syncMgr->getRemoteLibrary();
     for (size_t i = 0; i < remote.size(); ++i) {
-        if (!m_selectedConsoleSlug.empty()) {
+        if (m_selectedConsoleId > 0 && remote[i].platformId > 0) {
+            if (remote[i].platformId != m_selectedConsoleId) {
+                continue;
+            }
+        } else if (!m_selectedConsoleSlug.empty()) {
             if (m_selectedConsoleSlug == "other") {
                 if (!remote[i].platform.empty()) continue;
             } else {
@@ -438,8 +442,15 @@ void UIManager::openManualMatch() {
 void UIManager::selectConsole(size_t index) {
     if (index >= m_availableConsoles.size()) return;
     m_selectedConsoleIndex = index;
+    m_selectedConsoleId = m_availableConsoles[index].id;
     m_selectedConsoleSlug = m_availableConsoles[index].slug;
     m_selectedConsoleName = m_availableConsoles[index].name;
+
+    if (m_syncMgr) {
+        m_statusMessage = "Loading " + m_selectedConsoleName + " games...";
+        render();
+        m_syncMgr->loadGamesForPlatform(m_selectedConsoleId, m_selectedConsoleSlug);
+    }
 
     m_remoteFilterText.clear();
     updateRemoteFilteredList();

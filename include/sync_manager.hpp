@@ -45,6 +45,8 @@ public:
     const std::vector<RommGame>& getRemoteLibrary() const { return m_remoteGames; }
     const std::vector<RommPlatform>& getPlatforms() const { return m_platforms; }
 
+    bool loadGamesForPlatform(uint64_t platformId, const std::string& platformSlug);
+
     bool manualMatch(size_t itemIndex, const RommGame& remoteGame);
     SyncAction evaluateItem(const SyncItem& item);
 

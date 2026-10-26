@@ -99,7 +99,9 @@ void SyncManager::consolidatePlatforms() {
         }
         auto it = slugCounts.find(p.slug);
         if (it != slugCounts.end()) {
-            p.romCount = it->second;
+            if (p.romCount <= 0 || it->second > p.romCount) {
+                p.romCount = it->second;
+            }
             slugCounts.erase(it);
         }
     }
@@ -126,6 +128,40 @@ void SyncManager::consolidatePlatforms() {
         });
 }
 
+bool SyncManager::loadGamesForPlatform(uint64_t platformId, const std::string& platformSlug) {
+    if (!m_netMgr) return false;
+
+    std::vector<RommGame> fetchedGames;
+    NetworkResult res = m_netMgr->fetchLibrary(fetchedGames, platformId, platformSlug);
+    if (!res.success) {
+        m_lastMessage = "Failed to load games: " + res.errorMessage;
+        return false;
+    }
+
+    for (const auto& fg : fetchedGames) {
+        bool exists = false;
+        for (auto& existing : m_remoteGames) {
+            if (existing.id == fg.id) {
+                existing = fg;
+                exists = true;
+                break;
+            }
+        }
+        if (!exists) {
+            m_remoteGames.push_back(fg);
+        }
+    }
+
+    for (auto& p : m_platforms) {
+        if ((platformId > 0 && p.id == platformId) || (!platformSlug.empty() && p.slug == platformSlug)) {
+            p.romCount = std::max(p.romCount, static_cast<int>(fetchedGames.size()));
+        }
+    }
+
+    m_lastMessage = "Loaded " + std::to_string(fetchedGames.size()) + " games for console.";
+    return true;
+}
+
 bool SyncManager::refresh() {
     m_items.clear();
     m_remoteGames.clear();
@@ -137,7 +173,7 @@ bool SyncManager::refresh() {
 
     if (m_netMgr) {
         m_netMgr->fetchPlatforms(m_platforms);
-        m_netMgr->fetchLibrary(m_remoteGames, "");
+        m_netMgr->fetchLibrary(m_remoteGames, 0, "");
         consolidatePlatforms();
     }
 

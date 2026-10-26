@@ -262,7 +262,7 @@ NetworkResult NetworkManager::fetchPlatforms(std::vector<RommPlatform>& outPlatf
     return result;
 }
 
-NetworkResult NetworkManager::fetchLibrary(std::vector<RommGame>& outGames, const std::string& platform) {
+NetworkResult NetworkManager::fetchLibrary(std::vector<RommGame>& outGames, uint64_t platformId, const std::string& platformSlug) {
     NetworkResult result;
 
     if (!s_networkInitialized) {
@@ -270,68 +270,108 @@ NetworkResult NetworkManager::fetchLibrary(std::vector<RommGame>& outGames, cons
         return result;
     }
 
-    CURL* curl = curl_easy_init();
-    if (!curl) {
-        result.errorMessage = "Failed to initialize curl.";
-        return result;
-    }
+    size_t offset = 0;
+    const size_t limit = 100;
+    int total = -1;
 
-    std::string path = "/api/roms";
-    if (!platform.empty()) {
-        path += "?platform_slug=" + platform;
+    std::string baseQuery;
+    if (platformId > 0) {
+        baseQuery += "platform_id=" + std::to_string(platformId);
+    } else if (!platformSlug.empty()) {
+        baseQuery += "platform_slug=" + platformSlug;
     }
-    std::string url = buildUrl(path);
-    std::string responseData;
-
-    struct curl_slist* headers = nullptr;
-    headers = curl_slist_append(headers, "Accept: application/json");
 
     std::string apiKey = getApiKey();
-    if (!apiKey.empty()) {
-        std::string authHeader = "Authorization: Bearer " + apiKey;
-        headers = curl_slist_append(headers, authHeader.c_str());
-    }
 
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, stringWriteCallback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseData);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "romm3ds/0.1.0");
+    while (true) {
+        CURL* curl = curl_easy_init();
+        if (!curl) {
+            result.errorMessage = "Failed to initialize curl.";
+            return result;
+        }
 
-    CURLcode res = curl_easy_perform(curl);
-    if (res == CURLE_OK) {
+        std::string pageQuery = baseQuery;
+        if (!pageQuery.empty()) pageQuery += "&";
+        pageQuery += "limit=" + std::to_string(limit) + "&offset=" + std::to_string(offset);
+
+        std::string url = buildUrl("/api/roms?" + pageQuery);
+        std::string responseData;
+
+        struct curl_slist* headers = nullptr;
+        headers = curl_slist_append(headers, "Accept: application/json");
+
+        if (!apiKey.empty()) {
+            std::string authHeader = "Authorization: Bearer " + apiKey;
+            std::string xApiKeyHeader = "X-API-Key: " + apiKey;
+            headers = curl_slist_append(headers, authHeader.c_str());
+            headers = curl_slist_append(headers, xApiKeyHeader.c_str());
+        }
+
+        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, stringWriteCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseData);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+        curl_easy_setopt(curl, CURLOPT_USERAGENT, "romm3ds/0.1.0");
+
+        CURLcode res = curl_easy_perform(curl);
+        if (res != CURLE_OK) {
+            result.errorMessage = curl_easy_strerror(res);
+            curl_slist_free_all(headers);
+            curl_easy_cleanup(curl);
+            break;
+        }
+
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &result.httpCode);
         result.responseBody = responseData;
-        if (result.httpCode >= 200 && result.httpCode < 300) {
-            result.success = true;
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(curl);
 
-            json parsed = json::parse(responseData, nullptr, false);
-            if (!parsed.is_discarded()) {
-                json items = parsed.is_array() ? parsed : (parsed.contains("items") ? parsed["items"] : json::array());
-                for (const auto& item : items) {
-                    RommGame game;
-                    game.id = item.value("id", (uint64_t)0);
-                    game.title = item.value("name", item.value("title", ""));
-                    game.platform = item.value("platform_slug", item.value("platform", ""));
-                    game.romPath = item.value("rom_path", "");
-                    game.savePath = item.value("save_path", "");
-                    game.updatedAt = item.value("updated_at", "");
-                    outGames.push_back(game);
-                }
-            }
-        } else {
+        if (result.httpCode < 200 || result.httpCode >= 300) {
             result.errorMessage = "HTTP Error " + std::to_string(result.httpCode);
+            break;
         }
-    } else {
-        result.errorMessage = curl_easy_strerror(res);
+
+        result.success = true;
+
+        json parsed = json::parse(responseData, nullptr, false);
+        if (parsed.is_discarded()) {
+            break;
+        }
+
+        json items = parsed.is_array() ? parsed : (parsed.contains("items") ? parsed["items"] : json::array());
+        if (items.empty()) {
+            break;
+        }
+
+        for (const auto& item : items) {
+            RommGame game;
+            game.id = item.value("id", (uint64_t)0);
+            game.platformId = item.value("platform_id", (uint64_t)0);
+            game.title = item.value("name", item.value("title", ""));
+            game.platform = item.value("platform_slug", item.value("platform", ""));
+            game.romPath = item.value("fs_name", item.value("rom_path", ""));
+            game.savePath = item.value("save_path", "");
+            game.updatedAt = item.value("updated_at", "");
+            outGames.push_back(game);
+        }
+
+        if (parsed.is_object() && parsed.contains("total")) {
+            total = parsed.value("total", -1);
+        }
+
+        offset += items.size();
+        if (total >= 0 && static_cast<int>(offset) >= total) {
+            break;
+        }
+        if (items.size() < limit) {
+            break;
+        }
     }
 
-    curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);
     return result;
 }
 

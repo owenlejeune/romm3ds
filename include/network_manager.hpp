@@ -10,6 +10,7 @@ class ConfigManager;
 
 struct RommGame {
     uint64_t id = 0;
+    uint64_t platformId = 0;
     std::string title;
     std::string platform;
     std::string romPath;
@@ -44,7 +45,7 @@ public:
 
     NetworkResult testConnection();
     NetworkResult fetchPlatforms(std::vector<RommPlatform>& outPlatforms);
-    NetworkResult fetchLibrary(std::vector<RommGame>& outGames, const std::string& platform = "");
+    NetworkResult fetchLibrary(std::vector<RommGame>& outGames, uint64_t platformId = 0, const std::string& platformSlug = "");
     NetworkResult uploadSave(uint64_t gameId, const std::string& filePath);
     NetworkResult downloadSave(uint64_t gameId, const std::string& destPath);
 

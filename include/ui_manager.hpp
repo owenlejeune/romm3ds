@@ -115,6 +115,7 @@ private:
     size_t m_selectedGameIndex = 0;
     size_t m_selectedRemoteIndex = 0;
     size_t m_selectedConsoleIndex = 0;
+    uint64_t m_selectedConsoleId = 0;
     std::string m_selectedConsoleSlug;
     std::string m_selectedConsoleName;
     std::vector<RommPlatform> m_availableConsoles;
