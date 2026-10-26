@@ -1,5 +1,6 @@
 #include "ui_manager.hpp"
 #include "network_manager.hpp"
+#include "save_manager.hpp"
 #include "config_manager.hpp"
 #include "common.hpp"
 
@@ -27,11 +28,12 @@ UIManager::~UIManager() {
     cleanup();
 }
 
-void UIManager::init(C3D_RenderTarget* topTarget, C3D_RenderTarget* bottomTarget, ConfigManager* configMgr, NetworkManager* netMgr) {
+void UIManager::init(C3D_RenderTarget* topTarget, C3D_RenderTarget* bottomTarget, ConfigManager* configMgr, NetworkManager* netMgr, SaveManager* saveMgr) {
     m_topTarget = topTarget;
     m_bottomTarget = bottomTarget;
     m_configMgr = configMgr;
     m_netMgr = netMgr;
+    m_saveMgr = saveMgr;
 
     m_textBuf = C2D_TextBufNew(4096);
 
@@ -93,6 +95,26 @@ void UIManager::runConnectionTest() {
     } else {
         m_statusMessage = "Conn Failed: " + res.errorMessage;
     }
+}
+
+void UIManager::runTitleScan() {
+    if (!m_saveMgr) {
+        m_statusMessage = "SaveManager not available.";
+        return;
+    }
+
+    m_statusMessage = "Scanning installed titles & saves...";
+    render();
+
+    auto titles = m_saveMgr->scanInstalledTitles();
+    size_t saveCount = 0;
+    for (const auto& t : titles) {
+        if (t.hasSave) {
+            saveCount++;
+        }
+    }
+
+    m_statusMessage = "Found " + std::to_string(titles.size()) + " titles (" + std::to_string(saveCount) + " with saves).";
 }
 
 void UIManager::executeSaveAction() {
@@ -160,6 +182,10 @@ void UIManager::handleInput(u32 kDown, const touchPosition& touch) {
             }
         }
     } else if (m_state == UIState::MAIN_MENU) {
+        if (kDown & KEY_A) {
+            runTitleScan();
+        }
+
         if (kDown & KEY_X) {
             runConnectionTest();
         }
@@ -170,9 +196,11 @@ void UIManager::handleInput(u32 kDown, const touchPosition& touch) {
         }
 
         if (kDown & KEY_TOUCH) {
-            if (isTouchInside(touch, 16.0f, 126.0f, 288.0f, 34.0f)) {
+            if (isTouchInside(touch, 16.0f, 80.0f, 288.0f, 32.0f)) {
+                runTitleScan();
+            } else if (isTouchInside(touch, 16.0f, 122.0f, 288.0f, 32.0f)) {
                 runConnectionTest();
-            } else if (isTouchInside(touch, 16.0f, 174.0f, 288.0f, 34.0f)) {
+            } else if (isTouchInside(touch, 16.0f, 164.0f, 288.0f, 32.0f)) {
                 m_state = UIState::FIRST_LAUNCH;
                 m_statusMessage = "Editing configuration.";
             }
@@ -265,9 +293,10 @@ void UIManager::renderMainMenuTop() {
 
     std::string info = "Active RomM Server:\n  " +
                        (m_configMgr ? m_configMgr->getConfig().serverEndpoint : "") +
-                       "\n\nStatus: Configured & Network Ready.\n" +
-                       "Next Step: Title scan & save mounting (Step 4).\n\n" +
+                       "\n\nStatus: Title scanning & save mount ready.\n" +
+                       "Next Step: Save resolution logic (Step 5).\n\n" +
                        "Controls:\n" +
+                       "  (A) Scan Installed Titles\n" +
                        "  (X) Test Server Connection\n" +
                        "  (Y) Edit Configuration\n" +
                        "  (START) Exit to Homebrew Menu";
@@ -282,18 +311,19 @@ void UIManager::renderMainMenuBottom() {
     C2D_DrawRectSolid(8.0f, 6.0f, 0.5f, RomM3DS::SCREEN_BOTTOM_WIDTH - 16.0f, RomM3DS::SCREEN_BOTTOM_HEIGHT - 12.0f, CLR_CARD);
 
     C2D_Text titleText;
-    C2D_TextParse(&titleText, m_textBuf, "Network & Sync Hub");
+    C2D_TextParse(&titleText, m_textBuf, "Save & Title Operations");
     C2D_TextOptimize(&titleText);
     C2D_DrawText(&titleText, C2D_WithColor, 16.0f, 14.0f, 0.5f, 0.65f, 0.65f, CLR_TEXT_WHITE);
 
-    drawButton(16.0f, 126.0f, 288.0f, 34.0f, "[ Test Connection (X) ]", false);
-    drawButton(16.0f, 174.0f, 288.0f, 34.0f, "[ Edit Settings (Y) ]", false);
+    drawButton(16.0f, 80.0f, 288.0f, 32.0f, "[ Scan Installed Titles (A) ]", false);
+    drawButton(16.0f, 122.0f, 288.0f, 32.0f, "[ Test Connection (X) ]", false);
+    drawButton(16.0f, 164.0f, 288.0f, 32.0f, "[ Edit Settings (Y) ]", false);
 
     u32 statusColor = (m_statusMessage.find("Error") != std::string::npos || m_statusMessage.find("Failed") != std::string::npos) ? CLR_ERROR : CLR_GREEN;
     C2D_Text statusText;
     C2D_TextParse(&statusText, m_textBuf, m_statusMessage.c_str());
     C2D_TextOptimize(&statusText);
-    C2D_DrawText(&statusText, C2D_WithColor, 16.0f, 52.0f, 0.5f, 0.46f, 0.46f, statusColor);
+    C2D_DrawText(&statusText, C2D_WithColor, 16.0f, 204.0f, 0.5f, 0.44f, 0.44f, statusColor);
 }
 
 void UIManager::renderTopScreen() {

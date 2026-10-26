@@ -4,6 +4,7 @@
 #include "common.hpp"
 #include "config_manager.hpp"
 #include "network_manager.hpp"
+#include "save_manager.hpp"
 #include "ui_manager.hpp"
 
 int main(int argc, char *argv[]) {
@@ -12,6 +13,7 @@ int main(int argc, char *argv[]) {
   bool romfsInitialized = R_SUCCEEDED(romfsInit());
   bool fsInitialized = R_SUCCEEDED(fsInit());
   bool amInitialized = R_SUCCEEDED(amInit());
+  bool cfguInitialized = R_SUCCEEDED(cfguInit());
   bool ndmuInitialized = R_SUCCEEDED(ndmuInit());
   bool netInitialized = RomM3DS::NetworkManager::initNetwork();
 
@@ -26,9 +28,10 @@ int main(int argc, char *argv[]) {
   configMgr.loadConfig();
 
   RomM3DS::NetworkManager netMgr(&configMgr);
+  RomM3DS::SaveManager saveMgr;
 
   RomM3DS::UIManager uiMgr;
-  uiMgr.init(topTarget, bottomTarget, &configMgr, &netMgr);
+  uiMgr.init(topTarget, bottomTarget, &configMgr, &netMgr, &saveMgr);
 
   touchPosition touch;
 
@@ -55,6 +58,8 @@ int main(int argc, char *argv[]) {
     RomM3DS::NetworkManager::exitNetwork();
   if (ndmuInitialized)
     ndmuExit();
+  if (cfguInitialized)
+    cfguExit();
   if (amInitialized)
     amExit();
   if (fsInitialized)
