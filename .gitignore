@@ -1,0 +1,50 @@
+# Object files and dependencies
+
+*.o
+*.d
+*.a
+*.elf
+
+# 3DS specific build artifacts
+
+*.3dsx
+*.smdh
+*.cia
+*.cxi
+*.cfa
+*.romfs
+*.bin
+
+# Standard build directories
+
+build/
+out/
+bin/
+dist/
+
+# Generic AI prompts and chat histories
+
+.artifacts
+.artifacts/*
+
+.agents
+.agents/*
+skills-lock.json
+
+# IDEs and Editors
+
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS Generated Files
+
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
