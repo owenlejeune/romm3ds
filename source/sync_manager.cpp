@@ -56,38 +56,41 @@ bool SyncManager::refresh() {
     for (const auto& local : localTitles) {
         SyncItem item;
         item.localTitle = local;
+        item.isIgnored = (m_configMgr && m_configMgr->isTitleIgnored(local.titleIdHex));
 
-        const GameMapping* mapping = m_configMgr ? m_configMgr->findMappingByTitleId(local.titleIdHex) : nullptr;
-        if (mapping && mapping->remoteGameId != 0) {
-            item.isMatched = true;
-            item.remoteGameId = mapping->remoteGameId;
-            item.remoteTitle = mapping->remoteTitle;
+        if (!item.isIgnored) {
+            const GameMapping* mapping = m_configMgr ? m_configMgr->findMappingByTitleId(local.titleIdHex) : nullptr;
+            if (mapping && mapping->remoteGameId != 0) {
+                item.isMatched = true;
+                item.remoteGameId = mapping->remoteGameId;
+                item.remoteTitle = mapping->remoteTitle;
 
-            for (const auto& r : m_remoteGames) {
-                if (r.id == item.remoteGameId) {
-                    item.remoteHasSave = !r.savePath.empty();
-                    item.remoteSaveUpdatedAt = r.updatedAt;
-                    break;
-                }
-            }
-        } else {
-            for (const auto& r : m_remoteGames) {
-                if (matchesFuzzy(local.name, r.title)) {
-                    item.isMatched = true;
-                    item.remoteGameId = r.id;
-                    item.remoteTitle = r.title;
-                    item.remoteHasSave = !r.savePath.empty();
-                    item.remoteSaveUpdatedAt = r.updatedAt;
-
-                    if (m_configMgr) {
-                        GameMapping newMap;
-                        newMap.titleId = local.titleIdHex;
-                        newMap.localName = local.name;
-                        newMap.remoteGameId = r.id;
-                        newMap.remoteTitle = r.title;
-                        m_configMgr->addOrUpdateMapping(newMap);
+                for (const auto& r : m_remoteGames) {
+                    if (r.id == item.remoteGameId) {
+                        item.remoteHasSave = !r.savePath.empty();
+                        item.remoteSaveUpdatedAt = r.updatedAt;
+                        break;
                     }
-                    break;
+                }
+            } else {
+                for (const auto& r : m_remoteGames) {
+                    if (matchesFuzzy(local.name, r.title)) {
+                        item.isMatched = true;
+                        item.remoteGameId = r.id;
+                        item.remoteTitle = r.title;
+                        item.remoteHasSave = !r.savePath.empty();
+                        item.remoteSaveUpdatedAt = r.updatedAt;
+
+                        if (m_configMgr) {
+                            GameMapping newMap;
+                            newMap.titleId = local.titleIdHex;
+                            newMap.localName = local.name;
+                            newMap.remoteGameId = r.id;
+                            newMap.remoteTitle = r.title;
+                            m_configMgr->addOrUpdateMapping(newMap);
+                        }
+                        break;
+                    }
                 }
             }
         }
@@ -131,7 +134,7 @@ bool SyncManager::manualMatch(size_t itemIndex, const RommGame& remoteGame) {
 }
 
 SyncAction SyncManager::evaluateItem(const SyncItem& item) {
-    if (!item.isMatched) {
+    if (item.isIgnored || !item.isMatched) {
         return SyncAction::NO_SAVES;
     }
 
@@ -152,6 +155,10 @@ SyncAction SyncManager::evaluateItem(const SyncItem& item) {
 }
 
 bool SyncManager::forceUpload(SyncItem& item) {
+    if (item.isIgnored) {
+        m_lastMessage = "Game is ignored: " + item.localTitle.name;
+        return false;
+    }
     if (!item.isMatched || !m_saveMgr || !m_netMgr) {
         m_lastMessage = "Cannot upload: Unmatched or subsystems missing.";
         return false;
@@ -195,6 +202,10 @@ bool SyncManager::forceUpload(SyncItem& item) {
 }
 
 bool SyncManager::forceDownload(SyncItem& item) {
+    if (item.isIgnored) {
+        m_lastMessage = "Game is ignored: " + item.localTitle.name;
+        return false;
+    }
     if (!item.isMatched || !m_saveMgr || !m_netMgr) {
         m_lastMessage = "Cannot download: Unmatched or subsystems missing.";
         return false;

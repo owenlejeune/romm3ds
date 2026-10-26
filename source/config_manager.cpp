@@ -37,6 +37,10 @@ bool ConfigManager::loadConfig(const std::string& path) {
 
     m_config.serverEndpoint = j.value("server_endpoint", "");
     m_config.apiKey = j.value("api_key", "");
+    m_config.ignoredTitleIds.clear();
+    if (j.contains("ignored_title_ids") && j["ignored_title_ids"].is_array()) {
+        m_config.ignoredTitleIds = j["ignored_title_ids"].get<std::vector<std::string>>();
+    }
     return true;
 }
 
@@ -51,7 +55,8 @@ bool ConfigManager::saveConfig(const std::string& path) {
 
     json j = {
         {"server_endpoint", m_config.serverEndpoint},
-        {"api_key", m_config.apiKey}
+        {"api_key", m_config.apiKey},
+        {"ignored_title_ids", m_config.ignoredTitleIds}
     };
 
     file << j.dump(4);
@@ -60,6 +65,28 @@ bool ConfigManager::saveConfig(const std::string& path) {
 
 bool ConfigManager::hasValidConfig() const {
     return m_config.isValid();
+}
+
+bool ConfigManager::isTitleIgnored(const std::string& titleIdHex) const {
+    for (const auto& id : m_config.ignoredTitleIds) {
+        if (id == titleIdHex) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void ConfigManager::setIgnoreTitle(const std::string& titleIdHex, bool ignore) {
+    auto it = std::find(m_config.ignoredTitleIds.begin(), m_config.ignoredTitleIds.end(), titleIdHex);
+    if (ignore) {
+        if (it == m_config.ignoredTitleIds.end()) {
+            m_config.ignoredTitleIds.push_back(titleIdHex);
+        }
+    } else {
+        if (it != m_config.ignoredTitleIds.end()) {
+            m_config.ignoredTitleIds.erase(it);
+        }
+    }
 }
 
 bool ConfigManager::loadMappings(const std::string& path) {

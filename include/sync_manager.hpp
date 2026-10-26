@@ -31,6 +31,7 @@ struct SyncItem {
     std::string remoteTitle;
     std::string remoteSaveUpdatedAt;
     bool remoteHasSave = false;
+    bool isIgnored = false;
 };
 
 class SyncManager {

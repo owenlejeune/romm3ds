@@ -19,6 +19,14 @@ enum class UIState {
     CONFLICT_PROMPT
 };
 
+enum class LocalFilterMode {
+    ALL,
+    MATCHED,
+    UNMATCHED,
+    WITH_SAVES,
+    HIDDEN
+};
+
 class UIManager {
 public:
     UIManager();
@@ -43,6 +51,11 @@ public:
     void syncAllGames();
     void forceUploadSelected();
     void forceDownloadSelected();
+
+    void updateLocalFilteredList();
+    void updateRemoteFilteredList();
+    void cycleLocalFilterMode();
+    void toggleIgnoreSelected();
 
 private:
     void renderTopScreen();
@@ -91,6 +104,13 @@ private:
     size_t m_selectedRemoteIndex = 0;
     int m_conflictChoiceIndex = 0;
     size_t m_conflictGameIndex = 0;
+
+    LocalFilterMode m_localFilterMode = LocalFilterMode::ALL;
+    std::string m_localFilterText;
+    std::vector<size_t> m_filteredLocalIndices;
+
+    std::string m_remoteFilterText;
+    std::vector<size_t> m_filteredRemoteIndices;
 };
 
 } // namespace RomM3DS

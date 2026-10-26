@@ -11,6 +11,7 @@
 
 #if defined(__3DS__) || defined(_3DS)
 #include <3ds.h>
+#include <3ds/util/utf.h>
 
 struct smdh_title_s {
     u16 shortDescription[64];
@@ -43,16 +44,53 @@ namespace RomM3DS {
 namespace {
 
 #if defined(__3DS__) || defined(_3DS)
-std::string utf16ToUtf8(const u16* src, size_t maxLen) {
-    std::string out;
-    for (size_t i = 0; i < maxLen && src[i] != 0; ++i) {
-        if (src[i] < 0x80) {
-            out.push_back(static_cast<char>(src[i]));
-        } else {
-            out.push_back('?');
-        }
+std::string decodeUtf16(const u16* src, size_t maxUnits, bool sanitize = false) {
+    if (!src || src[0] == 0) {
+        return "";
     }
+
+    std::vector<u16> temp(maxUnits + 1, 0);
+    size_t actualLen = 0;
+    while (actualLen < maxUnits && src[actualLen] != 0) {
+        temp[actualLen] = src[actualLen];
+        actualLen++;
+    }
+    temp[actualLen] = 0;
+    if (actualLen == 0) {
+        return "";
+    }
+
+    std::vector<uint8_t> outBuf(actualLen * 4 + 1, 0);
+    ssize_t units = utf16_to_utf8(outBuf.data(), temp.data(), outBuf.size() - 1);
+    if (units <= 0) {
+        return "";
+    }
+    outBuf[units] = '\0';
+    std::string out(reinterpret_cast<char*>(outBuf.data()));
+
+    if (sanitize) {
+        for (char& c : out) {
+            if (c == '\r' || c == '\n') {
+                c = ' ';
+            }
+        }
+        size_t first = out.find_first_not_of(" \t");
+        if (first == std::string::npos) {
+            return "";
+        }
+        size_t last = out.find_last_not_of(" \t");
+        return out.substr(first, last - first + 1);
+    }
+
     return out;
+}
+
+std::string extractTitleString(const smdh_title_s& titleEntry) {
+    std::string name = decodeUtf16(titleEntry.shortDescription, 64, true);
+    if (name.empty()) {
+        name = decodeUtf16(titleEntry.longDescription, 128, true);
+    }
+    return name;
 }
 #endif
 
@@ -74,37 +112,46 @@ uint64_t SaveManager::parseTitleId(const std::string& hexStr) {
 #if defined(__3DS__) || defined(_3DS)
 
 std::string SaveManager::getTitleNameFromSmdh(uint64_t titleId, uint8_t mediaType) {
-    u32 archPath[3] = {
+    u32 archPath[4] = {
         static_cast<u32>(titleId & 0xFFFFFFFF),
         static_cast<u32>((titleId >> 32) & 0xFFFFFFFF),
-        mediaType
+        static_cast<u32>(mediaType),
+        0x00000000
     };
-    FS_Path apath = { PATH_BINARY, 12, archPath };
-    FS_Path fpath = fsMakePath(PATH_ASCII, "/icon");
+    static const u32 filePath[5] = {0x00000000, 0x00000000, 0x00000002, 0x6E6F6369, 0x00000000};
 
-    Handle file;
+    FS_Path apath = { PATH_BINARY, sizeof(archPath), archPath };
+    FS_Path fpath = { PATH_BINARY, sizeof(filePath), filePath };
+
+    Handle file = 0;
     Result res = FSUSER_OpenFileDirectly(&file, ARCHIVE_SAVEDATA_AND_CONTENT, apath, fpath, FS_OPEN_READ, 0);
     if (R_FAILED(res)) {
         return "";
     }
 
     smdh_s smdh;
+    std::memset(&smdh, 0, sizeof(smdh));
     u32 bytesRead = 0;
     res = FSFILE_Read(file, &bytesRead, 0, &smdh, sizeof(smdh_s));
     FSFILE_Close(file);
 
-    if (R_SUCCEEDED(res) && bytesRead >= sizeof(smdh_s) && memcmp(smdh.magic, "SMDH", 4) == 0) {
-        u8 lang = 1;
-        CFGU_GetSystemLanguage(&lang);
-        if (lang > 15) {
-            lang = 1;
+    if (R_SUCCEEDED(res) && bytesRead >= 0x2040 && std::memcmp(smdh.magic, "SMDH", 4) == 0) {
+        u8 sysLang = 1;
+        if (R_SUCCEEDED(CFGU_GetSystemLanguage(&sysLang)) && sysLang < 16) {
+            std::string name = extractTitleString(smdh.titles[sysLang]);
+            if (!name.empty()) return name;
         }
 
-        std::string name = utf16ToUtf8(smdh.titles[lang].shortDescription, 64);
-        if (name.empty()) {
-            name = utf16ToUtf8(smdh.titles[1].shortDescription, 64);
+        std::string enName = extractTitleString(smdh.titles[1]);
+        if (!enName.empty()) return enName;
+
+        std::string jpName = extractTitleString(smdh.titles[0]);
+        if (!jpName.empty()) return jpName;
+
+        for (int i = 0; i < 16; ++i) {
+            std::string anyName = extractTitleString(smdh.titles[i]);
+            if (!anyName.empty()) return anyName;
         }
-        return name;
     }
     return "";
 }
@@ -129,7 +176,7 @@ bool SaveManager::copyArchiveDirToFs(uint64_t archiveHandle, const std::string& 
 
     while (R_SUCCEEDED(FSDIR_Read(dirHandle, &readCount, ENTRY_COUNT, entries)) && readCount > 0) {
         for (u32 i = 0; i < readCount; ++i) {
-            std::string entryName = utf16ToUtf8(entries[i].name, 256);
+            std::string entryName = decodeUtf16(entries[i].name, 256);
             if (entryName == "." || entryName == "..") {
                 continue;
             }

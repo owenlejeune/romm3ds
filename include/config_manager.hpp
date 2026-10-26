@@ -9,6 +9,7 @@ namespace RomM3DS {
 struct AppConfig {
     std::string serverEndpoint;
     std::string apiKey;
+    std::vector<std::string> ignoredTitleIds;
 
     bool isValid() const {
         return !serverEndpoint.empty() && !apiKey.empty();
@@ -34,6 +35,10 @@ public:
     void setConfig(const AppConfig& config) { m_config = config; }
     void setEndpoint(const std::string& endpoint) { m_config.serverEndpoint = endpoint; }
     void setApiKey(const std::string& apiKey) { m_config.apiKey = apiKey; }
+
+    bool isTitleIgnored(const std::string& titleIdHex) const;
+    void setIgnoreTitle(const std::string& titleIdHex, bool ignore);
+    const std::vector<std::string>& getIgnoredTitleIds() const { return m_config.ignoredTitleIds; }
 
     bool loadMappings(const std::string& path = "");
     bool saveMappings(const std::string& path = "");
