@@ -11,6 +11,31 @@
 
 #if defined(__3DS__) || defined(_3DS)
 #include <3ds.h>
+
+struct smdh_title_s {
+    u16 shortDescription[64];
+    u16 longDescription[128];
+    u16 publisher[64];
+};
+
+struct smdh_s {
+    char magic[4];
+    u16 version;
+    u16 reserved;
+    smdh_title_s titles[16];
+    u8 ratings[16];
+    u32 region;
+    u32 matchMakerId;
+    u64 matchMakerBitFlag;
+    u32 flags;
+    u16 eulaVersion;
+    u16 reserved2;
+    u32 optimalBannerFrame;
+    u32 streetpassId;
+    u64 reserved3;
+    u8 smallIcon[0x480];
+    u8 largeIcon[0x1200];
+};
 #endif
 
 namespace RomM3DS {
@@ -230,7 +255,7 @@ std::vector<InstalledTitle> SaveManager::scanInstalledTitles() {
     std::vector<InstalledTitle> outTitles;
 
 #if defined(__3DS__) || defined(_3DS)
-    FS_MediaType mediaTypes[] = { FS_MEDIA_TYPE_SD, FS_MEDIA_TYPE_GAME_CARD };
+    FS_MediaType mediaTypes[] = { MEDIATYPE_SD, MEDIATYPE_GAME_CARD };
 
     for (auto mediaType : mediaTypes) {
         u32 count = 0;
@@ -342,7 +367,7 @@ bool SaveManager::injectSave(uint64_t titleId, const std::string& inDirectory, u
 
     bool success = copyFsDirToArchive(archive, inDirectory, "/");
     if (success) {
-        FSUSER_ControlArchive(archive, FS_ACTION_COMMIT_SAVE_DATA, nullptr, 0, nullptr, 0);
+        FSUSER_ControlArchive(archive, ARCHIVE_ACTION_COMMIT_SAVE_DATA, nullptr, 0, nullptr, 0);
     }
 
     FSUSER_CloseArchive(archive);

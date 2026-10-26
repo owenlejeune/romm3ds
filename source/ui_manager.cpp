@@ -725,7 +725,7 @@ void UIManager::render() {
     C2D_SceneBegin(m_bottomTarget);
     renderBottomScreen();
 
-    C3D_FrameEnd();
+    C3D_FrameEnd(0);
 }
 
 } // namespace RomM3DS
