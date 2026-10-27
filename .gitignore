@@ -14,10 +14,13 @@
 *.cfa
 *.romfs
 *.bin
+*.bnr
+*.icn
 
 # Standard build directories
 
 build/
+outputs/
 out/
 bin/
 dist/

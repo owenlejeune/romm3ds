@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+cd "${PROJECT_ROOT}"
+
+# Add ~/.local/bin to PATH if not already present
+export PATH="${HOME}/.local/bin:${PATH}"
+
+OUTPUT_DIR="outputs"
+CIA_DIR="cia"
+TITLE_ID="0004000000F17E00"
+
+mkdir -p "${OUTPUT_DIR}"
+
+echo "==> Ensuring romm3ds binary is built..."
+"${SCRIPT_DIR}/make.sh"
+
+if ! command -v bannertool >/dev/null 2>&1; then
+  echo "Error: bannertool not found in PATH or ~/.local/bin" >&2
+  exit 1
+fi
+
+if ! command -v makerom >/dev/null 2>&1; then
+  echo "Error: makerom not found in PATH or ~/.local/bin" >&2
+  exit 1
+fi
+
+echo "==> Generating banner..."
+bannertool makebanner -i "${CIA_DIR}/banner.png" -a "${CIA_DIR}/audio.wav" -o "${CIA_DIR}/banner.bnr"
+
+echo "==> Building CXI (${OUTPUT_DIR}/romm3ds.cxi)..."
+makerom -f cxi -o "${OUTPUT_DIR}/romm3ds.cxi" \
+  -target t \
+  -desc app:7 \
+  -rsf "${CIA_DIR}/app.rsf" \
+  -elf "${OUTPUT_DIR}/romm3ds.elf" \
+  -icon "${OUTPUT_DIR}/romm3ds.smdh" \
+  -banner "${CIA_DIR}/banner.bnr"
+
+echo "==> Packaging CIA (${OUTPUT_DIR}/romm3ds.cia)..."
+makerom -f cia -o "${OUTPUT_DIR}/romm3ds.cia" \
+  -content "${OUTPUT_DIR}/romm3ds.cxi:0:${TITLE_ID}"
+
+echo "==> Successfully created ${OUTPUT_DIR}/romm3ds.cia ($(du -h "${OUTPUT_DIR}/romm3ds.cia" | cut -f1 | xargs))"

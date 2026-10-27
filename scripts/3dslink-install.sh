@@ -13,10 +13,11 @@ fi
 IP="$1"
 shift
 
-if [ ! -f "${PROJECT_ROOT}/romm3ds.3dsx" ]; then
-    echo "romm3ds.3dsx not found. Building first..."
+BINARY="outputs/romm3ds.3dsx"
+if [ ! -f "${PROJECT_ROOT}/${BINARY}" ]; then
+    echo "${BINARY} not found. Building first..."
     "${SCRIPT_DIR}/make.sh"
 fi
 
-echo "Sending romm3ds.3dsx to 3DS at ${IP} (target: sdmc:/3ds/romm3ds/romm3ds.3dsx)..."
-docker run --rm --net=host -v "${PROJECT_ROOT}:/project" -w /project devkitpro/devkitarm:latest 3dslink -a "${IP}" -0 "sdmc:/3ds/romm3ds/romm3ds.3dsx" romm3ds.3dsx "$@"
+echo "Sending ${BINARY} to 3DS at ${IP} (target: sdmc:/3ds/romm3ds/romm3ds.3dsx)..."
+docker run --rm --net=host -v "${PROJECT_ROOT}:/project" -w /project devkitpro/devkitarm:latest 3dslink -a "${IP}" -0 "sdmc:/3ds/romm3ds/romm3ds.3dsx" "${BINARY}" "$@"

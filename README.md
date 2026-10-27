@@ -41,9 +41,20 @@ Run `make` from the repository root:
 make
 ```
 
-Build outputs:
-- `romm3ds.3dsx` — Executable homebrew binary
-- `romm3ds.smdh` — Application icon and metadata
+Build outputs (placed in the `outputs/` folder):
+- `outputs/romm3ds.3dsx` — Executable homebrew binary
+- `outputs/romm3ds.smdh` — Application icon and metadata
+- `outputs/romm3ds.elf` — ELF executable binary
+- `outputs/romm3ds.cxi` — CTR executable image container
+- `outputs/romm3ds.cia` — Installable CIA package for the 3DS HOME Menu
+
+To build the CIA package (uses configuration and assets in `/cia`):
+
+```bash
+./scripts/build-cia.sh
+# or if bannertool and makerom are installed in PATH:
+make cia
+```
 
 To clean build artifacts:
 
@@ -57,10 +68,17 @@ make clean
 
 Make sure your 3DS is running custom firmware (Luma3DS).
 
-#### Method A: SD Card
+#### Method A: Install CIA to HOME Menu via FBI (Recommended)
+
+1. Copy `outputs/romm3ds.cia` to `sdmc:/cias/` on your SD card (or use FBI network install).
+2. Open **FBI** on your 3DS.
+3. Navigate to **SD** -> **cias** -> `romm3ds.cia` and select **Install and delete CIA**.
+4. Press **HOME** to return to the HOME Menu, unwrap the newly installed **RomM 3DS** gift, and launch it directly!
+
+#### Method B: SD Card (Homebrew Launcher)
 
 1. Insert your 3DS SD card into your computer (or connect via FTPD / microSD Management).
-2. Copy `romm3ds.3dsx` to `sdmc:/3ds/romm3ds/`:
+2. Copy `outputs/romm3ds.3dsx` to `sdmc:/3ds/romm3ds/`:
    ```text
    SD Card
    └── 3ds/
@@ -69,7 +87,7 @@ Make sure your 3DS is running custom firmware (Luma3DS).
    ```
 3. Insert the SD card back into the 3DS and launch **romm3ds** from the **Homebrew Launcher**.
 
-#### Method B: Wireless NetLoader (`3dslink`)
+#### Method C: Wireless NetLoader (`3dslink`)
 
 1. Connect your 3DS and computer to the same Wi-Fi network.
 2. Open the **Homebrew Launcher** on your 3DS and press **(Y)** to launch NetLoader.

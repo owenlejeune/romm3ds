@@ -1,0 +1,44 @@
+BasicInfo:
+  Title : "romm3ds"
+  CompanyCode : "00"
+  ProductCode : "CTR-H-R3DS"
+  ContentType : Application
+  Logo : Nintendo
+
+TitleInfo:
+  UniqueId : 0x0F17E
+  Category : Application
+
+CardInfo:
+  MediaSize : 128MB
+  MediaType : Card1
+
+SystemControlInfo:
+  SaveDataSize : 0KB
+  RemasterVersion : 0
+  StackSize : 0x40000
+  JumpId : 0
+  AppType : Application
+
+AccessControlInfo:
+  IdealProcessor : 0
+  AffinityMask : 1
+  Priority : 16
+  MaxCpu : 0x84
+  MemoryType : Application
+
+  FileSystemAccess:
+   - DirectSdmc
+
+  ServiceAccessControl:
+   - apt:u
+   - gsp::gpu
+   - hid:USER
+   - dsp::DSP
+   - fs:USER
+   - soc:U
+   - cecd:u
+   - ndm:u
+   - ptm:u
+   - cfg:u
+   - am:u
