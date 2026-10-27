@@ -81,3 +81,40 @@ Make sure your 3DS is running custom firmware (Luma3DS).
    ```bash
    3dslink -a <3DS_IP_ADDRESS> -0 "sdmc:/3ds/romm3ds/romm3ds.3dsx" romm3ds.3dsx
    ```
+
+---
+
+## Important Information
+
+### Nintendo DS (NDS) Saves & RomM Setup
+
+When syncing Nintendo DS saves (such as games played on 3DS via TWiLight Menu++ or `nds-bootstrap`), `romm3ds` transfers raw `.sav` files directly to RomM. Keep the following in mind depending on the emulator used:
+
+#### 1. RomM In-Browser Player (EmulatorJS with melonDS)
+
+RomM's in-browser player uses **melonDS** by default for Nintendo DS, which natively reads raw `.sav` files. However, certain titles (such as *Pokémon HeartGold/SoulSilver* and *Diamond/Pearl/Platinum*) perform hardware wireless and firmware checks on save load:
+
+- **Why a BIOS bundle is needed:** RomM passes only a single firmware file to EmulatorJS. If BIOS files are uploaded to RomM individually, melonDS only receives one file and falls back to an internal HLE BIOS for the others. This causes titles like *HeartGold* to crash with *"A communication error has occurred"* right after pressing Start.
+- **How to setup RomM:** Bundle all three Nintendo DS system files together into a single `.zip` file at the root:
+  ```text
+  nds.zip
+  ├── bios7.bin
+  ├── bios9.bin
+  └── firmware.bin
+  ```
+  Place `nds.zip` in your RomM server's BIOS directory:
+  ```text
+  /romm/library/bios/nds/nds.zip
+  ```
+  *(Remove any loose `.bin` files in that folder so RomM only registers the zip).*
+  Trigger a **Scan** in RomM to index `nds.zip`, and in the RomM player setup select **`nds.zip`** under **Firmware** with core set to **`melonds`**.
+
+#### 2. Emulators That Do Not Support Raw `.sav` (e.g. DeSmuME)
+
+Some emulators and libretro cores (such as **DeSmuME**) do not recognize raw `.sav` files natively and require their proprietary `.dsv` (DeSmuME Save) format:
+
+- **Symptom:** If you load a raw `.sav` into DeSmuME without conversion, DeSmuME will fail to detect the save structure and start a **"New Game"** instead of showing "Continue".
+- **Converting `.sav` to `.dsv`:**
+  - **In standalone DeSmuME:** Launch the game, go to **File -> Import Backup Memory...**, select your `.sav` file, and save once in-game to write out a native `.dsv`.
+  - **Using PKHeX:** Open your `.sav` file in [PKHeX](https://github.com/kwsch/PKHeX) and export it via **File -> Export SAV... -> Export .dsv**.
+  - **Using `dsv2sav` / `dsv-tool`:** Use automated conversion scripts to append the 40-byte DeSmuME footer (`|-DESMUME SAVE-|`) to the 512 KB `.sav` data.
