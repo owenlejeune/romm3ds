@@ -18,5 +18,5 @@ if [ ! -f "${PROJECT_ROOT}/romm3ds.3dsx" ]; then
     "${SCRIPT_DIR}/make.sh"
 fi
 
-echo "Sending romm3ds.3dsx to 3DS at ${IP}..."
-docker run --rm --net=host -v "${PROJECT_ROOT}:/project" -w /project devkitpro/devkitarm:latest 3dslink -a "${IP}" romm3ds.3dsx "$@"
+echo "Sending romm3ds.3dsx to 3DS at ${IP} (target: sdmc:/3ds/romm3ds/romm3ds.3dsx)..."
+docker run --rm --net=host -v "${PROJECT_ROOT}:/project" -w /project devkitpro/devkitarm:latest 3dslink -a "${IP}" -0 "sdmc:/3ds/romm3ds/romm3ds.3dsx" romm3ds.3dsx "$@"

@@ -75,5 +75,9 @@ Make sure your 3DS is running custom firmware (Luma3DS).
 2. Open the **Homebrew Launcher** on your 3DS and press **(Y)** to launch NetLoader.
 3. Run the following command from your terminal:
    ```bash
-   3dslink -a <3DS_IP_ADDRESS> romm3ds.3dsx
+   ./scripts/3dslink-install.sh <3DS_IP_ADDRESS>
+   ```
+   Or using 3dslink directly:
+   ```bash
+   3dslink -a <3DS_IP_ADDRESS> -0 "sdmc:/3ds/romm3ds/romm3ds.3dsx" romm3ds.3dsx
    ```
