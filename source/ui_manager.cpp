@@ -138,9 +138,12 @@ void UIManager::runLibraryRefresh() {
     }
 
     m_statusMessage = "Scanning titles & querying RomM...";
+    m_loadingMessage = "Scanning titles & querying RomM...";
+    render();
     render();
 
     m_syncMgr->refresh();
+    m_loadingMessage.clear();
     updateLocalFilteredList();
     updateRemoteFilteredList();
     m_selectedGameIndex = 0;
@@ -330,9 +333,12 @@ void UIManager::syncSelectedGame() {
     }
 
     m_statusMessage = "Syncing " + item.localTitle.name + "...";
+    m_loadingMessage = "Syncing " + item.localTitle.name + "...";
+    render();
     render();
 
     m_syncMgr->syncItem(item);
+    m_loadingMessage.clear();
     m_statusMessage = m_syncMgr->getLastMessage();
     updateLocalFilteredList();
 }
@@ -360,6 +366,9 @@ void UIManager::syncAllGames() {
 
         m_statusMessage = "Syncing (" + std::to_string(i + 1) + "/" +
                           std::to_string(m_syncMgr->getItems().size()) + "): " + item.localTitle.name;
+        m_loadingMessage = "Syncing (" + std::to_string(i + 1) + "/" +
+                           std::to_string(m_syncMgr->getItems().size()) + ")\n" + item.localTitle.name;
+        render();
         render();
 
         if (m_syncMgr->syncItem(item)) {
@@ -367,6 +376,7 @@ void UIManager::syncAllGames() {
         }
     }
 
+    m_loadingMessage.clear();
     m_statusMessage = "Batch sync complete (" + std::to_string(count) + " games synced).";
     updateLocalFilteredList();
 }
@@ -378,9 +388,12 @@ void UIManager::forceUploadSelected() {
     size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
     SyncItem& item = m_syncMgr->getItems()[actualIdx];
     m_statusMessage = "Uploading save for " + item.localTitle.name + "...";
+    m_loadingMessage = "Uploading save for " + item.localTitle.name + "...";
+    render();
     render();
 
     m_syncMgr->forceUpload(item);
+    m_loadingMessage.clear();
     m_statusMessage = m_syncMgr->getLastMessage();
     updateLocalFilteredList();
 }
@@ -392,9 +405,12 @@ void UIManager::forceDownloadSelected() {
     size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
     SyncItem& item = m_syncMgr->getItems()[actualIdx];
     m_statusMessage = "Downloading save for " + item.localTitle.name + "...";
+    m_loadingMessage = "Downloading save for " + item.localTitle.name + "...";
+    render();
     render();
 
     m_syncMgr->forceDownload(item);
+    m_loadingMessage.clear();
     m_statusMessage = m_syncMgr->getLastMessage();
     updateLocalFilteredList();
 }
@@ -448,8 +464,11 @@ void UIManager::selectConsole(size_t index) {
 
     if (m_syncMgr) {
         m_statusMessage = "Loading " + m_selectedConsoleName + " games...";
+        m_loadingMessage = "Loading " + m_selectedConsoleName + " games...";
+        render();
         render();
         m_syncMgr->loadGamesForPlatform(m_selectedConsoleId, m_selectedConsoleSlug);
+        m_loadingMessage.clear();
     }
 
     m_remoteFilterText.clear();
@@ -766,6 +785,36 @@ void UIManager::drawButton(float x, float y, float w, float h, const char* label
     C2D_DrawText(&btnText, C2D_WithColor, textX, textY, 0.5f, scale, scale, CLR_TEXT_WHITE);
 }
 
+void UIManager::drawLoadingOverlay(const std::string& message) {
+    constexpr u32 CLR_OVERLAY_DIM = C2D_Color32(0x05, 0x07, 0x0B, 0xCC);
+    C2D_DrawRectSolid(0.0f, 0.0f, 0.7f, RomM3DS::SCREEN_BOTTOM_WIDTH, RomM3DS::SCREEN_BOTTOM_HEIGHT, CLR_OVERLAY_DIM);
+
+    float boxW = 260.0f;
+    float boxH = 74.0f;
+    float boxX = (RomM3DS::SCREEN_BOTTOM_WIDTH - boxW) / 2.0f;
+    float boxY = (RomM3DS::SCREEN_BOTTOM_HEIGHT - boxH) / 2.0f;
+
+    C2D_DrawRectSolid(boxX, boxY, 0.75f, boxW, boxH, CLR_ACCENT);
+    C2D_DrawRectSolid(boxX + 2.0f, boxY + 2.0f, 0.75f, boxW - 4.0f, boxH - 4.0f, CLR_HEADER);
+
+    C2D_Text headerText;
+    C2D_TextParse(&headerText, m_textBuf, "Please wait...");
+    C2D_TextOptimize(&headerText);
+    C2D_DrawText(&headerText, C2D_WithColor, boxX + 16.0f, boxY + 14.0f, 0.8f, 0.50f, 0.50f, CLR_ACCENT);
+
+    C2D_Text msgText;
+    C2D_TextParse(&msgText, m_textBuf, message.c_str());
+    C2D_TextOptimize(&msgText);
+
+    float msgScale = 0.42f;
+    float msgW = 0.0f, msgH = 0.0f;
+    C2D_TextGetDimensions(&msgText, msgScale, msgScale, &msgW, &msgH);
+    if (msgW > (boxW - 32.0f) && msgW > 0.0f) {
+        msgScale *= ((boxW - 32.0f) / msgW);
+    }
+    C2D_DrawText(&msgText, C2D_WithColor, boxX + 16.0f, boxY + 40.0f, 0.8f, msgScale, msgScale, CLR_TEXT_WHITE);
+}
+
 void UIManager::renderFirstLaunchTop() {
     C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 42.0f, CLR_HEADER);
     C2D_DrawRectSolid(0.0f, 40.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f, CLR_ACCENT);
@@ -1050,6 +1099,9 @@ void UIManager::renderMatchingConsolesTop() {
                             "  (A) Open Selected Console\n"
                             "  (B) Back to Main Menu\n"
                             "  (X) Refresh Consoles & Library";
+        if (!m_loadingMessage.empty()) {
+            guide += "\n\n--> " + m_loadingMessage;
+        }
         C2D_Text guideText;
         C2D_TextParse(&guideText, m_textBuf, guide.c_str());
         C2D_TextOptimize(&guideText);
@@ -1305,6 +1357,10 @@ void UIManager::renderBottomScreen() {
         case UIState::CONFLICT_PROMPT:
             renderConflictBottom();
             break;
+    }
+
+    if (!m_loadingMessage.empty()) {
+        drawLoadingOverlay(m_loadingMessage);
     }
 }
 

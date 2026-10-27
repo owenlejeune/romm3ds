@@ -86,6 +86,7 @@ private:
 
     void drawInputBox(float x, float y, float w, float h, const char* label, const std::string& value, bool selected);
     void drawButton(float x, float y, float w, float h, const char* label, bool selected, u32 accentColor = 0);
+    void drawLoadingOverlay(const std::string& message);
 
     std::string launchKeyboard(const std::string& hint, const std::string& initial, int maxLen = 256);
     void executeSaveAction();
@@ -111,6 +112,7 @@ private:
     std::string m_enteredEndpoint;
     std::string m_enteredApiKey;
     std::string m_statusMessage;
+    std::string m_loadingMessage;
 
     size_t m_selectedGameIndex = 0;
     size_t m_selectedRemoteIndex = 0;
