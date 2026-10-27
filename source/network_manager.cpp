@@ -392,7 +392,9 @@ NetworkResult NetworkManager::fetchSaves(std::vector<RommSave>& outSaves, uint64
 
     std::string endpoint = "/api/saves";
     if (romId != 0) {
-        endpoint += "?rom_id=" + std::to_string(romId);
+        endpoint += "?rom_id=" + std::to_string(romId) + "&limit=1000";
+    } else {
+        endpoint += "?limit=1000";
     }
     std::string url = buildUrl(endpoint);
     std::string responseData;
@@ -429,9 +431,9 @@ NetworkResult NetworkManager::fetchSaves(std::vector<RommSave>& outSaves, uint64
                 for (const auto& item : items) {
                     RommSave s;
                     s.id = item.value("id", (uint64_t)0);
-                    s.romId = item.value("rom_id", (uint64_t)0);
+                    s.romId = item.value("rom_id", item.value("romId", (uint64_t)0));
                     s.fileName = item.value("file_name", item.value("filename", ""));
-                    s.updatedAt = item.value("updated_at", "");
+                    s.updatedAt = item.value("updated_at", item.value("updatedAt", ""));
                     outSaves.push_back(s);
                 }
             } else {

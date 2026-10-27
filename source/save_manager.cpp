@@ -372,14 +372,19 @@ std::string SaveManager::findSaveFileForRom(const std::string& romPath, const st
         candidates.push_back("sdmc:/mGBA/" + baseName + ".sav");
     }
 
+    std::string bestCand;
+    time_t bestTime = 0;
     for (const auto& cand : candidates) {
         struct stat st;
         if (stat(cand.c_str(), &st) == 0 && st.st_size > 0) {
-            return cand;
+            if (bestCand.empty() || st.st_mtime > bestTime) {
+                bestCand = cand;
+                bestTime = st.st_mtime;
+            }
         }
     }
 
-    return "";
+    return bestCand;
 }
 
 namespace {
@@ -903,6 +908,23 @@ bool SaveManager::injectSave(const InstalledTitle& title, const std::string& inD
     FILE* src = fopen(srcFile.c_str(), "rb");
     if (!src) return false;
 
+    fseek(src, 0, SEEK_END);
+    long srcSize = ftell(src);
+    fseek(src, 0, SEEK_SET);
+
+    size_t writeLimit = (srcSize > 0) ? static_cast<size_t>(srcSize) : 0;
+    if (title.console == "GBA") {
+        // Libretro/RetroArch/EmulatorJS appends an RTC footer (e.g. 139,264 or 136,192 bytes total)
+        // to GBA Flash 1M saves. Standalone mGBA strictly requires exact cartridge memory sizes:
+        // 131,072 bytes (128 KB) for Flash 1M (Emerald, Ruby, Sapphire, FireRed, LeafGreen)
+        // 65,536 bytes (64 KB) for Flash 512K
+        if (srcSize > 131072 && srcSize <= 139264 + 4096) {
+            writeLimit = 131072;
+        } else if (srcSize > 65536 && srcSize < 131072) {
+            writeLimit = 65536;
+        }
+    }
+
     FILE* dst = fopen(targetSavePath.c_str(), "wb");
     if (!dst) {
         fclose(src);
@@ -910,17 +932,53 @@ bool SaveManager::injectSave(const InstalledTitle& title, const std::string& inD
     }
 
     std::vector<uint8_t> buffer(64 * 1024);
-    size_t bytesRead = 0;
+    size_t totalWritten = 0;
     bool ok = true;
-    while ((bytesRead = fread(buffer.data(), 1, buffer.size(), src)) > 0) {
+    while (totalWritten < writeLimit) {
+        size_t toRead = std::min(buffer.size(), writeLimit - totalWritten);
+        size_t bytesRead = fread(buffer.data(), 1, toRead, src);
+        if (bytesRead == 0) break;
         if (fwrite(buffer.data(), 1, bytesRead, dst) != bytesRead) {
             ok = false;
             break;
         }
+        totalWritten += bytesRead;
     }
 
     fclose(src);
     fclose(dst);
+
+    // If GBA, also mirror to alternate mGBA / ROM directory save paths if they already exist
+    if (ok && title.console == "GBA") {
+        size_t slashPos = title.romPath.find_last_of("/\\");
+        std::string dir = (slashPos != std::string::npos) ? title.romPath.substr(0, slashPos) : ".";
+        std::string filename = (slashPos != std::string::npos) ? title.romPath.substr(slashPos + 1) : title.romPath;
+        size_t dotPos = filename.find_last_of('.');
+        std::string baseName = (dotPos != std::string::npos) ? filename.substr(0, dotPos) : filename;
+
+        std::vector<std::string> altPaths = {
+            "sdmc:/mGBA/saves/" + baseName + ".sav",
+            dir + "/" + baseName + ".sav",
+            dir + "/saves/" + baseName + ".sav"
+        };
+        for (const auto& alt : altPaths) {
+            if (alt != targetSavePath && access(alt.c_str(), F_OK) == 0) {
+                FILE* srcAlt = fopen(targetSavePath.c_str(), "rb");
+                if (srcAlt) {
+                    FILE* dstAlt = fopen(alt.c_str(), "wb");
+                    if (dstAlt) {
+                        size_t r = 0;
+                        while ((r = fread(buffer.data(), 1, buffer.size(), srcAlt)) > 0) {
+                            fwrite(buffer.data(), 1, r, dstAlt);
+                        }
+                        fclose(dstAlt);
+                    }
+                    fclose(srcAlt);
+                }
+            }
+        }
+    }
+
     return ok;
 }
 

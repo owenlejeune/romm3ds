@@ -961,15 +961,29 @@ void UIManager::renderMainMenuTop() {
         }
         C2D_DrawText(&detailText1, C2D_WithColor, 16.0f, 92.0f, 0.5f, d1Scale, d1Scale, CLR_TEXT_MUTED);
 
+        time_t localTime = item.localTitle.saveTime;
+        time_t remoteTime = item.remoteSaveTime != 0 ? item.remoteSaveTime : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
+        bool remoteIsNewer = (remoteTime > 0 && (localTime == 0 || remoteTime > localTime));
+        bool localIsNewer = (localTime > 0 && (remoteTime == 0 || localTime > remoteTime));
+
         std::string detailLine2 = "Local Save: " + std::string(item.localTitle.hasSave ? "YES" : "NO") +
                                   "    |    Remote Save: " + std::string(item.remoteHasSave ? "YES" : "NO");
         if (item.remoteHasSave && !item.remoteSaveUpdatedAt.empty()) {
             detailLine2 += " (" + item.remoteSaveUpdatedAt.substr(0, 10) + ")";
         }
+        if (item.localTitle.hasSave && item.remoteHasSave) {
+            if (remoteIsNewer) {
+                detailLine2 += "  *REMOTE IS NEWER*";
+            } else if (localIsNewer) {
+                detailLine2 += "  *LOCAL IS NEWER*";
+            } else {
+                detailLine2 += "  *IN SYNC*";
+            }
+        }
         C2D_Text detailText2;
         C2D_TextParse(&detailText2, m_textBuf, detailLine2.c_str());
         C2D_TextOptimize(&detailText2);
-        u32 saveColor = (item.localTitle.hasSave || item.remoteHasSave) ? CLR_TEXT_WHITE : CLR_TEXT_MUTED;
+        u32 saveColor = remoteIsNewer ? CLR_GREEN : (localIsNewer ? CLR_YELLOW : ((item.localTitle.hasSave || item.remoteHasSave) ? CLR_TEXT_WHITE : CLR_TEXT_MUTED));
         C2D_DrawText(&detailText2, C2D_WithColor, 16.0f, 108.0f, 0.5f, 0.42f, 0.42f, saveColor);
 
         std::string controls = "Controls:\n"
@@ -1043,6 +1057,15 @@ void UIManager::renderMainMenuBottom() {
         std::string tag;
         if (item.localTitle.hasSave) {
             tag += " [S]";
+        }
+        if (item.localTitle.hasSave && item.remoteHasSave) {
+            time_t lt = item.localTitle.saveTime;
+            time_t rt = item.remoteSaveTime != 0 ? item.remoteSaveTime : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
+            if (rt > lt && lt > 0) {
+                tag += " [v]";
+            } else if (lt > rt && rt > 0) {
+                tag += " [^]";
+            }
         }
         if (item.isIgnored) {
             tag += " (Hide)";
