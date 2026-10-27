@@ -19,5 +19,5 @@ if [ ! -f "${PROJECT_ROOT}/${BINARY}" ]; then
     "${SCRIPT_DIR}/make.sh"
 fi
 
-echo "Sending ${BINARY} to 3DS at ${IP} (target: sdmc:/3ds/romm3ds/romm3ds.3dsx)..."
+echo "Sending ${BINARY} to 3DS at ${IP} via 3dslink Netloader..."
 docker run --rm --net=host -v "${PROJECT_ROOT}:/project" -w /project devkitpro/devkitarm:latest 3dslink -a "${IP}" -0 "sdmc:/3ds/romm3ds/romm3ds.3dsx" "${BINARY}" "$@"

@@ -8,6 +8,44 @@
 #include "sync_manager.hpp"
 #include "ui_manager.hpp"
 
+#include <cstdio>
+#include <sys/stat.h>
+#include <vector>
+
+namespace {
+
+void consolidateExecutable() {
+  const char *rootPath = "sdmc:/3ds/romm3ds.3dsx";
+  const char *subDir = "sdmc:/3ds/romm3ds";
+  const char *subPath = "sdmc:/3ds/romm3ds/romm3ds.3dsx";
+
+  struct stat stRoot, stSub;
+  bool hasRoot = (stat(rootPath, &stRoot) == 0 && stRoot.st_size > 0);
+  bool hasSub = (stat(subPath, &stSub) == 0 && stSub.st_size > 0);
+
+  if (hasRoot) {
+    RomM3DS::ConfigManager::ensureDirectories(subDir);
+    if (!hasSub || stRoot.st_mtime >= stSub.st_mtime) {
+      FILE *src = fopen(rootPath, "rb");
+      if (src) {
+        FILE *dst = fopen(subPath, "wb");
+        if (dst) {
+          std::vector<char> buf(64 * 1024);
+          size_t bytes = 0;
+          while ((bytes = fread(buf.data(), 1, buf.size(), src)) > 0) {
+            fwrite(buf.data(), 1, bytes, dst);
+          }
+          fclose(dst);
+        }
+        fclose(src);
+      }
+    }
+    remove(rootPath);
+  }
+}
+
+} // namespace
+
 int main(int argc, char *argv[]) {
   gfxInitDefault();
 
@@ -17,6 +55,10 @@ int main(int argc, char *argv[]) {
   bool cfguInitialized = R_SUCCEEDED(cfguInit());
   bool ndmuInitialized = R_SUCCEEDED(ndmuInit());
   bool netInitialized = RomM3DS::NetworkManager::initNetwork();
+
+  if (fsInitialized) {
+    consolidateExecutable();
+  }
 
   C3D_Init(C3D_DEFAULT_CMDBUF_SIZE);
   C2D_Init(C2D_DEFAULT_MAX_OBJECTS);
