@@ -8,6 +8,7 @@
 #include <vector>
 #include <set>
 #include <cstdint>
+#include <ctime>
 
 namespace RomM3DS {
 
@@ -31,6 +32,7 @@ struct SyncItem {
     uint64_t remoteGameId = 0;
     std::string remoteTitle;
     std::string remoteSaveUpdatedAt;
+    time_t remoteSaveTime = 0;
     bool remoteHasSave = false;
     bool isIgnored = false;
 };
@@ -65,6 +67,9 @@ public:
     static std::string getStagingDirectory(uint64_t titleId);
     static std::string getFriendlyPlatformName(const std::string& slug);
     static bool isPlatformCompatible(const std::string& localConsole, const std::string& remotePlatformSlug);
+    static std::string formatTimestamp(time_t t);
+    static std::string formatIsoTimestamp(const std::string& iso);
+    static time_t parseIsoTimestamp(const std::string& iso);
 
 private:
     void autoMatchTitles();

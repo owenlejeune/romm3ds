@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include <ctime>
 
 namespace RomM3DS {
 
@@ -14,6 +15,7 @@ struct InstalledTitle {
     std::string console = "3DS";
     uint8_t mediaType = 0;
     bool hasSave = false;
+    time_t saveTime = 0;
 
     // For file-based ROMs (mGBA, TWiLight Menu++, etc.)
     bool isFileRom = false;
@@ -31,6 +33,7 @@ public:
 
     bool checkSaveExists(uint64_t titleId, uint8_t mediaType = 1);
     bool checkSaveExists(const InstalledTitle& title);
+    time_t getSaveTime(const InstalledTitle& title);
 
     bool backupSave(uint64_t titleId, const std::string& outDirectory, uint8_t mediaType = 1);
     bool backupSave(const InstalledTitle& title, const std::string& outDirectory);

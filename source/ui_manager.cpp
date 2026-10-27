@@ -328,7 +328,15 @@ void UIManager::syncSelectedGame() {
     SyncAction action = m_syncMgr->evaluateItem(item);
     if (action == SyncAction::CONFLICT) {
         m_conflictGameIndex = actualIdx;
-        m_conflictChoiceIndex = 0;
+        time_t localTime = item.localTitle.saveTime;
+        time_t remoteTime = item.remoteSaveTime != 0 ? item.remoteSaveTime : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
+        if (remoteTime > localTime) {
+            m_conflictChoiceIndex = 0;
+        } else if (localTime > remoteTime) {
+            m_conflictChoiceIndex = 1;
+        } else {
+            m_conflictChoiceIndex = 0;
+        }
         m_state = UIState::CONFLICT_PROMPT;
         return;
     }
@@ -360,7 +368,15 @@ void UIManager::syncAllGames() {
         SyncAction act = m_syncMgr->evaluateItem(item);
         if (act == SyncAction::CONFLICT) {
             m_conflictGameIndex = i;
-            m_conflictChoiceIndex = 0;
+            time_t localTime = item.localTitle.saveTime;
+            time_t remoteTime = item.remoteSaveTime != 0 ? item.remoteSaveTime : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
+            if (remoteTime > localTime) {
+                m_conflictChoiceIndex = 0;
+            } else if (localTime > remoteTime) {
+                m_conflictChoiceIndex = 1;
+            } else {
+                m_conflictChoiceIndex = 0;
+            }
             m_state = UIState::CONFLICT_PROMPT;
             return;
         }
@@ -1318,26 +1334,108 @@ void UIManager::renderMatchingGamesBottom() {
 }
 
 void UIManager::renderConflictTop() {
-    C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 42.0f, CLR_HEADER);
-    C2D_DrawRectSolid(0.0f, 40.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f, CLR_ERROR);
+    C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 36.0f, CLR_HEADER);
+    C2D_DrawRectSolid(0.0f, 34.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f, CLR_YELLOW);
 
     C2D_Text headerText;
-    C2D_TextParse(&headerText, m_textBuf, "romm3ds - Save Conflict Detected!");
+    C2D_TextParse(&headerText, m_textBuf, "Save Conflict Resolution");
     C2D_TextOptimize(&headerText);
-    C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 10.0f, 0.5f, 0.75f, 0.75f, CLR_TEXT_WHITE);
+    C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 8.0f, 0.5f, 0.65f, 0.65f, CLR_TEXT_WHITE);
 
-    if (m_syncMgr && m_conflictGameIndex < m_syncMgr->getItems().size()) {
-        const auto& item = m_syncMgr->getItems()[m_conflictGameIndex];
-
-        std::string info = "Conflict in: " + item.localTitle.name +
-                           "\n\nBoth local 3DS and remote RomM saves exist.\n" +
-                           "Remote save date: " + (item.remoteSaveUpdatedAt.empty() ? "N/A" : item.remoteSaveUpdatedAt) +
-                           "\n\nChoose resolution policy on bottom screen.";
-        C2D_Text infoText;
-        C2D_TextParse(&infoText, m_textBuf, info.c_str());
-        C2D_TextOptimize(&infoText);
-        C2D_DrawText(&infoText, C2D_WithColor, 16.0f, 60.0f, 0.5f, 0.50f, 0.50f, CLR_TEXT_WHITE);
+    if (!m_syncMgr || m_conflictGameIndex >= m_syncMgr->getItems().size()) {
+        return;
     }
+
+    const auto& item = m_syncMgr->getItems()[m_conflictGameIndex];
+
+    std::string titleStr = "Game: " + item.localTitle.name;
+    if (titleStr.length() > 36) {
+        titleStr = titleStr.substr(0, 33) + "...";
+    }
+    C2D_Text titleText;
+    C2D_TextParse(&titleText, m_textBuf, titleStr.c_str());
+    C2D_TextOptimize(&titleText);
+    C2D_DrawText(&titleText, C2D_WithColor, 16.0f, 44.0f, 0.5f, 0.52f, 0.52f, CLR_ACCENT);
+
+    std::string localTimeStr = SyncManager::formatTimestamp(item.localTitle.saveTime);
+    std::string remoteTimeStr = SyncManager::formatIsoTimestamp(item.remoteSaveUpdatedAt);
+
+    time_t localTime = item.localTitle.saveTime;
+    time_t remoteTime = item.remoteSaveTime != 0 ? item.remoteSaveTime : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
+
+    bool remoteIsNewer = (remoteTime > 0 && (localTime == 0 || remoteTime > localTime));
+    bool localIsNewer = (localTime > 0 && (remoteTime == 0 || localTime > remoteTime));
+
+    // Card 1: Local (3DS) Save
+    float card1Y = 68.0f;
+    float cardH = 46.0f;
+    u32 card1Border = localIsNewer ? CLR_GREEN : CLR_BORDER_OFF;
+    C2D_DrawRectSolid(12.0f, card1Y, 0.5f, 376.0f, cardH, CLR_CARD);
+    C2D_DrawRectSolid(12.0f, card1Y, 0.5f, 4.0f, cardH, card1Border);
+
+    C2D_Text localLbl;
+    C2D_TextParse(&localLbl, m_textBuf, "Local (3DS) Save:");
+    C2D_TextOptimize(&localLbl);
+    C2D_DrawText(&localLbl, C2D_WithColor, 24.0f, card1Y + 5.0f, 0.5f, 0.44f, 0.44f, CLR_TEXT_MUTED);
+
+    C2D_Text localDateText;
+    C2D_TextParse(&localDateText, m_textBuf, localTimeStr.c_str());
+    C2D_TextOptimize(&localDateText);
+    C2D_DrawText(&localDateText, C2D_WithColor, 24.0f, card1Y + 23.0f, 0.5f, 0.50f, 0.50f, CLR_TEXT_WHITE);
+
+    const char* localTag = localIsNewer ? "[ NEWER ]" : (remoteIsNewer ? "[ OLDER ]" : "[ SAME ]");
+    u32 localTagColor = localIsNewer ? CLR_GREEN : CLR_TEXT_MUTED;
+    C2D_Text localTagText;
+    C2D_TextParse(&localTagText, m_textBuf, localTag);
+    C2D_TextOptimize(&localTagText);
+    C2D_DrawText(&localTagText, C2D_WithColor, 298.0f, card1Y + 13.0f, 0.5f, 0.52f, 0.52f, localTagColor);
+
+    // Card 2: Remote (RomM) Save
+    float card2Y = 122.0f;
+    u32 card2Border = remoteIsNewer ? CLR_GREEN : CLR_BORDER_OFF;
+    C2D_DrawRectSolid(12.0f, card2Y, 0.5f, 376.0f, cardH, CLR_CARD);
+    C2D_DrawRectSolid(12.0f, card2Y, 0.5f, 4.0f, cardH, card2Border);
+
+    C2D_Text remoteLbl;
+    C2D_TextParse(&remoteLbl, m_textBuf, "Remote (RomM) Save:");
+    C2D_TextOptimize(&remoteLbl);
+    C2D_DrawText(&remoteLbl, C2D_WithColor, 24.0f, card2Y + 5.0f, 0.5f, 0.44f, 0.44f, CLR_TEXT_MUTED);
+
+    C2D_Text remoteDateText;
+    C2D_TextParse(&remoteDateText, m_textBuf, remoteTimeStr.c_str());
+    C2D_TextOptimize(&remoteDateText);
+    C2D_DrawText(&remoteDateText, C2D_WithColor, 24.0f, card2Y + 23.0f, 0.5f, 0.50f, 0.50f, CLR_TEXT_WHITE);
+
+    const char* remoteTag = remoteIsNewer ? "[ NEWER ]" : (localIsNewer ? "[ OLDER ]" : "[ SAME ]");
+    u32 remoteTagColor = remoteIsNewer ? CLR_GREEN : CLR_TEXT_MUTED;
+    C2D_Text remoteTagText;
+    C2D_TextParse(&remoteTagText, m_textBuf, remoteTag);
+    C2D_TextOptimize(&remoteTagText);
+    C2D_DrawText(&remoteTagText, C2D_WithColor, 298.0f, card2Y + 13.0f, 0.5f, 0.52f, 0.52f, remoteTagColor);
+
+    // Recommendation
+    std::string summary;
+    u32 summaryColor = CLR_TEXT_WHITE;
+    if (remoteIsNewer) {
+        summary = "-> Recommendation: Overwrite Local (Remote is newer)";
+        summaryColor = CLR_GREEN;
+    } else if (localIsNewer) {
+        summary = "-> Recommendation: Overwrite Remote (Local 3DS is newer)";
+        summaryColor = CLR_GREEN;
+    } else {
+        summary = "Saves have identical timestamps.";
+        summaryColor = CLR_TEXT_MUTED;
+    }
+
+    C2D_Text summaryText;
+    C2D_TextParse(&summaryText, m_textBuf, summary.c_str());
+    C2D_TextOptimize(&summaryText);
+    C2D_DrawText(&summaryText, C2D_WithColor, 16.0f, 178.0f, 0.5f, 0.44f, 0.44f, summaryColor);
+
+    C2D_Text guideText;
+    C2D_TextParse(&guideText, m_textBuf, "Select resolution option on bottom screen.");
+    C2D_TextOptimize(&guideText);
+    C2D_DrawText(&guideText, C2D_WithColor, 16.0f, 202.0f, 0.5f, 0.40f, 0.40f, CLR_TEXT_MUTED);
 }
 
 void UIManager::renderConflictBottom() {
@@ -1348,8 +1446,21 @@ void UIManager::renderConflictBottom() {
     C2D_TextOptimize(&promptText);
     C2D_DrawText(&promptText, C2D_WithColor, 16.0f, 14.0f, 0.5f, 0.55f, 0.55f, CLR_TEXT_WHITE);
 
-    drawButton(16.0f, 44.0f, 288.0f, 32.0f, "[ Overwrite Local (Use Remote Save) ]", m_conflictChoiceIndex == 0);
-    drawButton(16.0f, 84.0f, 288.0f, 32.0f, "[ Overwrite Remote (Use Local Save) ]", m_conflictChoiceIndex == 1);
+    bool remoteIsNewer = false;
+    bool localIsNewer = false;
+    if (m_syncMgr && m_conflictGameIndex < m_syncMgr->getItems().size()) {
+        const auto& item = m_syncMgr->getItems()[m_conflictGameIndex];
+        time_t localTime = item.localTitle.saveTime;
+        time_t remoteTime = item.remoteSaveTime != 0 ? item.remoteSaveTime : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
+        remoteIsNewer = (remoteTime > 0 && (localTime == 0 || remoteTime > localTime));
+        localIsNewer = (localTime > 0 && (remoteTime == 0 || localTime > remoteTime));
+    }
+
+    std::string btnLocal = remoteIsNewer ? "[ Overwrite Local (Remote is Newer) * ]" : "[ Overwrite Local (Use Remote Save) ]";
+    std::string btnRemote = localIsNewer ? "[ Overwrite Remote (Local is Newer) * ]" : "[ Overwrite Remote (Use Local Save) ]";
+
+    drawButton(16.0f, 44.0f, 288.0f, 32.0f, btnLocal.c_str(), m_conflictChoiceIndex == 0);
+    drawButton(16.0f, 84.0f, 288.0f, 32.0f, btnRemote.c_str(), m_conflictChoiceIndex == 1);
     drawButton(16.0f, 124.0f, 288.0f, 32.0f, "[ Skip This Game ]", m_conflictChoiceIndex == 2);
 
     C2D_Text guideText;

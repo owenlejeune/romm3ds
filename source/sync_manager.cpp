@@ -26,6 +26,43 @@ std::string SyncManager::getStagingDirectory(uint64_t titleId) {
     return "sdmc:/3ds/romm3ds/saves/" + SaveManager::formatTitleId(titleId);
 }
 
+std::string SyncManager::formatTimestamp(time_t t) {
+    if (t <= 0) return "Unknown";
+    struct tm* tmInfo = localtime(&t);
+    if (!tmInfo) return "Unknown";
+    char buf[32];
+    strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", tmInfo);
+    return std::string(buf);
+}
+
+std::string SyncManager::formatIsoTimestamp(const std::string& iso) {
+    if (iso.empty()) return "Unknown";
+    int y = 0, m = 0, d = 0, h = 0, min = 0, s = 0;
+    if (sscanf(iso.c_str(), "%d-%d-%d%*c%d:%d:%d", &y, &m, &d, &h, &min, &s) >= 6) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d:%02d", y, m, d, h, min, s);
+        return std::string(buf);
+    }
+    return iso;
+}
+
+time_t SyncManager::parseIsoTimestamp(const std::string& iso) {
+    if (iso.empty()) return 0;
+    int y = 0, m = 0, d = 0, h = 0, min = 0, s = 0;
+    if (sscanf(iso.c_str(), "%d-%d-%d%*c%d:%d:%d", &y, &m, &d, &h, &min, &s) >= 6) {
+        struct tm t = {};
+        t.tm_year = y - 1900;
+        t.tm_mon = m - 1;
+        t.tm_mday = d;
+        t.tm_hour = h;
+        t.tm_min = min;
+        t.tm_sec = s;
+        t.tm_isdst = -1;
+        return mktime(&t);
+    }
+    return 0;
+}
+
 std::string SyncManager::normalizeName(const std::string& str) {
     std::string out;
     for (char c : str) {
@@ -374,8 +411,11 @@ bool SyncManager::refresh() {
                 if (it != remoteSaveMap.end()) {
                     item.remoteHasSave = true;
                     item.remoteSaveUpdatedAt = it->second.updatedAt;
+                    item.remoteSaveTime = parseIsoTimestamp(it->second.updatedAt);
                 } else {
                     item.remoteHasSave = false;
+                    item.remoteSaveUpdatedAt = "";
+                    item.remoteSaveTime = 0;
                 }
             } else {
                 // First attempt match with platform-compatible games
@@ -405,8 +445,11 @@ bool SyncManager::refresh() {
                     if (it != remoteSaveMap.end()) {
                         item.remoteHasSave = true;
                         item.remoteSaveUpdatedAt = it->second.updatedAt;
+                        item.remoteSaveTime = parseIsoTimestamp(it->second.updatedAt);
                     } else {
                         item.remoteHasSave = false;
+                        item.remoteSaveUpdatedAt = "";
+                        item.remoteSaveTime = 0;
                     }
 
                     if (m_configMgr) {
@@ -419,6 +462,10 @@ bool SyncManager::refresh() {
                     }
                 }
             }
+        }
+
+        if (item.localTitle.saveTime == 0 && item.localTitle.hasSave && m_saveMgr) {
+            item.localTitle.saveTime = m_saveMgr->getSaveTime(item.localTitle);
         }
 
         m_items.push_back(item);
@@ -446,11 +493,16 @@ bool SyncManager::manualMatch(size_t itemIndex, const RommGame& remoteGame) {
 
     std::vector<RommSave> existingSaves;
     if (m_netMgr && m_netMgr->fetchSaves(existingSaves, remoteGame.id).success && !existingSaves.empty()) {
+        std::sort(existingSaves.begin(), existingSaves.end(), [](const RommSave& a, const RommSave& b) {
+            return a.updatedAt > b.updatedAt;
+        });
         item.remoteHasSave = true;
         item.remoteSaveUpdatedAt = existingSaves[0].updatedAt;
+        item.remoteSaveTime = parseIsoTimestamp(existingSaves[0].updatedAt);
     } else {
         item.remoteHasSave = false;
         item.remoteSaveUpdatedAt = "";
+        item.remoteSaveTime = 0;
     }
 
     if (m_configMgr) {

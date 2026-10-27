@@ -503,6 +503,10 @@ void scanDirectoryRecursive(
             title.savePath = SaveManager::findSaveFileForRom(fullPath, console);
             if (!title.savePath.empty()) {
                 title.hasSave = true;
+                struct stat st;
+                if (stat(title.savePath.c_str(), &st) == 0) {
+                    title.saveTime = st.st_mtime;
+                }
             } else {
                 title.hasSave = false;
                 std::string baseDir = dirPath;
@@ -606,6 +610,9 @@ std::vector<InstalledTitle> SaveManager::scanInstalledTitles(const std::vector<s
             }
 
             title.hasSave = checkSaveExists(tid, mediaType);
+            if (title.hasSave) {
+                title.saveTime = getSaveTime(title);
+            }
             outTitles.push_back(title);
         }
     }
@@ -655,6 +662,72 @@ bool SaveManager::checkSaveExists(const InstalledTitle& title) {
 
     std::string found = findSaveFileForRom(title.romPath, title.console);
     return !found.empty();
+}
+
+time_t SaveManager::getSaveTime(const InstalledTitle& title) {
+    if (title.isFileRom) {
+        std::string savePath = title.savePath;
+        if (savePath.empty()) {
+            savePath = findSaveFileForRom(title.romPath, title.console);
+        }
+        if (!savePath.empty()) {
+            struct stat st;
+            if (stat(savePath.c_str(), &st) == 0 && st.st_size > 0) {
+                return st.st_mtime;
+            }
+        }
+        return 0;
+    }
+
+    std::string stagedDir = "sdmc:/3ds/romm3ds/saves/" + formatTitleId(title.titleId);
+    DIR* d = opendir(stagedDir.c_str());
+    if (d) {
+        struct dirent* ent = nullptr;
+        time_t newest = 0;
+        while ((ent = readdir(d)) != nullptr) {
+            if (std::strcmp(ent->d_name, ".") != 0 && std::strcmp(ent->d_name, "..") != 0 && ent->d_name[0] != '.') {
+                std::string full = stagedDir + "/" + ent->d_name;
+                struct stat st;
+                if (stat(full.c_str(), &st) == 0 && st.st_mtime > newest) {
+                    newest = st.st_mtime;
+                }
+            }
+        }
+        closedir(d);
+        if (newest > 0) {
+            return newest;
+        }
+    }
+
+    char lowHex[16];
+    snprintf(lowHex, sizeof(lowHex), "%08lx", (unsigned long)(title.titleId & 0xFFFFFFFF));
+    std::string targetSub = std::string("title/00040000/") + lowHex + "/data/00000001.sav";
+
+    DIR* root = opendir("sdmc:/Nintendo 3DS");
+    if (root) {
+        struct dirent* e0 = nullptr;
+        while ((e0 = readdir(root)) != nullptr) {
+            if (e0->d_name[0] == '.') continue;
+            std::string p0 = std::string("sdmc:/Nintendo 3DS/") + e0->d_name;
+            DIR* d0 = opendir(p0.c_str());
+            if (!d0) continue;
+            struct dirent* e1 = nullptr;
+            while ((e1 = readdir(d0)) != nullptr) {
+                if (e1->d_name[0] == '.') continue;
+                std::string candidate = p0 + "/" + e1->d_name + "/" + targetSub;
+                struct stat st;
+                if (stat(candidate.c_str(), &st) == 0) {
+                    closedir(d0);
+                    closedir(root);
+                    return st.st_mtime;
+                }
+            }
+            closedir(d0);
+        }
+        closedir(root);
+    }
+
+    return 0;
 }
 
 bool SaveManager::backupSave(uint64_t titleId, const std::string& outDirectory, uint8_t mediaType) {
