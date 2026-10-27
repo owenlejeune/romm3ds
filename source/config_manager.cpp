@@ -41,6 +41,10 @@ bool ConfigManager::loadConfig(const std::string& path) {
     if (j.contains("ignored_title_ids") && j["ignored_title_ids"].is_array()) {
         m_config.ignoredTitleIds = j["ignored_title_ids"].get<std::vector<std::string>>();
     }
+    m_config.romDirectories.clear();
+    if (j.contains("rom_directories") && j["rom_directories"].is_array()) {
+        m_config.romDirectories = j["rom_directories"].get<std::vector<std::string>>();
+    }
     return true;
 }
 
@@ -56,7 +60,8 @@ bool ConfigManager::saveConfig(const std::string& path) {
     json j = {
         {"server_endpoint", m_config.serverEndpoint},
         {"api_key", m_config.apiKey},
-        {"ignored_title_ids", m_config.ignoredTitleIds}
+        {"ignored_title_ids", m_config.ignoredTitleIds},
+        {"rom_directories", m_config.romDirectories}
     };
 
     file << j.dump(4);

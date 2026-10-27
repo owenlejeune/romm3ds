@@ -176,7 +176,8 @@ void UIManager::updateLocalFilteredList() {
             if (!containsIgnoreCase(item.localTitle.name, m_localFilterText) &&
                 !containsIgnoreCase(item.localTitle.titleIdHex, m_localFilterText) &&
                 !containsIgnoreCase(item.localTitle.productCode, m_localFilterText) &&
-                !containsIgnoreCase(item.localTitle.console, m_localFilterText)) {
+                !containsIgnoreCase(item.localTitle.console, m_localFilterText) &&
+                (!item.localTitle.isFileRom || !containsIgnoreCase(item.localTitle.romPath, m_localFilterText))) {
                 continue;
             }
         }
@@ -900,8 +901,14 @@ void UIManager::renderMainMenuTop() {
         }
         C2D_DrawText(&matchText, C2D_WithColor, 16.0f, 70.0f, 0.5f, matchScale, matchScale, matchColor);
 
+        std::string romOrTid = item.localTitle.isFileRom
+                                   ? ("ROM: " + (item.localTitle.romPath.find_last_of("/\\") != std::string::npos
+                                                     ? item.localTitle.romPath.substr(item.localTitle.romPath.find_last_of("/\\") + 1)
+                                                     : item.localTitle.romPath))
+                                   : ("Title ID: " + item.localTitle.titleIdHex);
+
         std::string detailLine1 = "Console: " + item.localTitle.console +
-                                  "  |  Title ID: " + item.localTitle.titleIdHex +
+                                  "  |  " + romOrTid +
                                   (!item.localTitle.productCode.empty() ? (" (" + item.localTitle.productCode + ")") : "");
         C2D_Text detailText1;
         C2D_TextParse(&detailText1, m_textBuf, detailLine1.c_str());

@@ -14,6 +14,11 @@ struct InstalledTitle {
     std::string console = "3DS";
     uint8_t mediaType = 0;
     bool hasSave = false;
+
+    // For file-based ROMs (mGBA, TWiLight Menu++, etc.)
+    bool isFileRom = false;
+    std::string romPath;
+    std::string savePath;
 };
 
 class SaveManager {
@@ -21,14 +26,23 @@ public:
     SaveManager();
     ~SaveManager();
 
-    std::vector<InstalledTitle> scanInstalledTitles();
+    std::vector<InstalledTitle> scanInstalledTitles(const std::vector<std::string>& customRomDirs = {});
+    std::vector<InstalledTitle> scanRomFiles(const std::vector<std::string>& customRomDirs = {});
+
     bool checkSaveExists(uint64_t titleId, uint8_t mediaType = 1);
+    bool checkSaveExists(const InstalledTitle& title);
+
     bool backupSave(uint64_t titleId, const std::string& outDirectory, uint8_t mediaType = 1);
+    bool backupSave(const InstalledTitle& title, const std::string& outDirectory);
+
     bool injectSave(uint64_t titleId, const std::string& inDirectory, uint8_t mediaType = 1);
+    bool injectSave(const InstalledTitle& title, const std::string& inDirectory);
 
     static std::string formatTitleId(uint64_t titleId);
     static uint64_t parseTitleId(const std::string& hexStr);
     static std::string determineConsole(const std::string& productCode, uint64_t titleId);
+    static std::string findSaveFileForRom(const std::string& romPath, const std::string& console);
+    static uint64_t hashRomPath(const std::string& path);
 
 private:
 #if defined(__3DS__) || defined(_3DS)

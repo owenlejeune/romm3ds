@@ -6,6 +6,10 @@
 #include <cstdlib>
 #include <sstream>
 #include <iomanip>
+#include <algorithm>
+#include <cctype>
+#include <set>
+#include <unistd.h>
 #include <dirent.h>
 #include <sys/stat.h>
 
@@ -332,7 +336,229 @@ bool SaveManager::copyFsDirToArchive(uint64_t archiveHandle, const std::string& 
 
 #endif
 
-std::vector<InstalledTitle> SaveManager::scanInstalledTitles() {
+uint64_t SaveManager::hashRomPath(const std::string& path) {
+    uint64_t hash = 14695981039346656037ULL;
+    for (char c : path) {
+        hash ^= static_cast<uint8_t>(std::tolower(static_cast<unsigned char>(c)));
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+std::string SaveManager::findSaveFileForRom(const std::string& romPath, const std::string& console) {
+    size_t slashPos = romPath.find_last_of("/\\");
+    std::string dir = (slashPos != std::string::npos) ? romPath.substr(0, slashPos) : ".";
+    std::string filename = (slashPos != std::string::npos) ? romPath.substr(slashPos + 1) : romPath;
+
+    size_t dotPos = filename.find_last_of('.');
+    std::string baseName = (dotPos != std::string::npos) ? filename.substr(0, dotPos) : filename;
+
+    std::vector<std::string> candidates = {
+        dir + "/saves/" + baseName + ".sav",
+        dir + "/" + baseName + ".sav",
+        dir + "/saves/" + baseName + ".SAV",
+        dir + "/" + baseName + ".SAV",
+        dir + "/saves/" + baseName + ".dsv",
+        dir + "/" + baseName + ".dsv",
+    };
+
+    if (console == "GBA") {
+        candidates.push_back("sdmc:/mGBA/saves/" + baseName + ".sav");
+        candidates.push_back("sdmc:/mGBA/saves/" + baseName + ".SAV");
+        candidates.push_back("sdmc:/mGBA/" + baseName + ".sav");
+    }
+
+    for (const auto& cand : candidates) {
+        struct stat st;
+        if (stat(cand.c_str(), &st) == 0 && st.st_size > 0) {
+            return cand;
+        }
+    }
+
+    return "";
+}
+
+namespace {
+
+void scanDirectoryRecursive(
+    const std::string& dirPath,
+    int depth,
+    int maxDepth,
+    std::vector<InstalledTitle>& outTitles,
+    std::set<std::string>& seenRomPaths)
+{
+    if (depth > maxDepth) return;
+
+    DIR* dir = opendir(dirPath.c_str());
+    if (!dir) return;
+
+    struct dirent* entry = nullptr;
+    std::vector<std::string> subdirs;
+
+    while ((entry = readdir(dir)) != nullptr) {
+        const char* name = entry->d_name;
+        if (!name || name[0] == '\0') continue;
+        if (std::strcmp(name, ".") == 0 || std::strcmp(name, "..") == 0) continue;
+        if (name[0] == '.') continue;
+
+        std::string fullPath = dirPath;
+        if (fullPath.back() != '/') fullPath += '/';
+        fullPath += name;
+
+        struct stat st;
+        if (stat(fullPath.c_str(), &st) != 0) {
+            continue;
+        }
+
+        if (S_ISDIR(st.st_mode)) {
+            std::string lowerName = name;
+            for (char& c : lowerName) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (lowerName == "saves" || lowerName == "save" || lowerName == "cheats" ||
+                lowerName == "bios" || lowerName == "screenshots" || lowerName == "borders" ||
+                lowerName == "patch" || lowerName == "temp") {
+                continue;
+            }
+            subdirs.push_back(fullPath);
+        } else if (S_ISREG(st.st_mode) && st.st_size > 0) {
+            std::string filename = name;
+            size_t dotPos = filename.find_last_of('.');
+            if (dotPos == std::string::npos) continue;
+
+            std::string ext = filename.substr(dotPos);
+            for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+            std::string console;
+            if (ext == ".gba" || ext == ".agb") {
+                console = "GBA";
+            } else if (ext == ".nds" || ext == ".dsi") {
+                console = "DS";
+            } else if (ext == ".gb") {
+                console = "GB";
+            } else if (ext == ".gbc") {
+                console = "GBC";
+            } else if (ext == ".nes") {
+                console = "NES";
+            } else if (ext == ".sfc" || ext == ".snes") {
+                console = "SNES";
+            }
+
+            if (console.empty()) continue;
+
+            if (seenRomPaths.count(fullPath) > 0) continue;
+            seenRomPaths.insert(fullPath);
+
+            InstalledTitle title;
+            title.isFileRom = true;
+            title.romPath = fullPath;
+            title.console = console;
+            title.mediaType = 1; // SD
+            title.name = filename.substr(0, dotPos);
+
+            uint64_t hash = SaveManager::hashRomPath(fullPath);
+            title.titleId = hash;
+            title.titleIdHex = SaveManager::formatTitleId(hash);
+
+            FILE* f = fopen(fullPath.c_str(), "rb");
+            if (f) {
+                if (console == "GBA") {
+                    if (fseek(f, 0xAC, SEEK_SET) == 0) {
+                        char code[5] = {0};
+                        if (fread(code, 1, 4, f) == 4) {
+                            bool valid = true;
+                            for (int c = 0; c < 4; ++c) {
+                                if (!std::isalnum(static_cast<unsigned char>(code[c]))) {
+                                    valid = false;
+                                    break;
+                                }
+                            }
+                            if (valid) {
+                                title.productCode = std::string("AGB-") + code;
+                            }
+                        }
+                    }
+                } else if (console == "DS") {
+                    if (fseek(f, 0x0C, SEEK_SET) == 0) {
+                        char code[5] = {0};
+                        if (fread(code, 1, 4, f) == 4) {
+                            bool valid = true;
+                            for (int c = 0; c < 4; ++c) {
+                                if (!std::isalnum(static_cast<unsigned char>(code[c]))) {
+                                    valid = false;
+                                    break;
+                                }
+                            }
+                            if (valid) {
+                                title.productCode = std::string("NTR-") + code;
+                            }
+                        }
+                    }
+                }
+                fclose(f);
+            }
+
+            title.savePath = SaveManager::findSaveFileForRom(fullPath, console);
+            if (!title.savePath.empty()) {
+                title.hasSave = true;
+            } else {
+                title.hasSave = false;
+                std::string baseDir = dirPath;
+                if (console == "DS") {
+                    title.savePath = baseDir + "/saves/" + title.name + ".sav";
+                } else {
+                    struct stat sdir;
+                    if (stat((baseDir + "/saves").c_str(), &sdir) == 0 && S_ISDIR(sdir.st_mode)) {
+                        title.savePath = baseDir + "/saves/" + title.name + ".sav";
+                    } else {
+                        title.savePath = baseDir + "/" + title.name + ".sav";
+                    }
+                }
+            }
+
+            outTitles.push_back(title);
+        }
+    }
+
+    closedir(dir);
+
+    for (const auto& sdir : subdirs) {
+        scanDirectoryRecursive(sdir, depth + 1, maxDepth, outTitles, seenRomPaths);
+    }
+}
+
+} // namespace
+
+std::vector<InstalledTitle> SaveManager::scanRomFiles(const std::vector<std::string>& customRomDirs) {
+    std::vector<InstalledTitle> titles;
+    std::set<std::string> seenRomPaths;
+
+    std::vector<std::string> dirsToScan;
+    for (const auto& d : customRomDirs) {
+        if (!d.empty() && std::find(dirsToScan.begin(), dirsToScan.end(), d) == dirsToScan.end()) {
+            dirsToScan.push_back(d);
+        }
+    }
+
+    const std::vector<std::string> defaults = {
+        "sdmc:/roms",
+        "sdmc:/mGBA",
+        "sdmc:/gba",
+        "sdmc:/nds"
+    };
+
+    for (const auto& def : defaults) {
+        if (std::find(dirsToScan.begin(), dirsToScan.end(), def) == dirsToScan.end()) {
+            dirsToScan.push_back(def);
+        }
+    }
+
+    for (const auto& dirPath : dirsToScan) {
+        scanDirectoryRecursive(dirPath, 0, 4, titles, seenRomPaths);
+    }
+
+    return titles;
+}
+
+std::vector<InstalledTitle> SaveManager::scanInstalledTitles(const std::vector<std::string>& customRomDirs) {
     std::vector<InstalledTitle> outTitles;
 
 #if defined(__3DS__) || defined(_3DS)
@@ -381,6 +607,10 @@ std::vector<InstalledTitle> SaveManager::scanInstalledTitles() {
     }
 #endif
 
+    // Scan ROM files on SD card for mGBA, TWiLight Menu++, and standalone emulators
+    std::vector<InstalledTitle> romTitles = scanRomFiles(customRomDirs);
+    outTitles.insert(outTitles.end(), romTitles.begin(), romTitles.end());
+
     return outTitles;
 }
 
@@ -407,6 +637,22 @@ bool SaveManager::checkSaveExists(uint64_t titleId, uint8_t mediaType) {
 #endif
 }
 
+bool SaveManager::checkSaveExists(const InstalledTitle& title) {
+    if (!title.isFileRom) {
+        return checkSaveExists(title.titleId, title.mediaType);
+    }
+
+    if (!title.savePath.empty()) {
+        struct stat st;
+        if (stat(title.savePath.c_str(), &st) == 0 && st.st_size > 0) {
+            return true;
+        }
+    }
+
+    std::string found = findSaveFileForRom(title.romPath, title.console);
+    return !found.empty();
+}
+
 bool SaveManager::backupSave(uint64_t titleId, const std::string& outDirectory, uint8_t mediaType) {
 #if defined(__3DS__) || defined(_3DS)
     u32 pathData[3] = {
@@ -431,6 +677,50 @@ bool SaveManager::backupSave(uint64_t titleId, const std::string& outDirectory, 
     (void)mediaType;
     return false;
 #endif
+}
+
+bool SaveManager::backupSave(const InstalledTitle& title, const std::string& outDirectory) {
+    if (!title.isFileRom) {
+        return backupSave(title.titleId, outDirectory, title.mediaType);
+    }
+
+    std::string saveFile = title.savePath;
+    if (saveFile.empty() || access(saveFile.c_str(), F_OK) != 0) {
+        saveFile = findSaveFileForRom(title.romPath, title.console);
+    }
+
+    if (saveFile.empty()) {
+        return false;
+    }
+
+    size_t slashPos = saveFile.find_last_of("/\\");
+    std::string fileName = (slashPos != std::string::npos) ? saveFile.substr(slashPos + 1) : saveFile;
+    std::string destPath = outDirectory + "/" + fileName;
+
+    ConfigManager::ensureDirectories(destPath);
+
+    FILE* src = fopen(saveFile.c_str(), "rb");
+    if (!src) return false;
+
+    FILE* dst = fopen(destPath.c_str(), "wb");
+    if (!dst) {
+        fclose(src);
+        return false;
+    }
+
+    std::vector<uint8_t> buffer(64 * 1024);
+    size_t bytesRead = 0;
+    bool ok = true;
+    while ((bytesRead = fread(buffer.data(), 1, buffer.size(), src)) > 0) {
+        if (fwrite(buffer.data(), 1, bytesRead, dst) != bytesRead) {
+            ok = false;
+            break;
+        }
+    }
+
+    fclose(src);
+    fclose(dst);
+    return ok;
 }
 
 bool SaveManager::injectSave(uint64_t titleId, const std::string& inDirectory, uint8_t mediaType) {
@@ -461,6 +751,73 @@ bool SaveManager::injectSave(uint64_t titleId, const std::string& inDirectory, u
     (void)mediaType;
     return false;
 #endif
+}
+
+bool SaveManager::injectSave(const InstalledTitle& title, const std::string& inDirectory) {
+    if (!title.isFileRom) {
+        return injectSave(title.titleId, inDirectory, title.mediaType);
+    }
+
+    std::string srcFile;
+    DIR* d = opendir(inDirectory.c_str());
+    if (d) {
+        struct dirent* ent = nullptr;
+        while ((ent = readdir(d)) != nullptr) {
+            if (std::strcmp(ent->d_name, ".") != 0 && std::strcmp(ent->d_name, "..") != 0 && ent->d_name[0] != '.') {
+                std::string en = ent->d_name;
+                srcFile = inDirectory + "/" + en;
+                if (en.length() >= 4 && (en.rfind(".sav") == en.length() - 4 ||
+                                         en.rfind(".SAV") == en.length() - 4 ||
+                                         en.rfind(".dsv") == en.length() - 4)) {
+                    break;
+                }
+            }
+        }
+        closedir(d);
+    }
+
+    if (srcFile.empty()) {
+        return false;
+    }
+
+    std::string targetSavePath = title.savePath;
+    if (targetSavePath.empty()) {
+        size_t slashPos = title.romPath.find_last_of("/\\");
+        std::string dir = (slashPos != std::string::npos) ? title.romPath.substr(0, slashPos) : ".";
+        std::string filename = (slashPos != std::string::npos) ? title.romPath.substr(slashPos + 1) : title.romPath;
+        size_t dotPos = filename.find_last_of('.');
+        std::string baseName = (dotPos != std::string::npos) ? filename.substr(0, dotPos) : filename;
+        if (title.console == "DS") {
+            targetSavePath = dir + "/saves/" + baseName + ".sav";
+        } else {
+            targetSavePath = dir + "/" + baseName + ".sav";
+        }
+    }
+
+    ConfigManager::ensureDirectories(targetSavePath);
+
+    FILE* src = fopen(srcFile.c_str(), "rb");
+    if (!src) return false;
+
+    FILE* dst = fopen(targetSavePath.c_str(), "wb");
+    if (!dst) {
+        fclose(src);
+        return false;
+    }
+
+    std::vector<uint8_t> buffer(64 * 1024);
+    size_t bytesRead = 0;
+    bool ok = true;
+    while ((bytesRead = fread(buffer.data(), 1, buffer.size(), src)) > 0) {
+        if (fwrite(buffer.data(), 1, bytesRead, dst) != bytesRead) {
+            ok = false;
+            break;
+        }
+    }
+
+    fclose(src);
+    fclose(dst);
+    return ok;
 }
 
 } // namespace RomM3DS

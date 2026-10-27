@@ -10,6 +10,7 @@ struct AppConfig {
     std::string serverEndpoint;
     std::string apiKey;
     std::vector<std::string> ignoredTitleIds;
+    std::vector<std::string> romDirectories;
 
     bool isValid() const {
         return !serverEndpoint.empty() && !apiKey.empty();
@@ -35,6 +36,9 @@ public:
     void setConfig(const AppConfig& config) { m_config = config; }
     void setEndpoint(const std::string& endpoint) { m_config.serverEndpoint = endpoint; }
     void setApiKey(const std::string& apiKey) { m_config.apiKey = apiKey; }
+
+    const std::vector<std::string>& getRomDirectories() const { return m_config.romDirectories; }
+    void setRomDirectories(const std::vector<std::string>& dirs) { m_config.romDirectories = dirs; }
 
     bool isTitleIgnored(const std::string& titleIdHex) const;
     void setIgnoreTitle(const std::string& titleIdHex, bool ignore);

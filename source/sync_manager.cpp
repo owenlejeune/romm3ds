@@ -71,7 +71,7 @@ bool SyncManager::isPlatformCompatible(const std::string& localConsole, const st
     for (char& c : rp) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 
     if (lc == "3ds" && rp == "3ds") return true;
-    if (lc == "ds" && (rp == "nds" || rp == "ds")) return true;
+    if ((lc == "ds" || lc == "nds") && (rp == "nds" || rp == "ds")) return true;
     if (lc == "gba" && rp == "gba") return true;
     if (lc == "gbc" && rp == "gbc") return true;
     if (lc == "gb" && (rp == "gb" || rp == "dmg")) return true;
@@ -187,7 +187,11 @@ bool SyncManager::refresh() {
 
     std::vector<InstalledTitle> localTitles;
     if (m_saveMgr) {
-        localTitles = m_saveMgr->scanInstalledTitles();
+        std::vector<std::string> romDirs;
+        if (m_configMgr) {
+            romDirs = m_configMgr->getRomDirectories();
+        }
+        localTitles = m_saveMgr->scanInstalledTitles(romDirs);
     }
 
     for (const auto& local : localTitles) {
@@ -333,7 +337,7 @@ bool SyncManager::forceUpload(SyncItem& item) {
     std::string stagingDir = getStagingDirectory(item.localTitle.titleId);
     ConfigManager::ensureDirectories(stagingDir + "/");
 
-    if (!m_saveMgr->backupSave(item.localTitle.titleId, stagingDir, item.localTitle.mediaType)) {
+    if (!m_saveMgr->backupSave(item.localTitle, stagingDir)) {
         m_lastMessage = "Failed to backup local save from 3DS FS.";
         return false;
     }
@@ -424,7 +428,16 @@ bool SyncManager::forceDownload(SyncItem& item) {
     }
 
     std::string localFileName = "main";
-    if (item.localTitle.console != "3DS") {
+    if (item.localTitle.isFileRom) {
+        size_t slashPos = item.localTitle.romPath.find_last_of("/\\");
+        std::string filename = (slashPos != std::string::npos) ? item.localTitle.romPath.substr(slashPos + 1) : item.localTitle.romPath;
+        size_t dotPos = filename.find_last_of('.');
+        std::string base = (dotPos != std::string::npos) ? filename.substr(0, dotPos) : filename;
+        localFileName = base + ".sav";
+        if (!saves[0].fileName.empty()) {
+            localFileName = saves[0].fileName;
+        }
+    } else if (item.localTitle.console != "3DS") {
         DIR* d = opendir(stagingDir.c_str());
         if (d) {
             struct dirent* ent = nullptr;
@@ -448,7 +461,7 @@ bool SyncManager::forceDownload(SyncItem& item) {
         return false;
     }
 
-    if (!m_saveMgr->injectSave(item.localTitle.titleId, stagingDir, item.localTitle.mediaType)) {
+    if (!m_saveMgr->injectSave(item.localTitle, stagingDir)) {
         m_lastMessage = "Save downloaded but injection into 3DS save archive failed.";
         return false;
     }
