@@ -464,12 +464,14 @@ void UIManager::selectConsole(size_t index) {
     m_selectedConsoleName = m_availableConsoles[index].name;
 
     if (m_syncMgr) {
-        m_statusMessage = "Loading " + m_selectedConsoleName + " games...";
-        m_loadingMessage = "Loading " + m_selectedConsoleName + " games...";
-        render();
-        render();
-        m_syncMgr->loadGamesForPlatform(m_selectedConsoleId, m_selectedConsoleSlug);
-        m_loadingMessage.clear();
+        if (!m_syncMgr->isPlatformLoaded(m_selectedConsoleId, m_selectedConsoleSlug)) {
+            m_statusMessage = "Loading " + m_selectedConsoleName + " games...";
+            m_loadingMessage = "Loading " + m_selectedConsoleName + " games...";
+            render();
+            render();
+            m_syncMgr->loadGamesForPlatform(m_selectedConsoleId, m_selectedConsoleSlug);
+            m_loadingMessage.clear();
+        }
     }
 
     m_remoteFilterText.clear();
@@ -681,6 +683,16 @@ void UIManager::handleInput(u32 kDown, const touchPosition& touch) {
             } else if (kDown & KEY_Y) {
                 if (!m_remoteFilterText.empty()) {
                     m_remoteFilterText.clear();
+                    updateRemoteFilteredList();
+                }
+            } else if (kDown & KEY_L) {
+                if (m_syncMgr) {
+                    m_statusMessage = "Refreshing " + m_selectedConsoleName + " games...";
+                    m_loadingMessage = "Refreshing " + m_selectedConsoleName + " games...";
+                    render();
+                    render();
+                    m_syncMgr->loadGamesForPlatform(m_selectedConsoleId, m_selectedConsoleSlug, true);
+                    m_loadingMessage.clear();
                     updateRemoteFilteredList();
                 }
             }
@@ -1189,7 +1201,8 @@ void UIManager::renderMatchingGamesTop() {
                             "Console: " + m_selectedConsoleName + " (" + m_selectedConsoleSlug + ")\n\n"
                             "Controls:\n"
                             "  (A) Pair Selected Game     (B) Back to Consoles\n"
-                            "  (X) Search Filter Games    (Y) Clear Filter";
+                            "  (X) Search Filter Games    (Y) Clear Filter\n"
+                            "  (L) Refresh from Server";
         if (!m_remoteFilterText.empty()) {
             guide += "\n\nActive Filter: \"" + m_remoteFilterText + "\"";
         }

@@ -6,6 +6,7 @@
 
 #include <string>
 #include <vector>
+#include <set>
 #include <cstdint>
 
 namespace RomM3DS {
@@ -45,7 +46,12 @@ public:
     const std::vector<RommGame>& getRemoteLibrary() const { return m_remoteGames; }
     const std::vector<RommPlatform>& getPlatforms() const { return m_platforms; }
 
-    bool loadGamesForPlatform(uint64_t platformId, const std::string& platformSlug);
+    bool isPlatformLoaded(uint64_t platformId, const std::string& platformSlug) const;
+    bool loadGamesForPlatform(uint64_t platformId, const std::string& platformSlug, bool forceRefresh = false);
+
+    bool saveLibraryCache(const std::string& path = "");
+    bool loadLibraryCache(const std::string& path = "");
+    void clearLibraryCache();
 
     bool manualMatch(size_t itemIndex, const RommGame& remoteGame);
     SyncAction evaluateItem(const SyncItem& item);
@@ -73,6 +79,7 @@ private:
     std::vector<SyncItem> m_items;
     std::vector<RommGame> m_remoteGames;
     std::vector<RommPlatform> m_platforms;
+    std::set<std::string> m_loadedPlatforms;
     std::string m_lastMessage;
 };
 
