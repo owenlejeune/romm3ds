@@ -356,10 +356,14 @@ std::string SaveManager::findSaveFileForRom(const std::string& romPath, const st
     std::vector<std::string> candidates = {
         dir + "/saves/" + baseName + ".sav",
         dir + "/" + baseName + ".sav",
-        dir + "/saves/" + baseName + ".SAV",
-        dir + "/" + baseName + ".SAV",
+        dir + "/saves/" + baseName + ".srm",
+        dir + "/" + baseName + ".srm",
         dir + "/saves/" + baseName + ".dsv",
         dir + "/" + baseName + ".dsv",
+        dir + "/saves/" + baseName + ".SAV",
+        dir + "/" + baseName + ".SAV",
+        dir + "/saves/" + baseName + ".SRM",
+        dir + "/" + baseName + ".SRM",
     };
 
     if (console == "GBA") {
@@ -768,7 +772,9 @@ bool SaveManager::injectSave(const InstalledTitle& title, const std::string& inD
                 srcFile = inDirectory + "/" + en;
                 if (en.length() >= 4 && (en.rfind(".sav") == en.length() - 4 ||
                                          en.rfind(".SAV") == en.length() - 4 ||
-                                         en.rfind(".dsv") == en.length() - 4)) {
+                                         en.rfind(".dsv") == en.length() - 4 ||
+                                         en.rfind(".srm") == en.length() - 4 ||
+                                         en.rfind(".SRM") == en.length() - 4)) {
                     break;
                 }
             }

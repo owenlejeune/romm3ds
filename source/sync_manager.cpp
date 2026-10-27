@@ -342,7 +342,9 @@ bool SyncManager::refresh() {
         std::vector<RommSave> allSaves;
         if (m_netMgr->fetchSaves(allSaves).success) {
             for (const auto& s : allSaves) {
-                remoteSaveMap[s.romId] = s;
+                if (remoteSaveMap.find(s.romId) == remoteSaveMap.end() || s.updatedAt > remoteSaveMap[s.romId].updatedAt) {
+                    remoteSaveMap[s.romId] = s;
+                }
             }
         }
     }
@@ -526,8 +528,13 @@ bool SyncManager::forceUpload(SyncItem& item) {
     // 1. If RomM already has a save for this ROM, match that exact filename
     std::vector<RommSave> existingSaves;
     m_netMgr->fetchSaves(existingSaves, item.remoteGameId);
-    if (!existingSaves.empty() && !existingSaves[0].fileName.empty()) {
-        remoteFileName = existingSaves[0].fileName;
+    if (!existingSaves.empty()) {
+        std::sort(existingSaves.begin(), existingSaves.end(), [](const RommSave& a, const RommSave& b) {
+            return a.updatedAt > b.updatedAt;
+        });
+        if (!existingSaves[0].fileName.empty()) {
+            remoteFileName = existingSaves[0].fileName;
+        }
     } else {
         // 2. Otherwise determine appropriate filename
         size_t slashPos = targetFile.find_last_of("/\\");
@@ -588,6 +595,11 @@ bool SyncManager::forceDownload(SyncItem& item) {
         m_lastMessage = "No remote save found in RomM for " + item.remoteTitle;
         return false;
     }
+
+    // Sort descending by updatedAt so the most recent save (.srm, .sav, etc.) is selected
+    std::sort(saves.begin(), saves.end(), [](const RommSave& a, const RommSave& b) {
+        return a.updatedAt > b.updatedAt;
+    });
 
     std::string localFileName = "main";
     if (item.localTitle.isFileRom) {

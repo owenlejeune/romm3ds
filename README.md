@@ -136,3 +136,13 @@ Some emulators and libretro cores (such as **DeSmuME**) do not recognize raw `.s
   - **In standalone DeSmuME:** Launch the game, go to **File -> Import Backup Memory...**, select your `.sav` file, and save once in-game to write out a native `.dsv`.
   - **Using PKHeX:** Open your `.sav` file in [PKHeX](https://github.com/kwsch/PKHeX) and export it via **File -> Export SAV... -> Export .dsv**.
   - **Using `dsv2sav` / `dsv-tool`:** Use automated conversion scripts to append the 40-byte DeSmuME footer (`|-DESMUME SAVE-|`) to the 512 KB `.sav` data.
+
+#### 3. Web Player `.srm` Saves & Syncing Back to 3DS
+
+When saving in the RomM in-browser player, EmulatorJS/RetroArch saves to a **`.srm`** (Save RAM) file instead of `.sav`. Both files may appear in RomM:
+
+- **Are `.srm` and `.sav` compatible?** Yes. For Nintendo DS (melonDS/libretro), `.srm` and `.sav` files are **format-identical** raw cartridge EEPROM/Flash memory dumps. Only the file extension differs.
+- **How `romm3ds` handles this:**
+  - When syncing, `romm3ds` compares timestamps across all remote saves (`.sav`, `.srm`, etc.) and downloads the **most recent** save file.
+  - It writes the downloaded save data directly into your 3DS save location as a standard **`.sav`** (e.g. `sdmc:/roms/nds/saves/<game>.sav`).
+  - When you launch the game on your 3DS through TWiLight Menu++ or an `nds-bootstrap` forwarder, your progress from the web browser loads seamlessly.
