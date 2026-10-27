@@ -724,17 +724,31 @@ std::vector<InstalledTitle> SaveManager::scanInstalledTitles(const std::vector<s
     return outTitles;
 }
 
+#if defined(__3DS__) || defined(_3DS)
+static Result openSaveArchive(FS_Archive* archive, uint64_t titleId, uint8_t mediaType) {
+    if (mediaType == MEDIATYPE_NAND) {
+        u32 pathData[2] = {
+            static_cast<u32>(mediaType),
+            static_cast<u32>(0x00020000 | (static_cast<u32>(titleId) >> 8))
+        };
+        FS_Path path = { PATH_BINARY, 8, pathData };
+        return FSUSER_OpenArchive(archive, ARCHIVE_SYSTEM_SAVEDATA, path);
+    } else {
+        u32 pathData[3] = {
+            static_cast<u32>(mediaType),
+            static_cast<u32>(titleId & 0xFFFFFFFF),
+            static_cast<u32>((titleId >> 32) & 0xFFFFFFFF)
+        };
+        FS_Path path = { PATH_BINARY, 12, pathData };
+        return FSUSER_OpenArchive(archive, ARCHIVE_USER_SAVEDATA, path);
+    }
+}
+#endif
+
 bool SaveManager::checkSaveExists(uint64_t titleId, uint8_t mediaType) {
 #if defined(__3DS__) || defined(_3DS)
-    u32 pathData[3] = {
-        static_cast<u32>(titleId & 0xFFFFFFFF),
-        static_cast<u32>((titleId >> 32) & 0xFFFFFFFF),
-        mediaType
-    };
-    FS_Path aPath = { PATH_BINARY, 12, pathData };
     FS_Archive archive = 0;
-
-    Result res = FSUSER_OpenArchive(&archive, ARCHIVE_USER_SAVEDATA, aPath);
+    Result res = openSaveArchive(&archive, titleId, mediaType);
     if (R_SUCCEEDED(res)) {
         FSUSER_CloseArchive(archive);
         return true;
@@ -798,9 +812,10 @@ time_t SaveManager::getSaveTime(const InstalledTitle& title) {
         }
     }
 
+    char highHex[16];
     char lowHex[16];
+    snprintf(highHex, sizeof(highHex), "%08lx", (unsigned long)((title.titleId >> 32) & 0xFFFFFFFF));
     snprintf(lowHex, sizeof(lowHex), "%08lx", (unsigned long)(title.titleId & 0xFFFFFFFF));
-    std::string targetSub = std::string("title/00040000/") + lowHex + "/data/00000001.sav";
 
     DIR* root = opendir("sdmc:/Nintendo 3DS");
     if (root) {
@@ -813,12 +828,25 @@ time_t SaveManager::getSaveTime(const InstalledTitle& title) {
             struct dirent* e1 = nullptr;
             while ((e1 = readdir(d0)) != nullptr) {
                 if (e1->d_name[0] == '.') continue;
-                std::string candidate = p0 + "/" + e1->d_name + "/" + targetSub;
-                struct stat st;
-                if (stat(candidate.c_str(), &st) == 0) {
-                    closedir(d0);
-                    closedir(root);
-                    return st.st_mtime;
+                std::string dataDir = p0 + "/" + e1->d_name + "/title/" + highHex + "/" + lowHex + "/data";
+                DIR* dd = opendir(dataDir.c_str());
+                if (dd) {
+                    struct dirent* de = nullptr;
+                    time_t newestData = 0;
+                    while ((de = readdir(dd)) != nullptr) {
+                        if (de->d_name[0] == '.') continue;
+                        std::string df = dataDir + "/" + de->d_name;
+                        struct stat dst;
+                        if (stat(df.c_str(), &dst) == 0 && dst.st_mtime > newestData) {
+                            newestData = dst.st_mtime;
+                        }
+                    }
+                    closedir(dd);
+                    if (newestData > 0) {
+                        closedir(d0);
+                        closedir(root);
+                        return newestData;
+                    }
                 }
             }
             closedir(d0);
@@ -831,15 +859,8 @@ time_t SaveManager::getSaveTime(const InstalledTitle& title) {
 
 bool SaveManager::backupSave(uint64_t titleId, const std::string& outDirectory, uint8_t mediaType) {
 #if defined(__3DS__) || defined(_3DS)
-    u32 pathData[3] = {
-        static_cast<u32>(titleId & 0xFFFFFFFF),
-        static_cast<u32>((titleId >> 32) & 0xFFFFFFFF),
-        mediaType
-    };
-    FS_Path aPath = { PATH_BINARY, 12, pathData };
     FS_Archive archive = 0;
-
-    Result res = FSUSER_OpenArchive(&archive, ARCHIVE_USER_SAVEDATA, aPath);
+    Result res = openSaveArchive(&archive, titleId, mediaType);
     if (R_FAILED(res)) {
         return false;
     }
@@ -902,15 +923,8 @@ bool SaveManager::backupSave(const InstalledTitle& title, const std::string& out
 
 bool SaveManager::injectSave(uint64_t titleId, const std::string& inDirectory, uint8_t mediaType) {
 #if defined(__3DS__) || defined(_3DS)
-    u32 pathData[3] = {
-        static_cast<u32>(titleId & 0xFFFFFFFF),
-        static_cast<u32>((titleId >> 32) & 0xFFFFFFFF),
-        mediaType
-    };
-    FS_Path aPath = { PATH_BINARY, 12, pathData };
     FS_Archive archive = 0;
-
-    Result res = FSUSER_OpenArchive(&archive, ARCHIVE_USER_SAVEDATA, aPath);
+    Result res = openSaveArchive(&archive, titleId, mediaType);
     if (R_FAILED(res)) {
         return false;
     }
