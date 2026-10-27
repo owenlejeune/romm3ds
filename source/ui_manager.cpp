@@ -829,7 +829,13 @@ void UIManager::renderMainMenuTop() {
         C2D_TextParse(&nameText, m_textBuf, displayName.c_str());
         C2D_TextOptimize(&nameText);
         u32 nameColor = item.isIgnored ? CLR_TEXT_MUTED : CLR_TEXT_WHITE;
-        C2D_DrawText(&nameText, C2D_WithColor, 16.0f, 50.0f, 0.5f, 0.58f, 0.58f, nameColor);
+        float nameScale = 0.58f;
+        float nameW = 0.0f, nameH = 0.0f;
+        C2D_TextGetDimensions(&nameText, nameScale, nameScale, &nameW, &nameH);
+        if (nameW > 368.0f && nameW > 0.0f) {
+            nameScale *= (368.0f / nameW);
+        }
+        C2D_DrawText(&nameText, C2D_WithColor, 16.0f, 48.0f, 0.5f, nameScale, nameScale, nameColor);
 
         std::string matchDesc = item.isIgnored ? "Status: Ignored / Excluded from Sync"
                                 : (item.isMatched ? ("Matched: " + item.remoteTitle) : "Unmatched (Press SELECT for RomM Library)");
@@ -837,17 +843,38 @@ void UIManager::renderMainMenuTop() {
         C2D_Text matchText;
         C2D_TextParse(&matchText, m_textBuf, matchDesc.c_str());
         C2D_TextOptimize(&matchText);
-        C2D_DrawText(&matchText, C2D_WithColor, 16.0f, 74.0f, 0.5f, 0.45f, 0.45f, matchColor);
+        float matchScale = 0.45f;
+        float matchW = 0.0f, matchH = 0.0f;
+        C2D_TextGetDimensions(&matchText, matchScale, matchScale, &matchW, &matchH);
+        if (matchW > 368.0f && matchW > 0.0f) {
+            matchScale *= (368.0f / matchW);
+        }
+        C2D_DrawText(&matchText, C2D_WithColor, 16.0f, 70.0f, 0.5f, matchScale, matchScale, matchColor);
 
-        std::string details = "Console: " + item.localTitle.console +
-                              " | Title ID: " + item.localTitle.titleIdHex +
-                              (!item.localTitle.productCode.empty() ? (" (" + item.localTitle.productCode + ")") : "") +
-                              " | Local Save: " + (item.localTitle.hasSave ? "YES" : "NO") +
-                              " | Remote Save: " + (item.remoteHasSave ? "YES" : "NO");
-        C2D_Text detailText;
-        C2D_TextParse(&detailText, m_textBuf, details.c_str());
-        C2D_TextOptimize(&detailText);
-        C2D_DrawText(&detailText, C2D_WithColor, 16.0f, 96.0f, 0.5f, 0.42f, 0.42f, CLR_TEXT_MUTED);
+        std::string detailLine1 = "Console: " + item.localTitle.console +
+                                  "  |  Title ID: " + item.localTitle.titleIdHex +
+                                  (!item.localTitle.productCode.empty() ? (" (" + item.localTitle.productCode + ")") : "");
+        C2D_Text detailText1;
+        C2D_TextParse(&detailText1, m_textBuf, detailLine1.c_str());
+        C2D_TextOptimize(&detailText1);
+        float d1Scale = 0.42f;
+        float d1W = 0.0f, d1H = 0.0f;
+        C2D_TextGetDimensions(&detailText1, d1Scale, d1Scale, &d1W, &d1H);
+        if (d1W > 368.0f && d1W > 0.0f) {
+            d1Scale *= (368.0f / d1W);
+        }
+        C2D_DrawText(&detailText1, C2D_WithColor, 16.0f, 92.0f, 0.5f, d1Scale, d1Scale, CLR_TEXT_MUTED);
+
+        std::string detailLine2 = "Local Save: " + std::string(item.localTitle.hasSave ? "YES" : "NO") +
+                                  "    |    Remote Save: " + std::string(item.remoteHasSave ? "YES" : "NO");
+        if (item.remoteHasSave && !item.remoteSaveUpdatedAt.empty()) {
+            detailLine2 += " (" + item.remoteSaveUpdatedAt.substr(0, 10) + ")";
+        }
+        C2D_Text detailText2;
+        C2D_TextParse(&detailText2, m_textBuf, detailLine2.c_str());
+        C2D_TextOptimize(&detailText2);
+        u32 saveColor = (item.localTitle.hasSave || item.remoteHasSave) ? CLR_TEXT_WHITE : CLR_TEXT_MUTED;
+        C2D_DrawText(&detailText2, C2D_WithColor, 16.0f, 108.0f, 0.5f, 0.42f, 0.42f, saveColor);
 
         std::string controls = "Controls:\n"
                                "  (A) Sync Selected       (X) Batch Sync All\n"
@@ -857,7 +884,7 @@ void UIManager::renderMainMenuTop() {
         C2D_Text ctrlText;
         C2D_TextParse(&ctrlText, m_textBuf, controls.c_str());
         C2D_TextOptimize(&ctrlText);
-        C2D_DrawText(&ctrlText, C2D_WithColor, 16.0f, 122.0f, 0.5f, 0.44f, 0.44f, CLR_TEXT_WHITE);
+        C2D_DrawText(&ctrlText, C2D_WithColor, 16.0f, 128.0f, 0.5f, 0.44f, 0.44f, CLR_TEXT_WHITE);
     } else {
         C2D_Text emptyText;
         std::string msg = "No installed titles match the current filter.\n\n"
@@ -917,21 +944,56 @@ void UIManager::renderMainMenuBottom() {
         u32 dotColor = item.isIgnored ? CLR_TEXT_MUTED : (item.isMatched ? CLR_GREEN : CLR_YELLOW);
         C2D_DrawRectSolid(22.0f, y + 7.0f, 0.5f, 8.0f, 8.0f, dotColor);
 
-        std::string rowLabel = "[" + item.localTitle.console + "] " + item.localTitle.name;
-        if (rowLabel.length() > 26) {
-            rowLabel = rowLabel.substr(0, 24) + "..";
-        }
+        std::string tag;
         if (item.localTitle.hasSave) {
-            rowLabel += " [S]";
+            tag += " [S]";
         }
         if (item.isIgnored) {
-            rowLabel += " (Hide)";
+            tag += " (Hide)";
         }
 
+        std::string prefix = "[" + item.localTitle.console + "] ";
+        std::string fullLabel = prefix + item.localTitle.name + tag;
+
+        constexpr float MAX_ROW_TEXT_WIDTH = 260.0f;
+        float textScale = 0.40f;
+
         C2D_Text rowText;
-        C2D_TextParse(&rowText, m_textBuf, rowLabel.c_str());
+        C2D_TextParse(&rowText, m_textBuf, fullLabel.c_str());
         C2D_TextOptimize(&rowText);
-        C2D_DrawText(&rowText, C2D_WithColor, 36.0f, y + 5.0f, 0.5f, 0.40f, 0.40f, CLR_TEXT_WHITE);
+
+        float textW = 0.0f, textH = 0.0f;
+        C2D_TextGetDimensions(&rowText, textScale, textScale, &textW, &textH);
+
+        if (textW > MAX_ROW_TEXT_WIDTH) {
+            std::string name = item.localTitle.name;
+            int low = 0;
+            int high = static_cast<int>(name.length());
+            int bestLen = 0;
+
+            while (low <= high) {
+                int mid = low + (high - low) / 2;
+                std::string testLabel = prefix + name.substr(0, mid) + ".." + tag;
+                C2D_Text testText;
+                C2D_TextParse(&testText, m_textBuf, testLabel.c_str());
+                C2D_TextOptimize(&testText);
+                float curW = 0.0f, curH = 0.0f;
+                C2D_TextGetDimensions(&testText, textScale, textScale, &curW, &curH);
+
+                if (curW <= MAX_ROW_TEXT_WIDTH) {
+                    bestLen = mid;
+                    low = mid + 1;
+                } else {
+                    high = mid - 1;
+                }
+            }
+
+            fullLabel = prefix + name.substr(0, bestLen) + ".." + tag;
+            C2D_TextParse(&rowText, m_textBuf, fullLabel.c_str());
+            C2D_TextOptimize(&rowText);
+        }
+
+        C2D_DrawText(&rowText, C2D_WithColor, 36.0f, y + 5.0f, 0.5f, textScale, textScale, CLR_TEXT_WHITE);
     }
 
     drawButton(16.0f, 163.0f, 138.0f, 26.0f, "[ Sync (A) ]", false);
@@ -1119,14 +1181,44 @@ void UIManager::renderMatchingGamesBottom() {
         C2D_DrawRectSolid(17.5f, y + 1.5f, 0.5f, 285.0f, 21.0f, rowBg);
 
         std::string label = g.title;
-        if (label.length() > 28) {
-            label = label.substr(0, 26) + "..";
-        }
+        constexpr float MAX_REMOTE_ROW_WIDTH = 268.0f;
+        float textScale = 0.42f;
 
         C2D_Text rowText;
         C2D_TextParse(&rowText, m_textBuf, label.c_str());
         C2D_TextOptimize(&rowText);
-        C2D_DrawText(&rowText, C2D_WithColor, 24.0f, y + 5.0f, 0.5f, 0.42f, 0.42f, CLR_TEXT_WHITE);
+
+        float textW = 0.0f, textH = 0.0f;
+        C2D_TextGetDimensions(&rowText, textScale, textScale, &textW, &textH);
+
+        if (textW > MAX_REMOTE_ROW_WIDTH) {
+            int low = 0;
+            int high = static_cast<int>(label.length());
+            int bestLen = 0;
+
+            while (low <= high) {
+                int mid = low + (high - low) / 2;
+                std::string testLabel = label.substr(0, mid) + "..";
+                C2D_Text testText;
+                C2D_TextParse(&testText, m_textBuf, testLabel.c_str());
+                C2D_TextOptimize(&testText);
+                float curW = 0.0f, curH = 0.0f;
+                C2D_TextGetDimensions(&testText, textScale, textScale, &curW, &curH);
+
+                if (curW <= MAX_REMOTE_ROW_WIDTH) {
+                    bestLen = mid;
+                    low = mid + 1;
+                } else {
+                    high = mid - 1;
+                }
+            }
+
+            label = label.substr(0, bestLen) + "..";
+            C2D_TextParse(&rowText, m_textBuf, label.c_str());
+            C2D_TextOptimize(&rowText);
+        }
+
+        C2D_DrawText(&rowText, C2D_WithColor, 24.0f, y + 5.0f, 0.5f, textScale, textScale, CLR_TEXT_WHITE);
     }
 
     if (remoteTotal == 0) {

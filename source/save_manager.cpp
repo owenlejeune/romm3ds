@@ -69,26 +69,34 @@ std::string decodeUtf16(const u16* src, size_t maxUnits, bool sanitize = false) 
     std::string out(reinterpret_cast<char*>(outBuf.data()));
 
     if (sanitize) {
-        for (char& c : out) {
-            if (c == '\r' || c == '\n') {
-                c = ' ';
+        std::string cleaned;
+        bool inSpace = false;
+        for (char c : out) {
+            if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
+                if (!inSpace) {
+                    cleaned += ' ';
+                    inSpace = true;
+                }
+            } else {
+                cleaned += c;
+                inSpace = false;
             }
         }
-        size_t first = out.find_first_not_of(" \t");
+        size_t first = cleaned.find_first_not_of(" ");
         if (first == std::string::npos) {
             return "";
         }
-        size_t last = out.find_last_not_of(" \t");
-        return out.substr(first, last - first + 1);
+        size_t last = cleaned.find_last_not_of(" ");
+        return cleaned.substr(first, last - first + 1);
     }
 
     return out;
 }
 
 std::string extractTitleString(const smdh_title_s& titleEntry) {
-    std::string name = decodeUtf16(titleEntry.shortDescription, 64, true);
+    std::string name = decodeUtf16(titleEntry.longDescription, 128, true);
     if (name.empty()) {
-        name = decodeUtf16(titleEntry.longDescription, 128, true);
+        name = decodeUtf16(titleEntry.shortDescription, 64, true);
     }
     return name;
 }
