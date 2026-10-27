@@ -836,23 +836,35 @@ bool SaveManager::injectSave(const InstalledTitle& title, const std::string& inD
     }
 
     std::string srcFile;
-    DIR* d = opendir(inDirectory.c_str());
-    if (d) {
-        struct dirent* ent = nullptr;
-        while ((ent = readdir(d)) != nullptr) {
-            if (std::strcmp(ent->d_name, ".") != 0 && std::strcmp(ent->d_name, "..") != 0 && ent->d_name[0] != '.') {
-                std::string en = ent->d_name;
-                srcFile = inDirectory + "/" + en;
-                if (en.length() >= 4 && (en.rfind(".sav") == en.length() - 4 ||
-                                         en.rfind(".SAV") == en.length() - 4 ||
-                                         en.rfind(".dsv") == en.length() - 4 ||
-                                         en.rfind(".srm") == en.length() - 4 ||
-                                         en.rfind(".SRM") == en.length() - 4)) {
-                    break;
+    struct stat inSt;
+    if (stat(inDirectory.c_str(), &inSt) == 0 && !S_ISDIR(inSt.st_mode)) {
+        srcFile = inDirectory;
+    } else {
+        DIR* d = opendir(inDirectory.c_str());
+        if (d) {
+            struct dirent* ent = nullptr;
+            time_t newestTime = 0;
+            while ((ent = readdir(d)) != nullptr) {
+                if (std::strcmp(ent->d_name, ".") != 0 && std::strcmp(ent->d_name, "..") != 0 && ent->d_name[0] != '.') {
+                    std::string en = ent->d_name;
+                    std::string full = inDirectory + "/" + en;
+                    if (en.length() >= 4 && (en.rfind(".sav") == en.length() - 4 ||
+                                             en.rfind(".SAV") == en.length() - 4 ||
+                                             en.rfind(".dsv") == en.length() - 4 ||
+                                             en.rfind(".srm") == en.length() - 4 ||
+                                             en.rfind(".SRM") == en.length() - 4)) {
+                        struct stat st;
+                        if (stat(full.c_str(), &st) == 0) {
+                            if (srcFile.empty() || st.st_mtime > newestTime) {
+                                srcFile = full;
+                                newestTime = st.st_mtime;
+                            }
+                        }
+                    }
                 }
             }
+            closedir(d);
         }
-        closedir(d);
     }
 
     if (srcFile.empty()) {
@@ -870,6 +882,19 @@ bool SaveManager::injectSave(const InstalledTitle& title, const std::string& inD
             targetSavePath = dir + "/saves/" + baseName + ".sav";
         } else {
             targetSavePath = dir + "/" + baseName + ".sav";
+        }
+    }
+
+    // TWiLight Menu / nds-bootstrap and mGBA only read .sav files.
+    // If targetSavePath ends with .srm or .dsv, normalize extension to .sav.
+    if (title.console == "DS" || title.console == "GBA") {
+        size_t dot = targetSavePath.find_last_of('.');
+        if (dot != std::string::npos) {
+            std::string ext = targetSavePath.substr(dot);
+            for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (ext == ".srm" || ext == ".dsv") {
+                targetSavePath = targetSavePath.substr(0, dot) + ".sav";
+            }
         }
     }
 

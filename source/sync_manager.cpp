@@ -13,6 +13,24 @@ namespace RomM3DS {
 
 using json = nlohmann::json;
 
+namespace {
+
+void clearDirectory(const std::string& dirPath) {
+    DIR* d = opendir(dirPath.c_str());
+    if (!d) return;
+    struct dirent* ent = nullptr;
+    while ((ent = readdir(d)) != nullptr) {
+        if (std::strcmp(ent->d_name, ".") != 0 && std::strcmp(ent->d_name, "..") != 0) {
+            std::string fullPath = dirPath + "/" + ent->d_name;
+            remove(fullPath.c_str());
+        }
+    }
+    closedir(d);
+}
+
+} // namespace
+
+
 SyncManager::SyncManager(ConfigManager* cfg, NetworkManager* net, SaveManager* save)
     : m_configMgr(cfg), m_netMgr(net), m_saveMgr(save) {
     clearLibraryCache();
@@ -551,6 +569,7 @@ bool SyncManager::forceUpload(SyncItem& item) {
     }
 
     std::string stagingDir = getStagingDirectory(item.localTitle.titleId);
+    clearDirectory(stagingDir);
     ConfigManager::ensureDirectories(stagingDir + "/");
 
     if (!m_saveMgr->backupSave(item.localTitle, stagingDir)) {
@@ -639,6 +658,7 @@ bool SyncManager::forceDownload(SyncItem& item) {
     }
 
     std::string stagingDir = getStagingDirectory(item.localTitle.titleId);
+    clearDirectory(stagingDir);
     ConfigManager::ensureDirectories(stagingDir + "/");
 
     std::vector<RommSave> saves;
@@ -687,12 +707,17 @@ bool SyncManager::forceDownload(SyncItem& item) {
         return false;
     }
 
-    if (!m_saveMgr->injectSave(item.localTitle, stagingDir)) {
+    std::string injectSource = item.localTitle.isFileRom ? targetFile : stagingDir;
+    if (!m_saveMgr->injectSave(item.localTitle, injectSource)) {
         m_lastMessage = "Save downloaded but injection into 3DS save archive failed.";
         return false;
     }
 
     item.localTitle.hasSave = true;
+    if (item.localTitle.isFileRom) {
+        item.localTitle.savePath = m_saveMgr->findSaveFileForRom(item.localTitle.romPath, item.localTitle.console);
+    }
+    item.localTitle.saveTime = m_saveMgr->getSaveTime(item.localTitle);
     m_lastMessage = "Downloaded & injected save for " + item.localTitle.name;
     return true;
 }
