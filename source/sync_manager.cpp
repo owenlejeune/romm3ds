@@ -15,10 +15,12 @@ using json = nlohmann::json;
 
 SyncManager::SyncManager(ConfigManager* cfg, NetworkManager* net, SaveManager* save)
     : m_configMgr(cfg), m_netMgr(net), m_saveMgr(save) {
-    loadLibraryCache();
+    clearLibraryCache();
 }
 
-SyncManager::~SyncManager() = default;
+SyncManager::~SyncManager() {
+    clearLibraryCache();
+}
 
 std::string SyncManager::getStagingDirectory(uint64_t titleId) {
     return "sdmc:/3ds/romm3ds/saves/" + SaveManager::formatTitleId(titleId);
@@ -319,6 +321,7 @@ bool SyncManager::refresh() {
     m_items.clear();
     m_remoteGames.clear();
     m_platforms.clear();
+    clearLibraryCache();
 
     if (m_configMgr) {
         m_configMgr->loadMappings();
