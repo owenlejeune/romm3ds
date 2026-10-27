@@ -508,10 +508,22 @@ void UIManager::resolveConflict(int choice) {
                              (choice == 1) ? ConflictChoice::OVERWRITE_REMOTE :
                                              ConflictChoice::SKIP;
 
-    m_statusMessage = "Resolving save conflict...";
-    render();
+    if (cChoice == ConflictChoice::OVERWRITE_LOCAL) {
+        m_statusMessage = "Downloading save from RomM...";
+        m_loadingMessage = "Downloading save from RomM...";
+        render();
+        render();
+    } else if (cChoice == ConflictChoice::OVERWRITE_REMOTE) {
+        m_statusMessage = "Uploading save to RomM...";
+        m_loadingMessage = "Uploading save to RomM...";
+        render();
+        render();
+    } else {
+        m_statusMessage = "Skipping save resolution...";
+    }
 
     m_syncMgr->syncItem(item, cChoice);
+    m_loadingMessage.clear();
     m_statusMessage = m_syncMgr->getLastMessage();
     m_state = UIState::MAIN_MENU;
 }
@@ -673,14 +685,14 @@ void UIManager::handleInput(u32 kDown, const touchPosition& touch) {
                 confirmManualMatch();
             } else if (kDown & KEY_B) {
                 m_matchingSubState = MatchingSubState::SELECT_CONSOLE;
-            } else if (kDown & KEY_X) {
+            } else if (kDown & KEY_Y) {
                 std::string prompt = "Search in " + m_selectedConsoleName + "...";
                 std::string q = launchKeyboard(prompt, m_remoteFilterText, 64);
                 if (q != m_remoteFilterText) {
                     m_remoteFilterText = q;
                     updateRemoteFilteredList();
                 }
-            } else if (kDown & KEY_Y) {
+            } else if (kDown & KEY_X) {
                 if (!m_remoteFilterText.empty()) {
                     m_remoteFilterText.clear();
                     updateRemoteFilteredList();
@@ -1201,7 +1213,7 @@ void UIManager::renderMatchingGamesTop() {
                             "Console: " + m_selectedConsoleName + " (" + m_selectedConsoleSlug + ")\n\n"
                             "Controls:\n"
                             "  (A) Pair Selected Game     (B) Back to Consoles\n"
-                            "  (X) Search Filter Games    (Y) Clear Filter\n"
+                            "  (Y) Search Filter Games    (X) Clear Filter\n"
                             "  (L) Refresh from Server";
         if (!m_remoteFilterText.empty()) {
             guide += "\n\nActive Filter: \"" + m_remoteFilterText + "\"";
@@ -1224,7 +1236,7 @@ void UIManager::renderMatchingGamesBottom() {
     C2D_TextOptimize(&titleText);
     C2D_DrawText(&titleText, C2D_WithColor, 16.0f, 9.0f, 0.5f, 0.48f, 0.48f, CLR_TEXT_WHITE);
 
-    std::string searchDisplay = m_remoteFilterText.empty() ? "Search: Tap to filter (X)..." : ("Search: " + m_remoteFilterText);
+    std::string searchDisplay = m_remoteFilterText.empty() ? "Search: Tap to filter (Y)..." : ("Search: " + m_remoteFilterText);
     u32 searchBorder = m_remoteFilterText.empty() ? CLR_BORDER_OFF : CLR_ACCENT;
     u32 searchTextColor = m_remoteFilterText.empty() ? CLR_TEXT_MUTED : CLR_TEXT_WHITE;
     C2D_DrawRectSolid(16.0f, 28.0f, 0.5f, 230.0f, 22.0f, searchBorder);
