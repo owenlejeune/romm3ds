@@ -146,3 +146,15 @@ When saving in the RomM in-browser player, EmulatorJS/RetroArch saves to a **`.s
   - When syncing, `romm3ds` compares timestamps across all remote saves (`.sav`, `.srm`, etc.) and downloads the **most recent** save file.
   - It writes the downloaded save data directly into your 3DS save location as a standard **`.sav`** (e.g. `sdmc:/roms/nds/saves/<game>.sav`).
   - When you launch the game on your 3DS through TWiLight Menu++ or an `nds-bootstrap` forwarder, your progress from the web browser loads seamlessly.
+
+#### 4. TWiLight Menu++ (`nds-bootstrap`) Save Timestamps & Syncing Back to RomM
+
+When you play Nintendo DS games on your 3DS and save in-game, you may notice that the local save does not appear newer or that its timestamp does not reflect your latest save session:
+
+- **Why timestamps do not update in-game:** `nds-bootstrap` uses direct sector I/O to write save data directly to the SD card clusters to prevent lag and audio stuttering during gameplay. Because it bypasses the FAT32 filesystem directory table, **the file's "Date Modified" timestamp is not updated when saving in-game**. The timestamp remains set to when the file was first created or written by an application (e.g. when downloaded by `romm3ds`).
+- **UTC vs. Local Timezone:** RomM reports save timestamps in UTC (`Z`), whereas the 3DS system clock and FAT32 SD card filesystem store times in local wall-clock time.
+- **How to sync progress back to RomM:** When you have made progress in a DS game on your 3DS and open `romm3ds` to sync:
+  1. Trigger the sync as usual.
+  2. In the **Save Conflict Resolution** screen, select **`[ Overwrite Remote (Use Local Save) ]`**.
+  3. `romm3ds` will read the raw save from your SD card (which contains your newest in-game progress) and upload it to your RomM server.
+
