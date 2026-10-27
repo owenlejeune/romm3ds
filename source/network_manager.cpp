@@ -33,6 +33,36 @@ size_t fileWriteCallback(void* ptr, size_t size, size_t nmemb, void* stream) {
     return fwrite(ptr, size, nmemb, static_cast<FILE*>(stream));
 }
 
+std::string getSafeString(const json& j, const std::string& key, const std::string& fallback = "") {
+    if (j.contains(key) && !j[key].is_null()) {
+        if (j[key].is_string()) {
+            return j[key].get<std::string>();
+        }
+    }
+    return fallback;
+}
+
+uint64_t getSafeUint64(const json& j, const std::string& key, uint64_t fallback = 0) {
+    if (j.contains(key) && !j[key].is_null()) {
+        if (j[key].is_number_unsigned()) {
+            return j[key].get<uint64_t>();
+        } else if (j[key].is_number_integer()) {
+            int64_t val = j[key].get<int64_t>();
+            return (val >= 0) ? static_cast<uint64_t>(val) : fallback;
+        } else if (j[key].is_string()) {
+            const std::string& s = j[key].get_ref<const std::string&>();
+            if (!s.empty()) {
+                char* end = nullptr;
+                unsigned long long v = std::strtoull(s.c_str(), &end, 10);
+                if (end != s.c_str()) {
+                    return static_cast<uint64_t>(v);
+                }
+            }
+        }
+    }
+    return fallback;
+}
+
 } // namespace
 
 bool NetworkManager::initNetwork() {
@@ -237,11 +267,12 @@ NetworkResult NetworkManager::fetchPlatforms(std::vector<RommPlatform>& outPlatf
                              (parsed.contains("items") ? parsed["items"] :
                              (parsed.contains("platforms") ? parsed["platforms"] : json::array()));
                 for (const auto& item : items) {
+                    if (!item.is_object()) continue;
                     RommPlatform p;
-                    p.id = item.value("id", (uint64_t)0);
-                    p.name = item.value("name", item.value("display_name", item.value("custom_name", "")));
-                    p.slug = item.value("slug", item.value("platform_slug", ""));
-                    p.romCount = item.value("rom_count", item.value("roms_count", 0));
+                    p.id = getSafeUint64(item, "id", 0);
+                    p.name = getSafeString(item, "name", getSafeString(item, "display_name", getSafeString(item, "custom_name", "")));
+                    p.slug = getSafeString(item, "slug", getSafeString(item, "platform_slug", ""));
+                    p.romCount = static_cast<int>(getSafeUint64(item, "rom_count", getSafeUint64(item, "roms_count", 0)));
                     if (p.name.empty()) {
                         p.name = p.slug;
                     }
@@ -348,19 +379,20 @@ NetworkResult NetworkManager::fetchLibrary(std::vector<RommGame>& outGames, uint
         }
 
         for (const auto& item : items) {
+            if (!item.is_object()) continue;
             RommGame game;
-            game.id = item.value("id", (uint64_t)0);
-            game.platformId = item.value("platform_id", (uint64_t)0);
-            game.title = item.value("name", item.value("title", ""));
-            game.platform = item.value("platform_slug", item.value("platform", ""));
-            game.romPath = item.value("fs_name", item.value("rom_path", ""));
-            game.savePath = item.value("save_path", "");
-            game.updatedAt = item.value("updated_at", "");
+            game.id = getSafeUint64(item, "id", 0);
+            game.platformId = getSafeUint64(item, "platform_id", 0);
+            game.title = getSafeString(item, "name", getSafeString(item, "title", ""));
+            game.platform = getSafeString(item, "platform_slug", getSafeString(item, "platform", ""));
+            game.romPath = getSafeString(item, "fs_name", getSafeString(item, "rom_path", ""));
+            game.savePath = getSafeString(item, "save_path", "");
+            game.updatedAt = getSafeString(item, "updated_at", getSafeString(item, "updatedAt", ""));
             outGames.push_back(game);
         }
 
         if (parsed.is_object() && parsed.contains("total")) {
-            total = parsed.value("total", -1);
+            total = static_cast<int>(getSafeUint64(parsed, "total", (uint64_t)-1));
         }
 
         offset += items.size();
@@ -429,11 +461,16 @@ NetworkResult NetworkManager::fetchSaves(std::vector<RommSave>& outSaves, uint64
             if (!parsed.is_discarded()) {
                 json items = parsed.is_array() ? parsed : (parsed.contains("items") ? parsed["items"] : json::array());
                 for (const auto& item : items) {
+                    if (!item.is_object()) continue;
                     RommSave s;
-                    s.id = item.value("id", (uint64_t)0);
-                    s.romId = item.value("rom_id", item.value("romId", (uint64_t)0));
-                    s.fileName = item.value("file_name", item.value("filename", ""));
-                    s.updatedAt = item.value("updated_at", item.value("updatedAt", ""));
+                    s.id = getSafeUint64(item, "id", 0);
+                    s.romId = getSafeUint64(item, "rom_id", getSafeUint64(item, "romId", 0));
+                    s.fileName = getSafeString(item, "file_name", getSafeString(item, "filename", ""));
+                    std::string up = getSafeString(item, "updated_at");
+                    if (up.empty()) up = getSafeString(item, "updatedAt");
+                    if (up.empty()) up = getSafeString(item, "created_at");
+                    if (up.empty()) up = getSafeString(item, "createdAt");
+                    s.updatedAt = up;
                     outSaves.push_back(s);
                 }
             } else {

@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <fstream>
 
 #if defined(__3DS__) || defined(_3DS)
 #include <3ds.h>
@@ -345,6 +346,90 @@ uint64_t SaveManager::hashRomPath(const std::string& path) {
     return hash;
 }
 
+namespace {
+
+std::vector<std::string> getMgbaSaveDirectories() {
+    static std::vector<std::string> cachedDirs;
+    static bool resolved = false;
+    if (resolved) return cachedDirs;
+
+    std::vector<std::string> dirs;
+
+    const std::vector<std::string> configPaths = {
+        "sdmc:/3ds/mgba/config.ini",
+        "sdmc:/3ds/mGBA/config.ini",
+        "sdmc:/mgba/config.ini",
+        "sdmc:/mGBA/config.ini"
+    };
+
+    for (const auto& cp : configPaths) {
+        std::ifstream file(cp);
+        if (file.is_open()) {
+            std::string line;
+            while (std::getline(file, line)) {
+                if (!line.empty() && line.back() == '\r') {
+                    line.pop_back();
+                }
+                size_t eqPos = line.find('=');
+                if (eqPos != std::string::npos) {
+                    std::string key = line.substr(0, eqPos);
+                    while (!key.empty() && std::isspace(static_cast<unsigned char>(key.front()))) key.erase(key.begin());
+                    while (!key.empty() && std::isspace(static_cast<unsigned char>(key.back()))) key.pop_back();
+
+                    if (key == "savegamePath") {
+                        std::string val = line.substr(eqPos + 1);
+                        while (!val.empty() && std::isspace(static_cast<unsigned char>(val.front()))) val.erase(val.begin());
+                        while (!val.empty() && std::isspace(static_cast<unsigned char>(val.back()))) val.pop_back();
+                        if (!val.empty()) {
+                            if (val.front() == '"' && val.back() == '"') {
+                                val = val.substr(1, val.length() - 2);
+                            }
+                            std::string fullDir;
+                            if (val.rfind("sdmc:", 0) == 0) {
+                                fullDir = val;
+                            } else if (val.front() == '/') {
+                                fullDir = "sdmc:" + val;
+                            } else {
+                                size_t cSlash = cp.find_last_of('/');
+                                std::string baseDir = (cSlash != std::string::npos) ? cp.substr(0, cSlash) : "sdmc:/3ds/mgba";
+                                fullDir = baseDir + "/" + val;
+                            }
+                            if (!fullDir.empty() && fullDir.back() != '/') {
+                                fullDir += '/';
+                            }
+                            if (std::find(dirs.begin(), dirs.end(), fullDir) == dirs.end()) {
+                                dirs.push_back(fullDir);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    const std::vector<std::string> defaults = {
+        "sdmc:/3ds/mgba/saves/",
+        "sdmc:/3ds/mGBA/saves/",
+        "sdmc:/3ds/mgba/",
+        "sdmc:/3ds/mGBA/",
+        "sdmc:/mgba/saves/",
+        "sdmc:/mgba/",
+        "sdmc:/mGBA/saves/",
+        "sdmc:/mGBA/"
+    };
+    for (const auto& def : defaults) {
+        if (std::find(dirs.begin(), dirs.end(), def) == dirs.end()) {
+            dirs.push_back(def);
+        }
+    }
+
+    cachedDirs = dirs;
+    resolved = true;
+    return cachedDirs;
+}
+
+} // namespace
+
 std::string SaveManager::findSaveFileForRom(const std::string& romPath, const std::string& console) {
     size_t slashPos = romPath.find_last_of("/\\");
     std::string dir = (slashPos != std::string::npos) ? romPath.substr(0, slashPos) : ".";
@@ -353,24 +438,38 @@ std::string SaveManager::findSaveFileForRom(const std::string& romPath, const st
     size_t dotPos = filename.find_last_of('.');
     std::string baseName = (dotPos != std::string::npos) ? filename.substr(0, dotPos) : filename;
 
-    std::vector<std::string> candidates = {
-        dir + "/saves/" + baseName + ".sav",
-        dir + "/" + baseName + ".sav",
-        dir + "/saves/" + baseName + ".srm",
-        dir + "/" + baseName + ".srm",
-        dir + "/saves/" + baseName + ".dsv",
-        dir + "/" + baseName + ".dsv",
-        dir + "/saves/" + baseName + ".SAV",
-        dir + "/" + baseName + ".SAV",
-        dir + "/saves/" + baseName + ".SRM",
-        dir + "/" + baseName + ".SRM",
-    };
+    std::vector<std::string> candidates;
 
     if (console == "GBA") {
-        candidates.push_back("sdmc:/mGBA/saves/" + baseName + ".sav");
-        candidates.push_back("sdmc:/mGBA/saves/" + baseName + ".SAV");
-        candidates.push_back("sdmc:/mGBA/" + baseName + ".sav");
+        // mGBA on 3DS places saves directly alongside the ROM by default
+        candidates.push_back(dir + "/" + baseName + ".sav");
+        candidates.push_back(dir + "/saves/" + baseName + ".sav");
+        candidates.push_back(dir + "/" + baseName + ".SAV");
+        candidates.push_back(dir + "/saves/" + baseName + ".SAV");
+
+        std::vector<std::string> mgbaDirs = getMgbaSaveDirectories();
+        for (const auto& md : mgbaDirs) {
+            candidates.push_back(md + baseName + ".sav");
+            candidates.push_back(md + baseName + ".SAV");
+        }
+    } else if (console == "DS") {
+        candidates.push_back(dir + "/saves/" + baseName + ".sav");
+        candidates.push_back(dir + "/" + baseName + ".sav");
+        candidates.push_back(dir + "/saves/" + baseName + ".SAV");
+        candidates.push_back(dir + "/" + baseName + ".SAV");
+    } else {
+        candidates.push_back(dir + "/" + baseName + ".sav");
+        candidates.push_back(dir + "/saves/" + baseName + ".sav");
+        candidates.push_back(dir + "/" + baseName + ".SAV");
+        candidates.push_back(dir + "/saves/" + baseName + ".SAV");
     }
+
+    candidates.push_back(dir + "/" + baseName + ".srm");
+    candidates.push_back(dir + "/saves/" + baseName + ".srm");
+    candidates.push_back(dir + "/" + baseName + ".dsv");
+    candidates.push_back(dir + "/saves/" + baseName + ".dsv");
+    candidates.push_back(dir + "/" + baseName + ".SRM");
+    candidates.push_back(dir + "/saves/" + baseName + ".SRM");
 
     std::string bestCand;
     time_t bestTime = 0;
@@ -518,12 +617,7 @@ void scanDirectoryRecursive(
                 if (console == "DS") {
                     title.savePath = baseDir + "/saves/" + title.name + ".sav";
                 } else {
-                    struct stat sdir;
-                    if (stat((baseDir + "/saves").c_str(), &sdir) == 0 && S_ISDIR(sdir.st_mode)) {
-                        title.savePath = baseDir + "/saves/" + title.name + ".sav";
-                    } else {
-                        title.savePath = baseDir + "/" + title.name + ".sav";
-                    }
+                    title.savePath = baseDir + "/" + title.name + ".sav";
                 }
             }
 
@@ -767,7 +861,8 @@ bool SaveManager::backupSave(const InstalledTitle& title, const std::string& out
     }
 
     std::string saveFile = title.savePath;
-    if (saveFile.empty() || access(saveFile.c_str(), F_OK) != 0) {
+    struct stat sst;
+    if (saveFile.empty() || stat(saveFile.c_str(), &sst) != 0 || sst.st_size == 0) {
         saveFile = findSaveFileForRom(title.romPath, title.console);
     }
 
@@ -877,12 +972,13 @@ bool SaveManager::injectSave(const InstalledTitle& title, const std::string& inD
     }
 
     std::string targetSavePath = title.savePath;
+    size_t slashPos = title.romPath.find_last_of("/\\");
+    std::string dir = (slashPos != std::string::npos) ? title.romPath.substr(0, slashPos) : ".";
+    std::string filename = (slashPos != std::string::npos) ? title.romPath.substr(slashPos + 1) : title.romPath;
+    size_t dotPos = filename.find_last_of('.');
+    std::string baseName = (dotPos != std::string::npos) ? filename.substr(0, dotPos) : filename;
+
     if (targetSavePath.empty()) {
-        size_t slashPos = title.romPath.find_last_of("/\\");
-        std::string dir = (slashPos != std::string::npos) ? title.romPath.substr(0, slashPos) : ".";
-        std::string filename = (slashPos != std::string::npos) ? title.romPath.substr(slashPos + 1) : title.romPath;
-        size_t dotPos = filename.find_last_of('.');
-        std::string baseName = (dotPos != std::string::npos) ? filename.substr(0, dotPos) : filename;
         if (title.console == "DS") {
             targetSavePath = dir + "/saves/" + baseName + ".sav";
         } else {
@@ -903,8 +999,6 @@ bool SaveManager::injectSave(const InstalledTitle& title, const std::string& inD
         }
     }
 
-    ConfigManager::ensureDirectories(targetSavePath);
-
     FILE* src = fopen(srcFile.c_str(), "rb");
     if (!src) return false;
 
@@ -912,69 +1006,113 @@ bool SaveManager::injectSave(const InstalledTitle& title, const std::string& inD
     long srcSize = ftell(src);
     fseek(src, 0, SEEK_SET);
 
+    size_t readOffset = 0;
     size_t writeLimit = (srcSize > 0) ? static_cast<size_t>(srcSize) : 0;
-    if (title.console == "GBA") {
-        // Libretro/RetroArch/EmulatorJS appends an RTC footer (e.g. 139,264 or 136,192 bytes total)
-        // to GBA Flash 1M saves. Standalone mGBA strictly requires exact cartridge memory sizes:
-        // 131,072 bytes (128 KB) for Flash 1M (Emerald, Ruby, Sapphire, FireRed, LeafGreen)
-        // 65,536 bytes (64 KB) for Flash 512K
-        if (srcSize > 131072 && srcSize <= 139264 + 4096) {
+
+    if (title.console == "GBA" && srcSize > 0) {
+        if (srcSize == 139264) { // 0x20000 + 0x2000 (standard VBA-Next / Libretro SRM)
+            std::vector<uint8_t> probe(139264);
+            if (fread(probe.data(), 1, 139264, src) == 139264) {
+                auto scan_section = [&](size_t offset, size_t len) {
+                    for (size_t i = 0; i < len; ++i) {
+                        if (probe[offset + i] != 0xFF) return true;
+                    }
+                    return false;
+                };
+                if (scan_section(0, 0x8000) && !scan_section(0x8000, 0x1A000)) {
+                    readOffset = 0;
+                    writeLimit = 0x8000; // SRAM 32KB
+                } else if (scan_section(0, 0x10000) && !scan_section(0x10000, 0x10000)) {
+                    readOffset = 0;
+                    writeLimit = 0x10000; // FLASH 64KB
+                } else if (scan_section(0, 0x20000)) {
+                    readOffset = 0;
+                    writeLimit = 0x20000; // FLASH 128KB (e.g. Pokemon Emerald)
+                } else if (scan_section(0x20000, 512) && !scan_section(0x20000 + 512, 0x2000 - 512)) {
+                    readOffset = 0x20000;
+                    writeLimit = 512; // EEPROM 512B
+                } else if (scan_section(0x20000, 0x2000)) {
+                    readOffset = 0x20000;
+                    writeLimit = 0x2000; // EEPROM 8KB
+                } else {
+                    readOffset = 0;
+                    writeLimit = 131072;
+                }
+            }
+            fseek(src, 0, SEEK_SET);
+        } else if (srcSize > 131072) {
+            // Trim RTC metadata or extra padding down to exact 128 KB
+            readOffset = 0;
             writeLimit = 131072;
         } else if (srcSize > 65536 && srcSize < 131072) {
+            readOffset = 0;
             writeLimit = 65536;
         }
     }
 
-    FILE* dst = fopen(targetSavePath.c_str(), "wb");
-    if (!dst) {
+    std::vector<uint8_t> payload(writeLimit);
+    if (fseek(src, readOffset, SEEK_SET) != 0) {
         fclose(src);
         return false;
     }
-
-    std::vector<uint8_t> buffer(64 * 1024);
-    size_t totalWritten = 0;
-    bool ok = true;
-    while (totalWritten < writeLimit) {
-        size_t toRead = std::min(buffer.size(), writeLimit - totalWritten);
-        size_t bytesRead = fread(buffer.data(), 1, toRead, src);
-        if (bytesRead == 0) break;
-        if (fwrite(buffer.data(), 1, bytesRead, dst) != bytesRead) {
-            ok = false;
-            break;
-        }
-        totalWritten += bytesRead;
+    size_t bytesRead = fread(payload.data(), 1, writeLimit, src);
+    fclose(src);
+    if (bytesRead != writeLimit) {
+        return false;
     }
 
-    fclose(src);
-    fclose(dst);
+    auto writePayloadToFile = [&](const std::string& path) -> bool {
+        ConfigManager::ensureDirectories(path);
+        FILE* out = fopen(path.c_str(), "wb");
+        if (!out) return false;
+        bool written = (fwrite(payload.data(), 1, payload.size(), out) == payload.size());
+        fclose(out);
+        return written;
+    };
 
-    // If GBA, also mirror to alternate mGBA / ROM directory save paths if they already exist
+    bool ok = writePayloadToFile(targetSavePath);
+
+    // If GBA, write to all candidate paths so mGBA and TWiLight Menu both see the new save
     if (ok && title.console == "GBA") {
-        size_t slashPos = title.romPath.find_last_of("/\\");
-        std::string dir = (slashPos != std::string::npos) ? title.romPath.substr(0, slashPos) : ".";
-        std::string filename = (slashPos != std::string::npos) ? title.romPath.substr(slashPos + 1) : title.romPath;
-        size_t dotPos = filename.find_last_of('.');
-        std::string baseName = (dotPos != std::string::npos) ? filename.substr(0, dotPos) : filename;
+        std::set<std::string> destinations;
+        destinations.insert(targetSavePath);
 
-        std::vector<std::string> altPaths = {
-            "sdmc:/mGBA/saves/" + baseName + ".sav",
-            dir + "/" + baseName + ".sav",
-            dir + "/saves/" + baseName + ".sav"
-        };
-        for (const auto& alt : altPaths) {
-            if (alt != targetSavePath && access(alt.c_str(), F_OK) == 0) {
-                FILE* srcAlt = fopen(targetSavePath.c_str(), "rb");
-                if (srcAlt) {
-                    FILE* dstAlt = fopen(alt.c_str(), "wb");
-                    if (dstAlt) {
-                        size_t r = 0;
-                        while ((r = fread(buffer.data(), 1, buffer.size(), srcAlt)) > 0) {
-                            fwrite(buffer.data(), 1, r, dstAlt);
-                        }
-                        fclose(dstAlt);
-                    }
-                    fclose(srcAlt);
+        // 1. Primary mGBA location: always write directly alongside ROM
+        std::string romDirSave = dir + "/" + baseName + ".sav";
+        writePayloadToFile(romDirSave);
+        destinations.insert(romDirSave);
+
+        // 2. If dir/saves/ directory exists, also write there for TWiLight Menu
+        struct stat sdir;
+        std::string savesSubDir = dir + "/saves";
+        if (stat(savesSubDir.c_str(), &sdir) == 0 && S_ISDIR(sdir.st_mode)) {
+            std::string subSave = savesSubDir + "/" + baseName + ".sav";
+            writePayloadToFile(subSave);
+            destinations.insert(subSave);
+        }
+
+        // 3. Overwrite any existing save files in other mGBA directories
+        std::vector<std::string> mgbaDirs = getMgbaSaveDirectories();
+        for (const auto& md : mgbaDirs) {
+            std::string cand = md + baseName + ".sav";
+            if (destinations.find(cand) == destinations.end()) {
+                struct stat cst;
+                if (stat(cand.c_str(), &cst) == 0) {
+                    writePayloadToFile(cand);
+                    destinations.insert(cand);
                 }
+            }
+        }
+
+        // 4. In case mGBA has an old savestate (.ss0 / .state) that autoloads, backup stale states
+        std::vector<std::string> stateExts = {".ss0", ".ss1", ".state"};
+        for (const auto& sext : stateExts) {
+            std::string stateFile = dir + "/" + baseName + sext;
+            struct stat sst;
+            if (stat(stateFile.c_str(), &sst) == 0) {
+                std::string bakFile = stateFile + ".bak";
+                remove(bakFile.c_str());
+                rename(stateFile.c_str(), bakFile.c_str());
             }
         }
     }
