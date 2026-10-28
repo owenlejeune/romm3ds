@@ -33,6 +33,12 @@ enum class LocalFilterMode {
     HIDDEN
 };
 
+enum class LocalSortMode {
+    TITLE,
+    CONSOLE,
+    SAVE_STATUS
+};
+
 class UIManager {
 public:
     UIManager();
@@ -61,6 +67,7 @@ public:
     void updateLocalFilteredList();
     void updateRemoteFilteredList();
     void cycleLocalFilterMode();
+    void cycleLocalSortMode();
     void toggleIgnoreSelected();
 
 private:
@@ -138,8 +145,14 @@ private:
 
     int m_conflictChoiceIndex = 0;
     size_t m_conflictGameIndex = 0;
+    bool m_batchSyncActive = false;
+    size_t m_batchSyncIndex = 0;
+    size_t m_batchSyncSuccessCount = 0;
+
+    void processBatchSync();
 
     LocalFilterMode m_localFilterMode = LocalFilterMode::ALL;
+    LocalSortMode m_localSortMode = LocalSortMode::TITLE;
     std::string m_localFilterText;
     std::vector<size_t> m_filteredLocalIndices;
 

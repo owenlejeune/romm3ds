@@ -4,6 +4,7 @@
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
 #include <cstdio>
+#include <sys/stat.h>
 
 #if defined(__3DS__) || defined(_3DS)
 #include <3ds.h>
@@ -492,6 +493,12 @@ NetworkResult NetworkManager::uploadSave(uint64_t gameId, const std::string& fil
 
     if (!s_networkInitialized) {
         result.errorMessage = "Network is not initialized.";
+        return result;
+    }
+
+    struct stat fileStat;
+    if (filePath.empty() || stat(filePath.c_str(), &fileStat) != 0 || !S_ISREG(fileStat.st_mode)) {
+        result.errorMessage = "Save file does not exist or is a directory: " + filePath;
         return result;
     }
 

@@ -6,8 +6,11 @@
 #include <cstring>
 #include <dirent.h>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <nlohmann/json.hpp>
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace RomM3DS {
 
@@ -22,10 +25,103 @@ void clearDirectory(const std::string& dirPath) {
     while ((ent = readdir(d)) != nullptr) {
         if (std::strcmp(ent->d_name, ".") != 0 && std::strcmp(ent->d_name, "..") != 0) {
             std::string fullPath = dirPath + "/" + ent->d_name;
-            remove(fullPath.c_str());
+            struct stat st;
+            if (stat(fullPath.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
+                clearDirectory(fullPath);
+                rmdir(fullPath.c_str());
+            } else {
+                remove(fullPath.c_str());
+            }
         }
     }
     closedir(d);
+}
+
+std::string findRegularSaveFile(const std::string& dirPath, const std::string& preferredName = "") {
+    if (!preferredName.empty()) {
+        std::string directPreferred = dirPath + "/" + preferredName;
+        struct stat st;
+        if (stat(directPreferred.c_str(), &st) == 0 && S_ISREG(st.st_mode)) {
+            return directPreferred;
+        }
+    }
+
+    std::string directMain = dirPath + "/main";
+    struct stat mainSt;
+    if (stat(directMain.c_str(), &mainSt) == 0 && S_ISREG(mainSt.st_mode)) {
+        return directMain;
+    }
+
+    std::vector<std::string> regularFiles;
+    std::function<void(const std::string&)> scanDir = [&](const std::string& currentDir) {
+        DIR* d = opendir(currentDir.c_str());
+        if (!d) return;
+
+        struct dirent* ent = nullptr;
+        while ((ent = readdir(d)) != nullptr) {
+            if (std::strcmp(ent->d_name, ".") == 0 || std::strcmp(ent->d_name, "..") == 0) {
+                continue;
+            }
+            std::string fullPath = currentDir + "/" + ent->d_name;
+            struct stat st;
+            if (stat(fullPath.c_str(), &st) != 0) {
+                continue;
+            }
+            if (S_ISDIR(st.st_mode)) {
+                scanDir(fullPath);
+            } else if (S_ISREG(st.st_mode)) {
+                regularFiles.push_back(fullPath);
+            }
+        }
+        closedir(d);
+    };
+
+    scanDir(dirPath);
+
+    if (regularFiles.empty()) {
+        return "";
+    }
+
+    if (regularFiles.size() == 1) {
+        return regularFiles[0];
+    }
+
+    for (const auto& f : regularFiles) {
+        size_t pos = f.find_last_of("/\\");
+        std::string name = (pos != std::string::npos) ? f.substr(pos + 1) : f;
+        if (name == "main") return f;
+    }
+
+    if (!preferredName.empty()) {
+        for (const auto& f : regularFiles) {
+            size_t pos = f.find_last_of("/\\");
+            std::string name = (pos != std::string::npos) ? f.substr(pos + 1) : f;
+            if (name == preferredName) return f;
+        }
+    }
+
+    for (const auto& f : regularFiles) {
+        size_t pos = f.find_last_of('.');
+        if (pos != std::string::npos) {
+            std::string ext = f.substr(pos);
+            for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (ext == ".sav" || ext == ".srm" || ext == ".dat") {
+                return f;
+            }
+        }
+    }
+
+    std::string largestFile = regularFiles[0];
+    off_t maxSize = 0;
+    for (const auto& f : regularFiles) {
+        struct stat st;
+        if (stat(f.c_str(), &st) == 0 && st.st_size > maxSize) {
+            maxSize = st.st_size;
+            largestFile = f;
+        }
+    }
+
+    return largestFile;
 }
 
 } // namespace
@@ -235,6 +331,12 @@ bool SyncManager::loadGamesForPlatform(uint64_t platformId, const std::string& p
             m_remoteGames.push_back(fg);
         }
     }
+
+    std::sort(m_remoteGames.begin(), m_remoteGames.end(), [](const RommGame& a, const RommGame& b) {
+        int cmp = strcasecmp(a.title.c_str(), b.title.c_str());
+        if (cmp != 0) return cmp < 0;
+        return a.id < b.id;
+    });
 
     m_loadedPlatforms.insert(key);
 
@@ -495,6 +597,12 @@ bool SyncManager::refresh() {
         m_items.push_back(item);
     }
 
+    std::sort(m_items.begin(), m_items.end(), [](const SyncItem& a, const SyncItem& b) {
+        int cmp = strcasecmp(a.localTitle.name.c_str(), b.localTitle.name.c_str());
+        if (cmp != 0) return cmp < 0;
+        return a.localTitle.titleIdHex < b.localTitle.titleIdHex;
+    });
+
     if (m_configMgr) {
         m_configMgr->saveMappings();
     }
@@ -608,29 +716,6 @@ bool SyncManager::forceUpload(SyncItem& item, LogCallback log) {
         return false;
     }
 
-    std::string targetFile;
-    DIR* d = opendir(stagingDir.c_str());
-    if (d) {
-        struct dirent* ent = nullptr;
-        while ((ent = readdir(d)) != nullptr) {
-            if (std::strcmp(ent->d_name, ".") != 0 && std::strcmp(ent->d_name, "..") != 0) {
-                targetFile = stagingDir + "/" + ent->d_name;
-                break;
-            }
-        }
-        closedir(d);
-    }
-
-    if (targetFile.empty()) {
-        emit("[ERROR] No save files found in dump directory.");
-        m_lastMessage = "No save files found in dump directory.";
-        return false;
-    }
-
-    struct stat tst;
-    long saveSize = (stat(targetFile.c_str(), &tst) == 0) ? (long)tst.st_size : 0;
-    emit("Prepared save file: " + targetFile + " (" + std::to_string(saveSize) + " B)");
-
     std::string remoteFileName;
     // 1. If RomM already has a save for this ROM, match that exact filename
     std::vector<RommSave> existingSaves;
@@ -646,7 +731,25 @@ bool SyncManager::forceUpload(SyncItem& item, LogCallback log) {
         if (!existingSaves[0].fileName.empty()) {
             remoteFileName = existingSaves[0].fileName;
         }
-    } else {
+    }
+
+    std::string targetFile = findRegularSaveFile(stagingDir, remoteFileName);
+    if (targetFile.empty()) {
+        emit("[ERROR] No valid regular save file found in dump directory.");
+        m_lastMessage = "No save files found in dump directory.";
+        return false;
+    }
+
+    struct stat tst;
+    if (stat(targetFile.c_str(), &tst) != 0 || !S_ISREG(tst.st_mode)) {
+        emit("[ERROR] Selected save path is not a valid regular file: " + targetFile);
+        m_lastMessage = "Selected save path is not a regular file.";
+        return false;
+    }
+    long saveSize = static_cast<long>(tst.st_size);
+    emit("Prepared save file: " + targetFile + " (" + std::to_string(saveSize) + " B)");
+
+    if (remoteFileName.empty()) {
         // 2. Otherwise determine appropriate filename
         size_t slashPos = targetFile.find_last_of("/\\");
         std::string localBaseName = (slashPos != std::string::npos) ? targetFile.substr(slashPos + 1) : targetFile;
@@ -761,16 +864,10 @@ bool SyncManager::forceDownload(SyncItem& item, LogCallback log) {
             localFileName = saves[0].fileName;
         }
     } else if (item.localTitle.console != "3DS") {
-        DIR* d = opendir(stagingDir.c_str());
-        if (d) {
-            struct dirent* ent = nullptr;
-            while ((ent = readdir(d)) != nullptr) {
-                if (std::strcmp(ent->d_name, ".") != 0 && std::strcmp(ent->d_name, "..") != 0) {
-                    localFileName = ent->d_name;
-                    break;
-                }
-            }
-            closedir(d);
+        std::string existingRegular = findRegularSaveFile(stagingDir, saves[0].fileName);
+        if (!existingRegular.empty()) {
+            size_t slashPos = existingRegular.find_last_of("/\\");
+            localFileName = (slashPos != std::string::npos) ? existingRegular.substr(slashPos + 1) : existingRegular;
         }
         if (localFileName == "main" && !saves[0].fileName.empty()) {
             localFileName = saves[0].fileName;

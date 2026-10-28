@@ -51,6 +51,15 @@ const char* getFilterModeName(LocalFilterMode mode) {
     return "All";
 }
 
+const char* getSortModeName(LocalSortMode mode) {
+    switch (mode) {
+        case LocalSortMode::TITLE:       return "Title";
+        case LocalSortMode::CONSOLE:     return "Console";
+        case LocalSortMode::SAVE_STATUS: return "Save";
+    }
+    return "Title";
+}
+
 } // namespace
 
 UIManager::UIManager() = default;
@@ -185,6 +194,33 @@ void UIManager::updateLocalFilteredList() {
         m_filteredLocalIndices.push_back(i);
     }
 
+    std::sort(m_filteredLocalIndices.begin(), m_filteredLocalIndices.end(), [&](size_t a, size_t b) {
+        const auto& itemA = items[a];
+        const auto& itemB = items[b];
+
+        if (m_localSortMode == LocalSortMode::CONSOLE) {
+            int cCmp = strcasecmp(itemA.localTitle.console.c_str(), itemB.localTitle.console.c_str());
+            if (cCmp != 0) return cCmp < 0;
+            int nCmp = strcasecmp(itemA.localTitle.name.c_str(), itemB.localTitle.name.c_str());
+            if (nCmp != 0) return nCmp < 0;
+            return itemA.localTitle.titleIdHex < itemB.localTitle.titleIdHex;
+        } else if (m_localSortMode == LocalSortMode::SAVE_STATUS) {
+            bool aHas = itemA.localTitle.hasSave || itemA.remoteHasSave;
+            bool bHas = itemB.localTitle.hasSave || itemB.remoteHasSave;
+            if (aHas != bHas) return aHas > bHas;
+            time_t aTime = std::max(itemA.localTitle.saveTime, itemA.remoteSaveTime);
+            time_t bTime = std::max(itemB.localTitle.saveTime, itemB.remoteSaveTime);
+            if (aTime != bTime) return aTime > bTime;
+            int nCmp = strcasecmp(itemA.localTitle.name.c_str(), itemB.localTitle.name.c_str());
+            if (nCmp != 0) return nCmp < 0;
+            return itemA.localTitle.titleIdHex < itemB.localTitle.titleIdHex;
+        } else { // LocalSortMode::TITLE (default)
+            int cmp = strcasecmp(itemA.localTitle.name.c_str(), itemB.localTitle.name.c_str());
+            if (cmp != 0) return cmp < 0;
+            return itemA.localTitle.titleIdHex < itemB.localTitle.titleIdHex;
+        }
+    });
+
     if (m_selectedGameIndex >= m_filteredLocalIndices.size()) {
         m_selectedGameIndex = m_filteredLocalIndices.empty() ? 0 : m_filteredLocalIndices.size() - 1;
     }
@@ -218,6 +254,12 @@ void UIManager::updateRemoteFilteredList() {
         m_filteredRemoteIndices.push_back(i);
     }
 
+    std::sort(m_filteredRemoteIndices.begin(), m_filteredRemoteIndices.end(), [&](size_t a, size_t b) {
+        int cmp = strcasecmp(remote[a].title.c_str(), remote[b].title.c_str());
+        if (cmp != 0) return cmp < 0;
+        return remote[a].id < remote[b].id;
+    });
+
     if (m_selectedRemoteIndex >= m_filteredRemoteIndices.size()) {
         m_selectedRemoteIndex = m_filteredRemoteIndices.empty() ? 0 : m_filteredRemoteIndices.size() - 1;
     }
@@ -239,6 +281,21 @@ void UIManager::cycleLocalFilterMode() {
             break;
         case LocalFilterMode::HIDDEN:
             m_localFilterMode = LocalFilterMode::ALL;
+            break;
+    }
+    updateLocalFilteredList();
+}
+
+void UIManager::cycleLocalSortMode() {
+    switch (m_localSortMode) {
+        case LocalSortMode::TITLE:
+            m_localSortMode = LocalSortMode::CONSOLE;
+            break;
+        case LocalSortMode::CONSOLE:
+            m_localSortMode = LocalSortMode::SAVE_STATUS;
+            break;
+        case LocalSortMode::SAVE_STATUS:
+            m_localSortMode = LocalSortMode::TITLE;
             break;
     }
     updateLocalFilteredList();
@@ -358,31 +415,65 @@ void UIManager::syncAllGames() {
         return;
     }
 
+    m_batchSyncActive = true;
+    m_batchSyncIndex = 0;
+    m_batchSyncSuccessCount = 0;
+
     openOperationLog("Batch Sync");
+    processBatchSync();
+}
+
+void UIManager::processBatchSync() {
+    if (!m_syncMgr || !m_batchSyncActive) {
+        return;
+    }
+
     auto logger = [this](const std::string& msg) {
         addOperationLog(msg);
     };
 
-    size_t count = 0;
-    for (size_t i = 0; i < m_syncMgr->getItems().size(); ++i) {
-        SyncItem& item = m_syncMgr->getItems()[i];
+    while (m_batchSyncIndex < m_syncMgr->getItems().size()) {
+        SyncItem& item = m_syncMgr->getItems()[m_batchSyncIndex];
         if (item.isIgnored || !item.isMatched) {
+            m_batchSyncIndex++;
             continue;
         }
 
         SyncAction act = m_syncMgr->evaluateItem(item);
-        if (act == SyncAction::CONFLICT) {
-            logger("[WARN] Skipping conflict for: " + item.localTitle.name + " (resolve individually)");
+        if (act == SyncAction::NO_SAVES) {
+            // Skip any games with no saves
+            m_batchSyncIndex++;
             continue;
         }
 
-        if (m_syncMgr->syncItem(item, ConflictChoice::OVERWRITE_LOCAL, logger)) {
-            count++;
+        if (act == SyncAction::CONFLICT) {
+            // Show conflict resolution UI before sync continues
+            m_conflictGameIndex = m_batchSyncIndex;
+            time_t localTime = item.localTitle.saveTime;
+            time_t remoteTime = item.remoteSaveTime != 0 ? item.remoteSaveTime : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
+            if (remoteTime > localTime) {
+                m_conflictChoiceIndex = 0;
+            } else if (localTime > remoteTime) {
+                m_conflictChoiceIndex = 1;
+            } else {
+                m_conflictChoiceIndex = 0;
+            }
+
+            // Hide the log dialog so the conflict UI is visible
+            m_showLogDialog = false;
+            m_state = UIState::CONFLICT_PROMPT;
+            return;
         }
+
+        if (m_syncMgr->syncItem(item, ConflictChoice::OVERWRITE_LOCAL, logger)) {
+            m_batchSyncSuccessCount++;
+        }
+        m_batchSyncIndex++;
     }
 
-    logger("Batch sync finished (" + std::to_string(count) + " games synced).");
-    m_statusMessage = "Batch sync complete (" + std::to_string(count) + " games synced).";
+    m_batchSyncActive = false;
+    logger("Batch sync finished (" + std::to_string(m_batchSyncSuccessCount) + " games synced).");
+    m_statusMessage = "Batch sync complete (" + std::to_string(m_batchSyncSuccessCount) + " games synced).";
     finishOperationLog();
     updateLocalFilteredList();
 }
@@ -507,6 +598,7 @@ void UIManager::confirmManualMatch() {
 void UIManager::resolveConflict(int choice) {
     if (!m_syncMgr || m_conflictGameIndex >= m_syncMgr->getItems().size()) {
         m_state = UIState::MAIN_MENU;
+        m_batchSyncActive = false;
         return;
     }
 
@@ -514,6 +606,32 @@ void UIManager::resolveConflict(int choice) {
     ConflictChoice cChoice = (choice == 0) ? ConflictChoice::OVERWRITE_LOCAL :
                              (choice == 1) ? ConflictChoice::OVERWRITE_REMOTE :
                                              ConflictChoice::SKIP;
+
+    if (m_batchSyncActive) {
+        m_state = UIState::MAIN_MENU;
+        m_showLogDialog = true;
+        m_operationInProgress = true;
+        render();
+        render();
+
+        auto logger = [this](const std::string& msg) {
+            addOperationLog(msg);
+        };
+
+        if (cChoice == ConflictChoice::SKIP) {
+            addOperationLog("[WARN] Skipped conflict for: " + item.localTitle.name);
+        } else {
+            std::string actionName = (choice == 0) ? "Overwrite Local" : "Overwrite Remote";
+            addOperationLog("[Sync] Resolving conflict for " + item.localTitle.name + " (" + actionName + ")...");
+            if (m_syncMgr->syncItem(item, cChoice, logger)) {
+                m_batchSyncSuccessCount++;
+            }
+        }
+
+        m_batchSyncIndex++;
+        processBatchSync();
+        return;
+    }
 
     if (cChoice == ConflictChoice::SKIP) {
         m_statusMessage = "Skipped conflict for " + item.localTitle.name;
@@ -533,6 +651,7 @@ void UIManager::resolveConflict(int choice) {
     m_statusMessage = m_syncMgr->getLastMessage();
     m_state = UIState::MAIN_MENU;
     finishOperationLog();
+    updateLocalFilteredList();
 }
 
 void UIManager::handleInput(u32 kDown, const touchPosition& touch) {
@@ -542,6 +661,7 @@ void UIManager::handleInput(u32 kDown, const touchPosition& touch) {
                 m_showLogDialog = false;
                 m_operationLogs.clear();
                 m_logScrollOffset = 0;
+                m_batchSyncActive = false;
                 updateLocalFilteredList();
                 return;
             }
@@ -550,6 +670,7 @@ void UIManager::handleInput(u32 kDown, const touchPosition& touch) {
                     m_showLogDialog = false;
                     m_operationLogs.clear();
                     m_logScrollOffset = 0;
+                    m_batchSyncActive = false;
                     updateLocalFilteredList();
                     return;
                 }
@@ -637,7 +758,9 @@ void UIManager::handleInput(u32 kDown, const touchPosition& touch) {
         }
 
         if (kDown & KEY_TOUCH) {
-            if (isTouchInside(touch, 212.0f, 7.0f, 92.0f, 20.0f)) {
+            if (isTouchInside(touch, 124.0f, 7.0f, 84.0f, 20.0f)) {
+                cycleLocalSortMode();
+            } else if (isTouchInside(touch, 212.0f, 7.0f, 92.0f, 20.0f)) {
                 cycleLocalFilterMode();
             } else if (isTouchInside(touch, 16.0f, 30.0f, 230.0f, 22.0f)) {
                 std::string q = launchKeyboard("Search installed games...", m_localFilterText, 64);
@@ -1198,7 +1321,7 @@ void UIManager::renderMainMenuTop() {
                                "  (A) Sync Selected       (X) Batch Sync All\n"
                                "  (L) Force Upload Save   (R) Force Download Save\n"
                                "  (SELECT) RomM Library   (Y) Search Filter\n"
-                               "  (D-Pad L/R) Prev/Next Page | Tap [Hide] to ignore app";
+                               "  (D-Pad L/R) Prev/Next Page | Tap [Sort] / [Filter] to toggle";
         C2D_Text ctrlText;
         C2D_TextParse(&ctrlText, m_textBuf, controls.c_str());
         C2D_TextOptimize(&ctrlText);
@@ -1206,11 +1329,12 @@ void UIManager::renderMainMenuTop() {
     } else {
         C2D_Text emptyText;
         std::string msg = "No installed titles match the current filter.\n\n"
-                          "- Filter Mode: " + std::string(getFilterModeName(m_localFilterMode)) + "\n";
+                          "- Filter Mode: " + std::string(getFilterModeName(m_localFilterMode)) + "\n"
+                          "- Sort Mode: " + std::string(getSortModeName(m_localSortMode)) + "\n";
         if (!m_localFilterText.empty()) {
             msg += "- Search Query: \"" + m_localFilterText + "\"\n";
         }
-        msg += "\nTap [Clr] or [Mode] to reset view, or (START) to exit.";
+        msg += "\nTap [Clr], [Sort], or [Filter] to reset view, or (START) to exit.";
         C2D_TextParse(&emptyText, m_textBuf, msg.c_str());
         C2D_TextOptimize(&emptyText);
         C2D_DrawText(&emptyText, C2D_WithColor, 16.0f, 65.0f, 0.5f, 0.48f, 0.48f, CLR_TEXT_MUTED);
@@ -1226,7 +1350,10 @@ void UIManager::renderMainMenuBottom() {
     C2D_Text titleText;
     C2D_TextParse(&titleText, m_textBuf, header.c_str());
     C2D_TextOptimize(&titleText);
-    C2D_DrawText(&titleText, C2D_WithColor, 16.0f, 9.0f, 0.5f, 0.48f, 0.48f, CLR_TEXT_WHITE);
+    C2D_DrawText(&titleText, C2D_WithColor, 16.0f, 9.0f, 0.5f, 0.44f, 0.44f, CLR_TEXT_WHITE);
+
+    std::string sortLabel = std::string(getSortModeName(m_localSortMode));
+    drawButton(124.0f, 7.0f, 84.0f, 20.0f, sortLabel.c_str(), false, CLR_BORDER_OFF);
 
     std::string modeLabel = std::string(getFilterModeName(m_localFilterMode));
     u32 modeColor = (m_localFilterMode == LocalFilterMode::HIDDEN) ? CLR_YELLOW : CLR_ACCENT;
@@ -1673,7 +1800,8 @@ void UIManager::renderConflictBottom() {
     C2D_DrawRectSolid(8.0f, 6.0f, 0.5f, RomM3DS::SCREEN_BOTTOM_WIDTH - 16.0f, RomM3DS::SCREEN_BOTTOM_HEIGHT - 12.0f, CLR_CARD);
 
     C2D_Text promptText;
-    C2D_TextParse(&promptText, m_textBuf, "Select Resolution Action:");
+    std::string promptStr = m_batchSyncActive ? "Batch Sync Conflict Action:" : "Select Resolution Action:";
+    C2D_TextParse(&promptText, m_textBuf, promptStr.c_str());
     C2D_TextOptimize(&promptText);
     C2D_DrawText(&promptText, C2D_WithColor, 16.0f, 14.0f, 0.5f, 0.55f, 0.55f, CLR_TEXT_WHITE);
 
@@ -1689,10 +1817,11 @@ void UIManager::renderConflictBottom() {
 
     std::string btnLocal = remoteIsNewer ? "[ Overwrite Local (Remote is Newer) * ]" : "[ Overwrite Local (Use Remote Save) ]";
     std::string btnRemote = localIsNewer ? "[ Overwrite Remote (Local is Newer) * ]" : "[ Overwrite Remote (Use Local Save) ]";
+    std::string btnSkip = m_batchSyncActive ? "[ Skip & Continue Batch Sync ]" : "[ Skip This Game ]";
 
     drawButton(16.0f, 44.0f, 288.0f, 32.0f, btnLocal.c_str(), m_conflictChoiceIndex == 0);
     drawButton(16.0f, 84.0f, 288.0f, 32.0f, btnRemote.c_str(), m_conflictChoiceIndex == 1);
-    drawButton(16.0f, 124.0f, 288.0f, 32.0f, "[ Skip This Game ]", m_conflictChoiceIndex == 2);
+    drawButton(16.0f, 124.0f, 288.0f, 32.0f, btnSkip.c_str(), m_conflictChoiceIndex == 2);
 
     C2D_Text guideText;
     C2D_TextParse(&guideText, m_textBuf, "Use D-Pad Up/Down + (A) or tap with stylus.");

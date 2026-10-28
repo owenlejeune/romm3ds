@@ -208,12 +208,12 @@ bool SaveManager::copyArchiveDirToFs(uint64_t archiveHandle, const std::string& 
     ConfigManager::ensureDirectories(fsDestPath + "/");
 
     constexpr u32 ENTRY_COUNT = 32;
-    FS_DirectoryEntry entries[ENTRY_COUNT];
+    std::vector<FS_DirectoryEntry> entries(ENTRY_COUNT);
     u32 readCount = 0;
 
     bool success = true;
 
-    while (R_SUCCEEDED(FSDIR_Read(dirHandle, &readCount, ENTRY_COUNT, entries)) && readCount > 0) {
+    while (R_SUCCEEDED(FSDIR_Read(dirHandle, &readCount, ENTRY_COUNT, entries.data())) && readCount > 0) {
         for (u32 i = 0; i < readCount; ++i) {
             std::string entryName = decodeUtf16(entries[i].name, 256);
             if (entryName == "." || entryName == "..") {
@@ -224,7 +224,7 @@ bool SaveManager::copyArchiveDirToFs(uint64_t archiveHandle, const std::string& 
             std::string nextFsPath = fsDestPath + "/" + entryName;
 
             if (entries[i].attributes & FS_ATTRIBUTE_DIRECTORY) {
-                mkdir(nextFsPath.c_str(), 0777);
+                ConfigManager::ensureDirectories(nextFsPath + "/");
                 if (!copyArchiveDirToFs(archiveHandle, nextArchivePath, nextFsPath)) {
                     success = false;
                 }
@@ -236,6 +236,7 @@ bool SaveManager::copyArchiveDirToFs(uint64_t archiveHandle, const std::string& 
                     continue;
                 }
 
+                ConfigManager::ensureDirectories(nextFsPath);
                 FILE* dstFile = fopen(nextFsPath.c_str(), "wb");
                 if (!dstFile) {
                     FSFILE_Close(srcFile);
