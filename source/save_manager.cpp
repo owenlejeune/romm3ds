@@ -13,6 +13,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <fstream>
+#include <png.h>
 
 #if defined(__3DS__) || defined(_3DS)
 #include <3ds.h>
@@ -195,6 +196,518 @@ std::string SaveManager::getTitleNameFromSmdh(uint64_t titleId, uint8_t mediaTyp
     return "";
 }
 
+namespace {
+
+inline uint32_t picaTileOffset(int px, int py) {
+    return ((py & 4) << 3) | ((px & 4) << 2) |
+           ((py & 2) << 2) | ((px & 2) << 1) |
+           ((py & 1) << 1) | (px & 1);
+}
+
+bool extractNdsBannerIcon(const std::string& romPath, std::vector<uint8_t>& outIconData) {
+    FILE* f = fopen(romPath.c_str(), "rb");
+    if (!f) return false;
+
+    fseek(f, 0, SEEK_END);
+    long fsize = ftell(f);
+    if (fsize < 0x200) {
+        fclose(f);
+        return false;
+    }
+
+    if (fseek(f, 0x68, SEEK_SET) != 0) {
+        fclose(f);
+        return false;
+    }
+
+    uint32_t bannerOffset = 0;
+    if (fread(&bannerOffset, sizeof(uint32_t), 1, f) != 1 || bannerOffset == 0 ||
+        bannerOffset + 0x240 > static_cast<uint32_t>(fsize)) {
+        fclose(f);
+        return false;
+    }
+
+    if (fseek(f, bannerOffset + 0x20, SEEK_SET) != 0) {
+        fclose(f);
+        return false;
+    }
+    uint8_t iconTiles[512];
+    if (fread(iconTiles, 1, 512, f) != 512) {
+        fclose(f);
+        return false;
+    }
+
+    if (fseek(f, bannerOffset + 0x220, SEEK_SET) != 0) {
+        fclose(f);
+        return false;
+    }
+    uint16_t rawPalette[16];
+    if (fread(rawPalette, sizeof(uint16_t), 16, f) != 16) {
+        fclose(f);
+        return false;
+    }
+    fclose(f);
+
+    uint16_t paletteRgb565[16];
+    paletteRgb565[0] = 0x31A9; // Background color for transparent pixels (CLR_BORDER_OFF)
+    for (int i = 1; i < 16; ++i) {
+        uint16_t bgr = rawPalette[i];
+        uint16_t r5 = bgr & 0x1F;
+        uint16_t g5 = (bgr >> 5) & 0x1F;
+        uint16_t b5 = (bgr >> 10) & 0x1F;
+        uint16_t g6 = (g5 << 1) | (g5 >> 4);
+        paletteRgb565[i] = (r5 << 11) | (g6 << 5) | b5;
+    }
+
+    outIconData.assign(0x1200, 0);
+    uint16_t* outWords = reinterpret_cast<uint16_t*>(outIconData.data());
+
+    for (int Y = 0; Y < 48; ++Y) {
+        int srcY = (Y * 32) / 48;
+        int ndsTileY = srcY / 8;
+        int ndsPy = srcY % 8;
+        int outTy = Y / 8;
+        int outPy = Y % 8;
+
+        for (int X = 0; X < 48; ++X) {
+            int srcX = (X * 32) / 48;
+            int ndsTileX = srcX / 8;
+            int ndsPx = srcX % 8;
+
+            int ndsTileIdx = ndsTileY * 4 + ndsTileX;
+            int byteOffset = ndsTileIdx * 32 + (ndsPy * 4) + (ndsPx / 2);
+            uint8_t byteVal = iconTiles[byteOffset];
+            uint8_t colorIdx = (ndsPx & 1) ? ((byteVal >> 4) & 0x0F) : (byteVal & 0x0F);
+            uint16_t color = paletteRgb565[colorIdx];
+
+            int outTx = X / 8;
+            int outPx = X % 8;
+            int outTileIdx = outTy * 6 + outTx;
+            int tileOffset = picaTileOffset(outPx, outPy);
+
+            outWords[outTileIdx * 64 + tileOffset] = color;
+        }
+    }
+
+    return true;
+}
+
+bool loadPngToTiledRgb565(const std::string& path, std::vector<uint8_t>& outIconData) {
+    FILE* fp = fopen(path.c_str(), "rb");
+    if (!fp) return false;
+
+    png_structp png = png_create_read_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
+    if (!png) { fclose(fp); return false; }
+    png_infop info = png_create_info_struct(png);
+    if (!info) { png_destroy_read_struct(&png, nullptr, nullptr); fclose(fp); return false; }
+
+    if (setjmp(png_jmpbuf(png))) {
+        png_destroy_read_struct(&png, &info, nullptr);
+        fclose(fp);
+        return false;
+    }
+
+    png_init_io(png, fp);
+    png_read_png(png, info, PNG_TRANSFORM_STRIP_16 | PNG_TRANSFORM_PACKING | PNG_TRANSFORM_EXPAND, nullptr);
+
+    int width = png_get_image_width(png, info);
+    int height = png_get_image_height(png, info);
+    png_byte color_type = png_get_color_type(png, info);
+    png_bytep* row_pointers = png_get_rows(png, info);
+
+    if (width <= 0 || height <= 0 || !row_pointers) {
+        png_destroy_read_struct(&png, &info, nullptr);
+        fclose(fp);
+        return false;
+    }
+
+    outIconData.assign(0x1200, 0);
+    uint16_t* outWords = reinterpret_cast<uint16_t*>(outIconData.data());
+
+    int channels = (color_type == PNG_COLOR_TYPE_RGBA) ? 4 : (color_type == PNG_COLOR_TYPE_RGB ? 3 : 1);
+
+    for (int Y = 0; Y < 48; ++Y) {
+        int srcY = (Y * height) / 48;
+        png_bytep row = row_pointers[srcY];
+        int outTy = Y / 8;
+        int outPy = Y % 8;
+
+        for (int X = 0; X < 48; ++X) {
+            int srcX = (X * width) / 48;
+            uint8_t r = 0, g = 0, b = 0, a = 255;
+            if (channels >= 3) {
+                r = row[srcX * channels];
+                g = row[srcX * channels + 1];
+                b = row[srcX * channels + 2];
+                if (channels == 4) a = row[srcX * channels + 3];
+            } else {
+                r = g = b = row[srcX];
+            }
+
+            uint16_t rgb565;
+            if (a < 64) {
+                rgb565 = 0x31A9;
+            } else {
+                uint16_t r5 = (r * 31 + 127) / 255;
+                uint16_t g6 = (g * 63 + 127) / 255;
+                uint16_t b5 = (b * 31 + 127) / 255;
+                rgb565 = (r5 << 11) | (g6 << 5) | b5;
+            }
+
+            int outTx = X / 8;
+            int outPx = X % 8;
+            int outTileIdx = outTy * 6 + outTx;
+            int tileOffset = picaTileOffset(outPx, outPy);
+
+            outWords[outTileIdx * 64 + tileOffset] = rgb565;
+        }
+    }
+
+    png_destroy_read_struct(&png, &info, nullptr);
+    fclose(fp);
+    return true;
+}
+
+bool generateConsoleBadgeIcon(const std::string& console, std::vector<uint8_t>& outIconData) {
+    uint16_t grid[48][48];
+    constexpr uint16_t BG_COLOR = 0x31A9; // Matches CLR_BORDER_OFF
+    for (int y = 0; y < 48; ++y) {
+        for (int x = 0; x < 48; ++x) {
+            grid[y][x] = BG_COLOR;
+        }
+    }
+
+    std::string upperConsole = console;
+    for (char& c : upperConsole) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+
+    if (upperConsole == "GBA" || upperConsole == "AGB") {
+        constexpr uint16_t BODY_COLOR = 0x49F1;
+        constexpr uint16_t BODY_DARK  = 0x316B;
+        constexpr uint16_t GRIP_COLOR = 0x290C;
+        constexpr uint16_t LABEL_BG   = 0x08A6;
+        constexpr uint16_t LABEL_EDGE = 0xBDF7;
+        constexpr uint16_t TEXT_COLOR = 0xFFFF;
+        constexpr uint16_t TEXT_SHAD  = 0x52AA;
+
+        for (int y = 6; y <= 42; ++y) {
+            for (int x = 5; x <= 42; ++x) {
+                if ((y == 6 && (x <= 6 || x >= 41)) ||
+                    (y == 7 && (x == 5 || x == 42)) ||
+                    (y == 42 && (x <= 6 || x >= 41)) ||
+                    (y == 41 && (x == 5 || x == 42))) {
+                    continue;
+                }
+                grid[y][x] = (x == 42 || y == 42) ? BODY_DARK : BODY_COLOR;
+            }
+        }
+        for (int y = 8; y <= 10; ++y) {
+            for (int x = 10; x <= 37; ++x) {
+                grid[y][x] = GRIP_COLOR;
+            }
+        }
+        for (int y = 14; y <= 37; ++y) {
+            for (int x = 8; x <= 39; ++x) {
+                if (x == 8 || x == 39 || y == 14 || y == 37) {
+                    grid[y][x] = LABEL_EDGE;
+                } else {
+                    grid[y][x] = LABEL_BG;
+                }
+            }
+        }
+        static const char* fontGBA[7] = {
+            " ###   ####    ### ",
+            "#   #  #   #  #   #",
+            "#      #   #  #   #",
+            "# ###  ####   #####",
+            "#   #  #   #  #   #",
+            "#   #  #   #  #   #",
+            " ###   ####   #   #"
+        };
+        for (int r = 0; r < 7; ++r) {
+            for (int c = 0; c < 19; ++c) {
+                if (fontGBA[r][c] == '#') {
+                    grid[23 + r][15 + c] = TEXT_COLOR;
+                    if (grid[24 + r][16 + c] == LABEL_BG) {
+                        grid[24 + r][16 + c] = TEXT_SHAD;
+                    }
+                }
+            }
+        }
+    } else if (upperConsole == "DS" || upperConsole == "NDS") {
+        constexpr uint16_t BODY_COLOR = 0x2965;
+        constexpr uint16_t BODY_DARK  = 0x18C3;
+        constexpr uint16_t LABEL_BG   = 0xF7DE;
+        constexpr uint16_t LABEL_EDGE = 0x8C71;
+        constexpr uint16_t TEXT_COLOR = 0xB000;
+        constexpr uint16_t TEXT_DARK  = 0x2104;
+
+        for (int y = 6; y <= 42; ++y) {
+            for (int x = 6; x <= 41; ++x) {
+                if ((y == 6 && (x <= 7 || x >= 40)) ||
+                    (y == 42 && (x <= 7 || x >= 40))) {
+                    continue;
+                }
+                grid[y][x] = (x == 41 || y == 42) ? BODY_DARK : BODY_COLOR;
+            }
+        }
+        for (int y = 6; y <= 9; ++y) {
+            for (int x = 16; x <= 31; ++x) {
+                grid[y][x] = BODY_DARK;
+            }
+        }
+        for (int y = 14; y <= 38; ++y) {
+            for (int x = 9; x <= 38; ++x) {
+                if (x == 9 || x == 38 || y == 14 || y == 38) {
+                    grid[y][x] = LABEL_EDGE;
+                } else {
+                    grid[y][x] = LABEL_BG;
+                }
+            }
+        }
+        static const char* fontDS[7] = {
+            "####    #### ",
+            "#   #  #     ",
+            "#   #   ###  ",
+            "#   #      # ",
+            "#   #      # ",
+            "#   #  #   # ",
+            "####    ###  "
+        };
+        for (int r = 0; r < 7; ++r) {
+            for (int c = 0; c < 13; ++c) {
+                if (fontDS[r][c] == '#') {
+                    grid[23 + r][18 + c] = (c < 6) ? TEXT_COLOR : TEXT_DARK;
+                }
+            }
+        }
+    } else {
+        constexpr uint16_t BODY_COLOR = 0xCE79;
+        constexpr uint16_t BODY_DARK  = 0x8410;
+        constexpr uint16_t LABEL_BG   = 0x18C5;
+        constexpr uint16_t LABEL_EDGE = 0x4A69;
+        constexpr uint16_t TEXT_COLOR = 0xFFFF;
+
+        for (int y = 6; y <= 42; ++y) {
+            for (int x = 6; x <= 41; ++x) {
+                if ((y == 6 && (x <= 7 || x >= 40)) ||
+                    (y == 42 && (x <= 7 || x >= 40))) {
+                    continue;
+                }
+                grid[y][x] = (x == 41 || y == 42) ? BODY_DARK : BODY_COLOR;
+            }
+        }
+        for (int y = 14; y <= 38; ++y) {
+            for (int x = 9; x <= 38; ++x) {
+                if (x == 9 || x == 38 || y == 14 || y == 38) {
+                    grid[y][x] = LABEL_EDGE;
+                } else {
+                    grid[y][x] = LABEL_BG;
+                }
+            }
+        }
+        for (int r = 0; r < 5; ++r) {
+            grid[24 + r][23] = TEXT_COLOR;
+            grid[24 + r][24] = TEXT_COLOR;
+        }
+    }
+
+    outIconData.assign(0x1200, 0);
+    uint16_t* outWords = reinterpret_cast<uint16_t*>(outIconData.data());
+    for (int Y = 0; Y < 48; ++Y) {
+        int outTy = Y / 8;
+        int outPy = Y % 8;
+        for (int X = 0; X < 48; ++X) {
+            int outTx = X / 8;
+            int outPx = X % 8;
+            int outTileIdx = outTy * 6 + outTx;
+            int tileOffset = picaTileOffset(outPx, outPy);
+            outWords[outTileIdx * 64 + tileOffset] = grid[Y][X];
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+bool SaveManager::getTitleIcon(const InstalledTitle& title, std::vector<uint8_t>& outIconData) {
+    outIconData.clear();
+
+    // 1. For installed CTR titles (non-file ROMs with a valid titleId), query system content archive
+#if defined(__3DS__) || defined(_3DS)
+    if (!title.isFileRom && title.titleId != 0) {
+        FS_MediaType mediaTypesToTry[] = {
+            static_cast<FS_MediaType>(title.mediaType),
+            MEDIATYPE_SD,
+            MEDIATYPE_NAND
+        };
+        for (auto mType : mediaTypesToTry) {
+            u32 archPath[4] = {
+                static_cast<u32>(title.titleId & 0xFFFFFFFF),
+                static_cast<u32>((title.titleId >> 32) & 0xFFFFFFFF),
+                static_cast<u32>(mType),
+                0x00000000
+            };
+            static const u32 filePath[5] = {0x00000000, 0x00000000, 0x00000002, 0x6E6F6369, 0x00000000}; // "icon"
+
+            FS_Path apath = { PATH_BINARY, sizeof(archPath), archPath };
+            FS_Path fpath = { PATH_BINARY, sizeof(filePath), filePath };
+
+            Handle file = 0;
+            Result res = FSUSER_OpenFileDirectly(&file, ARCHIVE_SAVEDATA_AND_CONTENT, apath, fpath, FS_OPEN_READ, 0);
+            if (R_SUCCEEDED(res)) {
+                smdh_s smdh;
+                std::memset(&smdh, 0, sizeof(smdh));
+                u32 bytesRead = 0;
+                res = FSFILE_Read(file, &bytesRead, 0, &smdh, sizeof(smdh_s));
+                FSFILE_Close(file);
+
+                if (R_SUCCEEDED(res) && bytesRead >= 0x2040 && std::memcmp(smdh.magic, "SMDH", 4) == 0) {
+                    outIconData.assign(smdh.largeIcon, smdh.largeIcon + sizeof(smdh.largeIcon));
+                    return true;
+                }
+            }
+        }
+    }
+#endif
+
+    // 2. For Nintendo DS games, extract embedded banner icon from .nds/.dsi ROM
+    if (!title.romPath.empty()) {
+        std::string lowerRom = title.romPath;
+        for (char& c : lowerRom) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (lowerRom.size() >= 4 && (lowerRom.substr(lowerRom.size() - 4) == ".nds" || lowerRom.substr(lowerRom.size() - 4) == ".dsi")) {
+            if (extractNdsBannerIcon(title.romPath, outIconData)) {
+                return true;
+            }
+        }
+    }
+
+    // 3. Check for SMDH files (embedded in 3DSX or adjacent .smdh)
+    auto readSmdhFromFile = [&](const std::string& path) -> bool {
+        FILE* f = fopen(path.c_str(), "rb");
+        if (!f) return false;
+        fseek(f, 0, SEEK_END);
+        long sz = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        if (sz < 0x2040) {
+            fclose(f);
+            return false;
+        }
+
+        uint32_t header[10] = {0};
+        if (fread(header, sizeof(uint32_t), 10, f) == 10 && header[0] == 0x58534433) { // '3DSX'
+            u32 smdhOffset = header[5];
+            if (smdhOffset != 0 && fseek(f, smdhOffset, SEEK_SET) == 0) {
+#if defined(__3DS__) || defined(_3DS)
+                smdh_s smdh;
+                if (fread(&smdh, 1, sizeof(smdh_s), f) >= 0x2040 && std::memcmp(smdh.magic, "SMDH", 4) == 0) {
+                    outIconData.assign(smdh.largeIcon, smdh.largeIcon + sizeof(smdh.largeIcon));
+                    fclose(f);
+                    return true;
+                }
+#endif
+            }
+        } else {
+            fseek(f, 0, SEEK_SET);
+#if defined(__3DS__) || defined(_3DS)
+            smdh_s smdh;
+            if (fread(&smdh, 1, sizeof(smdh_s), f) >= 0x2040 && std::memcmp(smdh.magic, "SMDH", 4) == 0) {
+                outIconData.assign(smdh.largeIcon, smdh.largeIcon + sizeof(smdh.largeIcon));
+                fclose(f);
+                return true;
+            }
+#endif
+        }
+        fclose(f);
+        return false;
+    };
+
+    if (!title.romPath.empty()) {
+        if (readSmdhFromFile(title.romPath)) return true;
+        size_t dot = title.romPath.find_last_of('.');
+        if (dot != std::string::npos) {
+            if (readSmdhFromFile(title.romPath.substr(0, dot) + ".smdh")) return true;
+        }
+        size_t slash = title.romPath.find_last_of("/\\");
+        if (slash != std::string::npos) {
+            if (readSmdhFromFile(title.romPath.substr(0, slash + 1) + "icon.smdh")) return true;
+        }
+    }
+
+    if (!title.savePath.empty()) {
+        size_t slash = title.savePath.find_last_of("/\\");
+        if (slash != std::string::npos) {
+            std::string dir = title.savePath.substr(0, slash);
+            DIR* d = opendir(dir.c_str());
+            if (d) {
+                struct dirent* e = nullptr;
+                while ((e = readdir(d)) != nullptr) {
+                    if (e->d_name[0] == '.') continue;
+                    std::string fn = e->d_name;
+                    std::string lowerFn = fn;
+                    for (char& c : lowerFn) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                    if (lowerFn.size() >= 5 && (lowerFn.substr(lowerFn.size() - 5) == ".3dsx" || lowerFn.substr(lowerFn.size() - 5) == ".smdh")) {
+                        std::string cand = dir + "/" + fn;
+                        if (readSmdhFromFile(cand)) {
+                            closedir(d);
+                            return true;
+                        }
+                    }
+                    if (lowerFn.size() >= 4 && (lowerFn.substr(lowerFn.size() - 4) == ".nds" || lowerFn.substr(lowerFn.size() - 4) == ".dsi")) {
+                        std::string cand = dir + "/" + fn;
+                        if (extractNdsBannerIcon(cand, outIconData)) {
+                            closedir(d);
+                            return true;
+                        }
+                    }
+                }
+                closedir(d);
+            }
+        }
+    }
+
+    // 4. Check for PNG image files
+    auto tryPng = [&](const std::string& p) -> bool {
+        if (p.empty()) return false;
+        struct stat st;
+        if (stat(p.c_str(), &st) == 0 && st.st_size > 0) {
+            return loadPngToTiledRgb565(p, outIconData);
+        }
+        return false;
+    };
+
+    if (!title.romPath.empty()) {
+        size_t dot = title.romPath.find_last_of('.');
+        if (dot != std::string::npos) {
+            if (tryPng(title.romPath.substr(0, dot) + ".png")) return true;
+        }
+        size_t slash = title.romPath.find_last_of("/\\");
+        if (slash != std::string::npos) {
+            std::string dir = title.romPath.substr(0, slash);
+            if (tryPng(dir + "/icon.png")) return true;
+            if (tryPng(dir + "/cover.png")) return true;
+        }
+    }
+
+    if (!title.savePath.empty()) {
+        size_t slash = title.savePath.find_last_of("/\\");
+        if (slash != std::string::npos) {
+            std::string dir = title.savePath.substr(0, slash);
+            if (tryPng(dir + "/icon.png")) return true;
+            if (tryPng(dir + "/cover.png")) return true;
+        }
+    }
+
+    if (!title.name.empty()) {
+        if (tryPng("sdmc:/3ds/romm3ds/covers/" + title.name + ".png")) return true;
+        if (tryPng("sdmc:/mGBA/covers/" + title.name + ".png")) return true;
+        if (tryPng("sdmc:/mGBA/boxart/" + title.name + ".png")) return true;
+        if (tryPng("sdmc:/_nds/TWiLightMenu/boxart/" + title.name + ".png")) return true;
+    }
+
+    // 5. Fallback: generate high-quality retro console badge icon
+    return generateConsoleBadgeIcon(title.console, outIconData);
+}
+
 bool SaveManager::copyArchiveDirToFs(uint64_t archiveHandle, const std::string& archivePath, const std::string& fsDestPath) {
     FS_Archive archive = static_cast<FS_Archive>(archiveHandle);
     Handle dirHandle = 0;
@@ -349,6 +862,8 @@ uint64_t SaveManager::hashRomPath(const std::string& path) {
 
 namespace {
 
+std::vector<std::string> s_discoveredSavePaths;
+
 std::vector<std::string> getMgbaSaveDirectories() {
     static std::vector<std::string> cachedDirs;
     static bool resolved = false;
@@ -439,54 +954,171 @@ std::string SaveManager::findSaveFileForRom(const std::string& romPath, const st
     size_t dotPos = filename.find_last_of('.');
     std::string baseName = (dotPos != std::string::npos) ? filename.substr(0, dotPos) : filename;
 
-    std::vector<std::string> candidates;
+    std::string lowerBase = baseName;
+    for (char& c : lowerBase) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 
-    if (console == "GBA") {
-        // mGBA on 3DS places saves directly alongside the ROM by default
-        candidates.push_back(dir + "/" + baseName + ".sav");
-        candidates.push_back(dir + "/saves/" + baseName + ".sav");
-        candidates.push_back(dir + "/" + baseName + ".SAV");
-        candidates.push_back(dir + "/saves/" + baseName + ".SAV");
-
-        std::vector<std::string> mgbaDirs = getMgbaSaveDirectories();
-        for (const auto& md : mgbaDirs) {
-            candidates.push_back(md + baseName + ".sav");
-            candidates.push_back(md + baseName + ".SAV");
+    auto pathEqual = [](const std::string& a, const std::string& b) -> bool {
+        if (a.size() != b.size()) return false;
+        for (size_t i = 0; i < a.size(); ++i) {
+            char ca = a[i];
+            char cb = b[i];
+            if (ca == '\\') ca = '/';
+            if (cb == '\\') cb = '/';
+            if (std::tolower(static_cast<unsigned char>(ca)) != std::tolower(static_cast<unsigned char>(cb))) {
+                return false;
+            }
         }
-    } else if (console == "DS") {
-        candidates.push_back(dir + "/saves/" + baseName + ".sav");
-        candidates.push_back(dir + "/" + baseName + ".sav");
-        candidates.push_back(dir + "/saves/" + baseName + ".SAV");
-        candidates.push_back(dir + "/" + baseName + ".SAV");
-        candidates.push_back(dir + "/saves/" + baseName + ".dsv");
-        candidates.push_back(dir + "/" + baseName + ".dsv");
-    } else {
-        candidates.push_back(dir + "/" + baseName + ".sav");
-        candidates.push_back(dir + "/saves/" + baseName + ".sav");
-        candidates.push_back(dir + "/" + baseName + ".SAV");
-        candidates.push_back(dir + "/saves/" + baseName + ".SAV");
-    }
+        return true;
+    };
 
-    if (console != "GBA") {
-        candidates.push_back(dir + "/" + baseName + ".srm");
-        candidates.push_back(dir + "/saves/" + baseName + ".srm");
-        candidates.push_back(dir + "/" + baseName + ".SRM");
-        candidates.push_back(dir + "/saves/" + baseName + ".SRM");
-    }
+    auto pickNewestExisting = [](const std::vector<std::string>& paths) -> std::string {
+        std::string best;
+        time_t bestTime = 0;
+        for (const auto& p : paths) {
+            struct stat st;
+            if (stat(p.c_str(), &st) == 0 && st.st_size > 0) {
+                if (best.empty() || st.st_mtime > bestTime) {
+                    best = p;
+                    bestTime = st.st_mtime;
+                }
+            }
+        }
+        return best;
+    };
 
-    std::string bestCand;
-    time_t bestTime = 0;
-    for (const auto& cand : candidates) {
-        struct stat st;
-        if (stat(cand.c_str(), &st) == 0 && st.st_size > 0) {
-            if (bestCand.empty() || st.st_mtime > bestTime) {
-                bestCand = cand;
-                bestTime = st.st_mtime;
+    // 1. FIRST PRIORITY: Look directly in the same directory as the game ROM
+    std::vector<std::string> sameDirCandidates;
+    sameDirCandidates.push_back(dir + "/" + baseName + ".sav");
+    sameDirCandidates.push_back(dir + "/" + baseName + ".SAV");
+    if (console == "DS") {
+        sameDirCandidates.push_back(dir + "/" + baseName + ".dsv");
+        sameDirCandidates.push_back(dir + "/" + baseName + ".DSV");
+    }
+    sameDirCandidates.push_back(dir + "/" + baseName + ".srm");
+    sameDirCandidates.push_back(dir + "/" + baseName + ".SRM");
+    sameDirCandidates.push_back(dir + "/" + baseName + ".dat");
+
+    // Also check any discovered saves located directly in `dir` matching baseName case-insensitively
+    for (const auto& sp : s_discoveredSavePaths) {
+        size_t sSlash = sp.find_last_of("/\\");
+        std::string spDir = (sSlash != std::string::npos) ? sp.substr(0, sSlash) : "";
+        if (pathEqual(spDir, dir)) {
+            std::string sFname = (sSlash != std::string::npos) ? sp.substr(sSlash + 1) : sp;
+            size_t sDot = sFname.find_last_of('.');
+            std::string sBase = (sDot != std::string::npos) ? sFname.substr(0, sDot) : sFname;
+            for (char& c : sBase) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (sBase == lowerBase) {
+                sameDirCandidates.push_back(sp);
             }
         }
     }
 
-    return bestCand;
+    std::string found = pickNewestExisting(sameDirCandidates);
+    if (!found.empty()) {
+        return found;
+    }
+
+    // 2. SECOND PRIORITY: Check immediate "saves/" or "save/" subfolder in the game's directory
+    std::vector<std::string> subDirCandidates;
+    subDirCandidates.push_back(dir + "/saves/" + baseName + ".sav");
+    subDirCandidates.push_back(dir + "/saves/" + baseName + ".SAV");
+    subDirCandidates.push_back(dir + "/save/" + baseName + ".sav");
+    subDirCandidates.push_back(dir + "/save/" + baseName + ".SAV");
+    if (console == "DS") {
+        subDirCandidates.push_back(dir + "/saves/" + baseName + ".dsv");
+        subDirCandidates.push_back(dir + "/saves/" + baseName + ".DSV");
+        subDirCandidates.push_back(dir + "/save/" + baseName + ".dsv");
+    }
+    subDirCandidates.push_back(dir + "/saves/" + baseName + ".srm");
+    subDirCandidates.push_back(dir + "/saves/" + baseName + ".SRM");
+
+    std::string savesDir1 = dir + "/saves";
+    std::string savesDir2 = dir + "/save";
+    for (const auto& sp : s_discoveredSavePaths) {
+        size_t sSlash = sp.find_last_of("/\\");
+        std::string spDir = (sSlash != std::string::npos) ? sp.substr(0, sSlash) : "";
+        if (pathEqual(spDir, savesDir1) || pathEqual(spDir, savesDir2)) {
+            std::string sFname = (sSlash != std::string::npos) ? sp.substr(sSlash + 1) : sp;
+            size_t sDot = sFname.find_last_of('.');
+            std::string sBase = (sDot != std::string::npos) ? sFname.substr(0, sDot) : sFname;
+            for (char& c : sBase) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (sBase == lowerBase) {
+                subDirCandidates.push_back(sp);
+            }
+        }
+    }
+
+    found = pickNewestExisting(subDirCandidates);
+    if (!found.empty()) {
+        return found;
+    }
+
+    // 3. THIRD PRIORITY: Check parent directory or parent's "saves/" folder
+    size_t parentSlash = dir.find_last_of("/\\");
+    std::string parentDir = (parentSlash != std::string::npos) ? dir.substr(0, parentSlash) : "";
+    if (!parentDir.empty() && parentDir != "sdmc:" && parentDir != "sdmc" && parentDir != "/" && parentDir != ".") {
+        std::vector<std::string> parentCandidates;
+        parentCandidates.push_back(parentDir + "/saves/" + baseName + ".sav");
+        parentCandidates.push_back(parentDir + "/saves/" + baseName + ".SAV");
+        parentCandidates.push_back(parentDir + "/" + baseName + ".sav");
+        parentCandidates.push_back(parentDir + "/" + baseName + ".SAV");
+        if (console == "DS") {
+            parentCandidates.push_back(parentDir + "/saves/" + baseName + ".dsv");
+            parentCandidates.push_back(parentDir + "/" + baseName + ".dsv");
+        }
+        parentCandidates.push_back(parentDir + "/saves/" + baseName + ".srm");
+        parentCandidates.push_back(parentDir + "/" + baseName + ".srm");
+
+        std::string parentSavesDir = parentDir + "/saves";
+        for (const auto& sp : s_discoveredSavePaths) {
+            size_t sSlash = sp.find_last_of("/\\");
+            std::string spDir = (sSlash != std::string::npos) ? sp.substr(0, sSlash) : "";
+            if (pathEqual(spDir, parentDir) || pathEqual(spDir, parentSavesDir)) {
+                std::string sFname = (sSlash != std::string::npos) ? sp.substr(sSlash + 1) : sp;
+                size_t sDot = sFname.find_last_of('.');
+                std::string sBase = (sDot != std::string::npos) ? sFname.substr(0, sDot) : sFname;
+                for (char& c : sBase) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                if (sBase == lowerBase) {
+                    parentCandidates.push_back(sp);
+                }
+            }
+        }
+
+        found = pickNewestExisting(parentCandidates);
+        if (!found.empty()) {
+            return found;
+        }
+    }
+
+    // 4. FOURTH PRIORITY: Check emulator-specific standard directories (e.g. mGBA)
+    if (console == "GBA") {
+        std::vector<std::string> mgbaCandidates;
+        std::vector<std::string> mgbaDirs = getMgbaSaveDirectories();
+        for (const auto& md : mgbaDirs) {
+            mgbaCandidates.push_back(md + baseName + ".sav");
+            mgbaCandidates.push_back(md + baseName + ".SAV");
+        }
+        found = pickNewestExisting(mgbaCandidates);
+        if (!found.empty()) {
+            return found;
+        }
+    }
+
+    // 5. LAST RESORT: Search elsewhere across the SD card
+    std::vector<std::string> elsewhereCandidates;
+    for (const auto& sp : s_discoveredSavePaths) {
+        size_t sSlash = sp.find_last_of("/\\");
+        std::string sFname = (sSlash != std::string::npos) ? sp.substr(sSlash + 1) : sp;
+        size_t sDot = sFname.find_last_of('.');
+        std::string sBase = (sDot != std::string::npos) ? sFname.substr(0, sDot) : sFname;
+        for (char& c : sBase) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+        if (sBase == lowerBase) {
+            elsewhereCandidates.push_back(sp);
+        }
+    }
+
+    return pickNewestExisting(elsewhereCandidates);
 }
 
 std::string SaveManager::findSaveForInstalledTitle(const InstalledTitle& title) {
@@ -747,6 +1379,33 @@ std::string SaveManager::findSaveForInstalledTitle(const InstalledTitle& title) 
             }
             closedir(edDir);
         }
+
+        for (const auto& sf : s_discoveredSavePaths) {
+            size_t slash = sf.find_last_of("/\\");
+            std::string fname = (slash != std::string::npos) ? sf.substr(slash + 1) : sf;
+            std::string fLower = fname;
+            for (char& c : fLower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+            int fScore = 0;
+            std::string fClean;
+            for (char c : fname) {
+                if (std::isalnum(static_cast<unsigned char>(c))) {
+                    fClean += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                }
+            }
+
+            if (!cleanTitle.empty() && fClean.find(cleanTitle) != std::string::npos) {
+                fScore += 80;
+            }
+            for (const auto& token : titleTokens) {
+                if (fLower.find(token) != std::string::npos) fScore += 25;
+            }
+            if (fScore >= 25) {
+                struct stat st;
+                time_t mt = (stat(sf.c_str(), &st) == 0) ? st.st_mtime : 0;
+                candidates.push_back({sf, fScore, mt});
+            }
+        }
     }
 
     if (candidates.empty()) {
@@ -796,9 +1455,17 @@ void scanDirectoryRecursive(
         if (S_ISDIR(st.st_mode)) {
             std::string lowerName = name;
             for (char& c : lowerName) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            if (lowerName == "saves" || lowerName == "save" || lowerName == "cheats" ||
-                lowerName == "bios" || lowerName == "screenshots" || lowerName == "borders" ||
-                lowerName == "patch" || lowerName == "temp") {
+            if (name[0] == '.' ||
+                lowerName == "nintendo 3ds" ||
+                lowerName == "dcim" ||
+                lowerName == "$recycle.bin" ||
+                lowerName == "system volume information" ||
+                lowerName == "cheats" ||
+                lowerName == "bios" ||
+                lowerName == "screenshots" ||
+                lowerName == "borders" ||
+                lowerName == "patch" ||
+                lowerName == "temp") {
                 continue;
             }
             subdirs.push_back(fullPath);
@@ -809,6 +1476,12 @@ void scanDirectoryRecursive(
 
             std::string ext = filename.substr(dotPos);
             for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+            // Discover and index any save files across the entire SD card
+            if (ext == ".sav" || ext == ".srm" || ext == ".dsv" || ext == ".dat") {
+                s_discoveredSavePaths.push_back(fullPath);
+                continue;
+            }
 
             std::string console;
             if (ext == ".gba" || ext == ".agb") {
@@ -879,23 +1552,6 @@ void scanDirectoryRecursive(
                 fclose(f);
             }
 
-            title.savePath = SaveManager::findSaveFileForRom(fullPath, console);
-            if (!title.savePath.empty()) {
-                title.hasSave = true;
-                struct stat st;
-                if (stat(title.savePath.c_str(), &st) == 0) {
-                    title.saveTime = st.st_mtime;
-                }
-            } else {
-                title.hasSave = false;
-                std::string baseDir = dirPath;
-                if (console == "DS") {
-                    title.savePath = baseDir + "/saves/" + title.name + ".sav";
-                } else {
-                    title.savePath = baseDir + "/" + title.name + ".sav";
-                }
-            }
-
             outTitles.push_back(title);
         }
     }
@@ -912,35 +1568,56 @@ void scanDirectoryRecursive(
 std::vector<InstalledTitle> SaveManager::scanRomFiles(const std::vector<std::string>& customRomDirs) {
     std::vector<InstalledTitle> titles;
     std::set<std::string> seenRomPaths;
+    s_discoveredSavePaths.clear();
 
-    std::vector<std::string> dirsToScan;
+    // 1. Scan any user-configured custom ROM directories
     for (const auto& d : customRomDirs) {
-        if (!d.empty() && std::find(dirsToScan.begin(), dirsToScan.end(), d) == dirsToScan.end()) {
-            dirsToScan.push_back(d);
+        if (!d.empty()) {
+            scanDirectoryRecursive(d, 0, 8, titles, seenRomPaths);
         }
     }
 
-    const std::vector<std::string> defaults = {
-        "sdmc:/roms",
-        "sdmc:/mGBA",
-        "sdmc:/gba",
-        "sdmc:/nds"
-    };
+    // 2. Scan entire SD card root
+    scanDirectoryRecursive("sdmc:/", 0, 8, titles, seenRomPaths);
 
-    for (const auto& def : defaults) {
-        if (std::find(dirsToScan.begin(), dirsToScan.end(), def) == dirsToScan.end()) {
-            dirsToScan.push_back(def);
-        }
+    // Fallback if running in environment where sdmc:/ is not mounted as prefix
+    if (titles.empty() && s_discoveredSavePaths.empty()) {
+        scanDirectoryRecursive("/", 0, 8, titles, seenRomPaths);
     }
 
-    for (const auto& dirPath : dirsToScan) {
-        scanDirectoryRecursive(dirPath, 0, 4, titles, seenRomPaths);
+    // 3. Resolve save files for all discovered ROM titles
+    for (auto& title : titles) {
+        std::string foundSave = findSaveFileForRom(title.romPath, title.console);
+        if (!foundSave.empty()) {
+            title.savePath = foundSave;
+            title.hasSave = true;
+            struct stat st;
+            if (stat(foundSave.c_str(), &st) == 0) {
+                title.saveTime = st.st_mtime;
+            }
+        } else {
+            title.hasSave = false;
+            size_t slash = title.romPath.find_last_of("/\\");
+            std::string baseDir = (slash != std::string::npos) ? title.romPath.substr(0, slash) : ".";
+            if (title.console == "DS") {
+                struct stat stSaves;
+                if (stat((baseDir + "/saves").c_str(), &stSaves) == 0 && S_ISDIR(stSaves.st_mode)) {
+                    title.savePath = baseDir + "/saves/" + title.name + ".sav";
+                } else {
+                    title.savePath = baseDir + "/" + title.name + ".sav";
+                }
+            } else {
+                title.savePath = baseDir + "/" + title.name + ".sav";
+            }
+        }
     }
 
     return titles;
 }
 
 std::vector<InstalledTitle> SaveManager::scanInstalledTitles(const std::vector<std::string>& customRomDirs) {
+    // Scan ROM files and discover all saves across the SD card first
+    std::vector<InstalledTitle> romTitles = scanRomFiles(customRomDirs);
     std::vector<InstalledTitle> outTitles;
 
 #if defined(__3DS__) || defined(_3DS)
@@ -1032,10 +1709,7 @@ std::vector<InstalledTitle> SaveManager::scanInstalledTitles(const std::vector<s
     }
 #endif
 
-    // Scan ROM files on SD card for mGBA, TWiLight Menu++, and standalone emulators
-    std::vector<InstalledTitle> romTitles = scanRomFiles(customRomDirs);
     outTitles.insert(outTitles.end(), romTitles.begin(), romTitles.end());
-
     return outTitles;
 }
 

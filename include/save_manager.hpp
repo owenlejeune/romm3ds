@@ -49,6 +49,7 @@ public:
     static std::string determineConsole(const std::string& productCode, uint64_t titleId);
     static std::string findSaveFileForRom(const std::string& romPath, const std::string& console);
     static std::string findSaveForInstalledTitle(const InstalledTitle& title);
+    static bool getTitleIcon(const InstalledTitle& title, std::vector<uint8_t>& outIconData);
     static uint64_t hashRomPath(const std::string& path);
 
 private:

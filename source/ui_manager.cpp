@@ -99,6 +99,7 @@ void UIManager::init(C3D_RenderTarget* topTarget, C3D_RenderTarget* bottomTarget
 }
 
 void UIManager::cleanup() {
+    freeGameLogo();
     if (m_textBuf) {
         C2D_TextBufDelete(m_textBuf);
         m_textBuf = nullptr;
@@ -1249,6 +1250,20 @@ void UIManager::renderMainMenuTop() {
         size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
         const auto& item = m_syncMgr->getItems()[actualIdx];
 
+        updateGameLogo(item.localTitle);
+
+        float textX = 16.0f;
+        float maxTextW = 368.0f;
+
+        if (m_hasLogo) {
+            C2D_DrawRectSolid(14.0f, 46.0f, 0.5f, 52.0f, 52.0f, CLR_CARD);
+            C2D_DrawRectSolid(15.0f, 47.0f, 0.5f, 50.0f, 50.0f, CLR_BORDER_OFF);
+            C2D_DrawImageAt(m_logoImage, 16.0f, 48.0f, 0.5f);
+
+            textX = 74.0f;
+            maxTextW = 310.0f;
+        }
+
         std::string displayName = item.localTitle.name + "  [" + item.localTitle.console + "]";
         if (item.isIgnored) {
             displayName += " [IGNORED / HIDDEN]";
@@ -1260,10 +1275,10 @@ void UIManager::renderMainMenuTop() {
         float nameScale = 0.58f;
         float nameW = 0.0f, nameH = 0.0f;
         C2D_TextGetDimensions(&nameText, nameScale, nameScale, &nameW, &nameH);
-        if (nameW > 368.0f && nameW > 0.0f) {
-            nameScale *= (368.0f / nameW);
+        if (nameW > maxTextW && nameW > 0.0f) {
+            nameScale *= (maxTextW / nameW);
         }
-        C2D_DrawText(&nameText, C2D_WithColor, 16.0f, 48.0f, 0.5f, nameScale, nameScale, nameColor);
+        C2D_DrawText(&nameText, C2D_WithColor, textX, 48.0f, 0.5f, nameScale, nameScale, nameColor);
 
         std::string matchDesc = item.isIgnored ? "Status: Ignored / Excluded from Sync"
                                 : (item.isMatched ? ("Matched: " + item.remoteTitle) : "Unmatched (Press SELECT to match)");
@@ -1274,10 +1289,10 @@ void UIManager::renderMainMenuTop() {
         float matchScale = 0.45f;
         float matchW = 0.0f, matchH = 0.0f;
         C2D_TextGetDimensions(&matchText, matchScale, matchScale, &matchW, &matchH);
-        if (matchW > 368.0f && matchW > 0.0f) {
-            matchScale *= (368.0f / matchW);
+        if (matchW > maxTextW && matchW > 0.0f) {
+            matchScale *= (maxTextW / matchW);
         }
-        C2D_DrawText(&matchText, C2D_WithColor, 16.0f, 70.0f, 0.5f, matchScale, matchScale, matchColor);
+        C2D_DrawText(&matchText, C2D_WithColor, textX, 70.0f, 0.5f, matchScale, matchScale, matchColor);
 
         std::string romOrTid = item.localTitle.isFileRom
                                    ? ("ROM: " + (item.localTitle.romPath.find_last_of("/\\") != std::string::npos
@@ -1294,18 +1309,18 @@ void UIManager::renderMainMenuTop() {
         float d1Scale = 0.42f;
         float d1W = 0.0f, d1H = 0.0f;
         C2D_TextGetDimensions(&detailText1, d1Scale, d1Scale, &d1W, &d1H);
-        if (d1W > 368.0f && d1W > 0.0f) {
-            d1Scale *= (368.0f / d1W);
+        if (d1W > maxTextW && d1W > 0.0f) {
+            d1Scale *= (maxTextW / d1W);
         }
-        C2D_DrawText(&detailText1, C2D_WithColor, 16.0f, 92.0f, 0.5f, d1Scale, d1Scale, CLR_TEXT_MUTED);
+        C2D_DrawText(&detailText1, C2D_WithColor, textX, 92.0f, 0.5f, d1Scale, d1Scale, CLR_TEXT_MUTED);
 
         time_t localTime = item.localTitle.saveTime;
         time_t remoteTime = item.remoteSaveTime != 0 ? item.remoteSaveTime : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
         bool remoteIsNewer = (remoteTime > 0 && (localTime == 0 || remoteTime > localTime));
         bool localIsNewer = (localTime > 0 && (remoteTime == 0 || localTime > remoteTime));
 
-        std::string detailLine2 = "Local Save: " + std::string(item.localTitle.hasSave ? "YES" : "NO") +
-                                  "    |    Remote Save: " + std::string(item.remoteHasSave ? "YES" : "NO");
+        std::string detailLine2 = "Local: " + std::string(item.localTitle.hasSave ? "YES" : "NO") +
+                                  "  |  Remote: " + std::string(item.remoteHasSave ? "YES" : "NO");
         if (item.remoteHasSave && !item.remoteSaveUpdatedAt.empty()) {
             detailLine2 += " (" + item.remoteSaveUpdatedAt.substr(0, 10) + ")";
         }
@@ -1321,8 +1336,14 @@ void UIManager::renderMainMenuTop() {
         C2D_Text detailText2;
         C2D_TextParse(&detailText2, m_textBuf, detailLine2.c_str());
         C2D_TextOptimize(&detailText2);
+        float d2Scale = 0.42f;
+        float d2W = 0.0f, d2H = 0.0f;
+        C2D_TextGetDimensions(&detailText2, d2Scale, d2Scale, &d2W, &d2H);
+        if (d2W > 368.0f && d2W > 0.0f) {
+            d2Scale *= (368.0f / d2W);
+        }
         u32 saveColor = remoteIsNewer ? CLR_GREEN : (localIsNewer ? CLR_YELLOW : ((item.localTitle.hasSave || item.remoteHasSave) ? CLR_TEXT_WHITE : CLR_TEXT_MUTED));
-        C2D_DrawText(&detailText2, C2D_WithColor, 16.0f, 108.0f, 0.5f, 0.42f, 0.42f, saveColor);
+        C2D_DrawText(&detailText2, C2D_WithColor, 16.0f, 108.0f, 0.5f, d2Scale, d2Scale, saveColor);
 
         std::string detailLine3;
         if (!item.localTitle.savePath.empty()) {
@@ -2335,6 +2356,52 @@ void UIManager::renderSavePickerBottom() {
     drawButton(84.0f, 206.0f, 82.0f, 26.0f, "[ Keyboard ]", false);
     drawButton(170.0f, 206.0f, 68.0f, 26.0f, "[ Reset ]", false);
     drawButton(242.0f, 206.0f, 70.0f, 26.0f, "[ Back ]", false);
+}
+
+void UIManager::freeGameLogo() {
+    if (m_hasLogo) {
+        C3D_TexDelete(&m_logoTex);
+        m_hasLogo = false;
+    }
+    m_currentLogoKey.clear();
+}
+
+void UIManager::updateGameLogo(const InstalledTitle& title) {
+    std::string key = title.titleIdHex + ":" + title.romPath + ":" + title.savePath;
+    if (key == m_currentLogoKey) {
+        return;
+    }
+
+    freeGameLogo();
+    m_currentLogoKey = key;
+
+    std::vector<uint8_t> iconData;
+    if (!SaveManager::getTitleIcon(title, iconData) || iconData.size() < 0x1200) {
+        return;
+    }
+
+    if (C3D_TexInit(&m_logoTex, 64, 64, GPU_RGB565)) {
+        std::memset(m_logoTex.data, 0, 64 * 64 * 2);
+        const uint8_t* src = iconData.data();
+        uint8_t* dst = static_cast<uint8_t*>(m_logoTex.data);
+        for (int ty = 0; ty < 6; ++ty) {
+            for (int tx = 0; tx < 6; ++tx) {
+                std::memcpy(dst + (ty * 8 + tx) * 128, src + (ty * 6 + tx) * 128, 128);
+            }
+        }
+        C3D_TexFlush(&m_logoTex);
+
+        m_logoSubTex.width = 48;
+        m_logoSubTex.height = 48;
+        m_logoSubTex.left = 0.0f;
+        m_logoSubTex.top = 1.0f;
+        m_logoSubTex.right = 48.0f / 64.0f;
+        m_logoSubTex.bottom = 1.0f - (48.0f / 64.0f);
+
+        m_logoImage.tex = &m_logoTex;
+        m_logoImage.subtex = &m_logoSubTex;
+        m_hasLogo = true;
+    }
 }
 
 } // namespace RomM3DS

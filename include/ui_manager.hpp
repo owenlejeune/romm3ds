@@ -12,6 +12,7 @@ namespace RomM3DS {
 class ConfigManager;
 class SaveManager;
 class SyncManager;
+struct InstalledTitle;
 
 enum class UIState {
     FIRST_LAUNCH,
@@ -98,6 +99,8 @@ private:
     void openSavePicker();
     void loadBrowserDirectory(const std::string& dir);
     void applyCustomSavePath(const std::string& path);
+    void updateGameLogo(const InstalledTitle& title);
+    void freeGameLogo();
 
     void drawInputBox(float x, float y, float w, float h, const char* label, const std::string& value, bool selected);
     void drawButton(float x, float y, float w, float h, const char* label, bool selected, u32 accentColor = 0);
@@ -176,6 +179,12 @@ private:
     std::string m_browserCurrentDir;
     std::vector<FileEntry> m_browserEntries;
     size_t m_browserSelectedIndex = 0;
+
+    C3D_Tex m_logoTex;
+    Tex3DS_SubTexture m_logoSubTex;
+    C2D_Image m_logoImage;
+    bool m_hasLogo = false;
+    std::string m_currentLogoKey;
 };
 
 } // namespace RomM3DS
