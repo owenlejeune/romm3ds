@@ -4,8 +4,11 @@
 #include <vector>
 #include <cstdint>
 #include <ctime>
+#include <functional>
 
 namespace RomM3DS {
+
+using LogCallback = std::function<void(const std::string& msg)>;
 
 struct InstalledTitle {
     uint64_t titleId = 0;
@@ -35,11 +38,11 @@ public:
     bool checkSaveExists(const InstalledTitle& title);
     time_t getSaveTime(const InstalledTitle& title);
 
-    bool backupSave(uint64_t titleId, const std::string& outDirectory, uint8_t mediaType = 1);
-    bool backupSave(const InstalledTitle& title, const std::string& outDirectory);
+    bool backupSave(uint64_t titleId, const std::string& outDirectory, uint8_t mediaType = 1, LogCallback log = nullptr);
+    bool backupSave(const InstalledTitle& title, const std::string& outDirectory, LogCallback log = nullptr);
 
-    bool injectSave(uint64_t titleId, const std::string& inDirectory, uint8_t mediaType = 1);
-    bool injectSave(const InstalledTitle& title, const std::string& inDirectory);
+    bool injectSave(uint64_t titleId, const std::string& inDirectory, uint8_t mediaType = 1, LogCallback log = nullptr);
+    bool injectSave(const InstalledTitle& title, const std::string& inDirectory, LogCallback log = nullptr);
 
     static std::string formatTitleId(uint64_t titleId);
     static uint64_t parseTitleId(const std::string& hexStr);

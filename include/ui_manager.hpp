@@ -87,6 +87,10 @@ private:
     void drawInputBox(float x, float y, float w, float h, const char* label, const std::string& value, bool selected);
     void drawButton(float x, float y, float w, float h, const char* label, bool selected, u32 accentColor = 0);
     void drawLoadingOverlay(const std::string& message);
+    void openOperationLog(const std::string& title);
+    void addOperationLog(const std::string& message);
+    void finishOperationLog();
+    void renderOperationLogOverlay();
 
     std::string launchKeyboard(const std::string& hint, const std::string& initial, int maxLen = 256);
     void executeSaveAction();
@@ -107,6 +111,16 @@ private:
     C3D_RenderTarget* m_topTarget = nullptr;
     C3D_RenderTarget* m_bottomTarget = nullptr;
     C2D_TextBuf m_textBuf = nullptr;
+
+    bool m_showLogDialog = false;
+    bool m_operationInProgress = false;
+    std::string m_logDialogTitle;
+    struct OperationLogEntry {
+        std::string text;
+        u32 color;
+    };
+    std::vector<OperationLogEntry> m_operationLogs;
+    int m_logScrollOffset = 0;
 
     int m_setupSelectedIndex = 0;
     std::string m_enteredEndpoint;

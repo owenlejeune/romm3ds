@@ -457,6 +457,8 @@ std::string SaveManager::findSaveFileForRom(const std::string& romPath, const st
         candidates.push_back(dir + "/" + baseName + ".sav");
         candidates.push_back(dir + "/saves/" + baseName + ".SAV");
         candidates.push_back(dir + "/" + baseName + ".SAV");
+        candidates.push_back(dir + "/saves/" + baseName + ".dsv");
+        candidates.push_back(dir + "/" + baseName + ".dsv");
     } else {
         candidates.push_back(dir + "/" + baseName + ".sav");
         candidates.push_back(dir + "/saves/" + baseName + ".sav");
@@ -464,12 +466,12 @@ std::string SaveManager::findSaveFileForRom(const std::string& romPath, const st
         candidates.push_back(dir + "/saves/" + baseName + ".SAV");
     }
 
-    candidates.push_back(dir + "/" + baseName + ".srm");
-    candidates.push_back(dir + "/saves/" + baseName + ".srm");
-    candidates.push_back(dir + "/" + baseName + ".dsv");
-    candidates.push_back(dir + "/saves/" + baseName + ".dsv");
-    candidates.push_back(dir + "/" + baseName + ".SRM");
-    candidates.push_back(dir + "/saves/" + baseName + ".SRM");
+    if (console != "GBA") {
+        candidates.push_back(dir + "/" + baseName + ".srm");
+        candidates.push_back(dir + "/saves/" + baseName + ".srm");
+        candidates.push_back(dir + "/" + baseName + ".SRM");
+        candidates.push_back(dir + "/saves/" + baseName + ".SRM");
+    }
 
     std::string bestCand;
     time_t bestTime = 0;
@@ -857,28 +859,56 @@ time_t SaveManager::getSaveTime(const InstalledTitle& title) {
     return 0;
 }
 
-bool SaveManager::backupSave(uint64_t titleId, const std::string& outDirectory, uint8_t mediaType) {
+static std::string detectGbaSaveType(const std::string& romPath) {
+    FILE* f = fopen(romPath.c_str(), "rb");
+    if (!f) return "";
+    std::vector<char> buf(512 * 1024);
+    std::string prevTail;
+    size_t bytesRead = 0;
+    while ((bytesRead = fread(buf.data(), 1, buf.size(), f)) > 0) {
+        std::string chunk = prevTail + std::string(buf.data(), bytesRead);
+        if (chunk.find("FLASH1M_V") != std::string::npos) { fclose(f); return "FLASH1M"; }
+        if (chunk.find("FLASH512_V") != std::string::npos || chunk.find("FLASH_V") != std::string::npos) { fclose(f); return "FLASH512"; }
+        if (chunk.find("SRAM_V") != std::string::npos || chunk.find("SRAM_F_V") != std::string::npos) { fclose(f); return "SRAM"; }
+        if (chunk.find("EEPROM_V") != std::string::npos) { fclose(f); return "EEPROM"; }
+        if (chunk.length() > 64) {
+            prevTail = chunk.substr(chunk.length() - 64);
+        } else {
+            prevTail = chunk;
+        }
+    }
+    fclose(f);
+    return "";
+}
+
+bool SaveManager::backupSave(uint64_t titleId, const std::string& outDirectory, uint8_t mediaType, LogCallback log) {
+    auto emit = [&](const std::string& m) { if (log) log(m); };
 #if defined(__3DS__) || defined(_3DS)
     FS_Archive archive = 0;
     Result res = openSaveArchive(&archive, titleId, mediaType);
     if (R_FAILED(res)) {
+        emit("[ERROR] Failed to open 3DS save archive (Result 0x" + formatTitleId(res) + ")");
         return false;
     }
 
+    emit("Backing up 3DS save archive to: " + outDirectory);
     bool success = copyArchiveDirToFs(archive, "/", outDirectory);
     FSUSER_CloseArchive(archive);
+    emit(success ? "[OK] Archive backup completed." : "[ERROR] Failed copying archive files.");
     return success;
 #else
     (void)titleId;
     (void)outDirectory;
     (void)mediaType;
+    emit("[ERROR] 3DS archive backup not supported on this platform.");
     return false;
 #endif
 }
 
-bool SaveManager::backupSave(const InstalledTitle& title, const std::string& outDirectory) {
+bool SaveManager::backupSave(const InstalledTitle& title, const std::string& outDirectory, LogCallback log) {
+    auto emit = [&](const std::string& m) { if (log) log(m); };
     if (!title.isFileRom) {
-        return backupSave(title.titleId, outDirectory, title.mediaType);
+        return backupSave(title.titleId, outDirectory, title.mediaType, log);
     }
 
     std::string saveFile = title.savePath;
@@ -888,6 +918,7 @@ bool SaveManager::backupSave(const InstalledTitle& title, const std::string& out
     }
 
     if (saveFile.empty()) {
+        emit("[ERROR] No local save file found for " + title.name);
         return false;
     }
 
@@ -896,13 +927,18 @@ bool SaveManager::backupSave(const InstalledTitle& title, const std::string& out
     std::string destPath = outDirectory + "/" + fileName;
 
     ConfigManager::ensureDirectories(destPath);
+    emit("Copying save file: " + saveFile + " -> " + destPath);
 
     FILE* src = fopen(saveFile.c_str(), "rb");
-    if (!src) return false;
+    if (!src) {
+        emit("[ERROR] Could not open source save: " + saveFile);
+        return false;
+    }
 
     FILE* dst = fopen(destPath.c_str(), "wb");
     if (!dst) {
         fclose(src);
+        emit("[ERROR] Could not open destination for write: " + destPath);
         return false;
     }
 
@@ -918,20 +954,27 @@ bool SaveManager::backupSave(const InstalledTitle& title, const std::string& out
 
     fclose(src);
     fclose(dst);
+    emit(ok ? "[OK] Local save copied to staging." : "[ERROR] Write error during save copy.");
     return ok;
 }
 
-bool SaveManager::injectSave(uint64_t titleId, const std::string& inDirectory, uint8_t mediaType) {
+bool SaveManager::injectSave(uint64_t titleId, const std::string& inDirectory, uint8_t mediaType, LogCallback log) {
+    auto emit = [&](const std::string& m) { if (log) log(m); };
 #if defined(__3DS__) || defined(_3DS)
     FS_Archive archive = 0;
     Result res = openSaveArchive(&archive, titleId, mediaType);
     if (R_FAILED(res)) {
+        emit("[ERROR] Failed to open 3DS save archive for injection (Result 0x" + formatTitleId(res) + ")");
         return false;
     }
 
+    emit("Writing save files into 3DS archive...");
     bool success = copyFsDirToArchive(archive, inDirectory, "/");
     if (success) {
         FSUSER_ControlArchive(archive, ARCHIVE_ACTION_COMMIT_SAVE_DATA, nullptr, 0, nullptr, 0);
+        emit("[OK] Committed save data to 3DS archive.");
+    } else {
+        emit("[ERROR] Failed writing save files to 3DS archive.");
     }
 
     FSUSER_CloseArchive(archive);
@@ -940,13 +983,15 @@ bool SaveManager::injectSave(uint64_t titleId, const std::string& inDirectory, u
     (void)titleId;
     (void)inDirectory;
     (void)mediaType;
+    emit("[ERROR] 3DS archive injection not supported on this platform.");
     return false;
 #endif
 }
 
-bool SaveManager::injectSave(const InstalledTitle& title, const std::string& inDirectory) {
+bool SaveManager::injectSave(const InstalledTitle& title, const std::string& inDirectory, LogCallback log) {
+    auto emit = [&](const std::string& m) { if (log) log(m); };
     if (!title.isFileRom) {
-        return injectSave(title.titleId, inDirectory, title.mediaType);
+        return injectSave(title.titleId, inDirectory, title.mediaType, log);
     }
 
     std::string srcFile;
@@ -982,8 +1027,11 @@ bool SaveManager::injectSave(const InstalledTitle& title, const std::string& inD
     }
 
     if (srcFile.empty()) {
+        emit("[ERROR] No downloaded save file found in staging: " + inDirectory);
         return false;
     }
+
+    emit("Source save file: " + srcFile);
 
     std::string targetSavePath = title.savePath;
     size_t slashPos = title.romPath.find_last_of("/\\");
@@ -1014,7 +1062,10 @@ bool SaveManager::injectSave(const InstalledTitle& title, const std::string& inD
     }
 
     FILE* src = fopen(srcFile.c_str(), "rb");
-    if (!src) return false;
+    if (!src) {
+        emit("[ERROR] Could not open source file: " + srcFile);
+        return false;
+    }
 
     fseek(src, 0, SEEK_END);
     long srcSize = ftell(src);
@@ -1022,111 +1073,202 @@ bool SaveManager::injectSave(const InstalledTitle& title, const std::string& inD
 
     size_t readOffset = 0;
     size_t writeLimit = (srcSize > 0) ? static_cast<size_t>(srcSize) : 0;
+    bool isEeprom = false;
 
     if (title.console == "GBA" && srcSize > 0) {
-        if (srcSize == 139264) { // 0x20000 + 0x2000 (standard VBA-Next / Libretro SRM)
-            std::vector<uint8_t> probe(139264);
-            if (fread(probe.data(), 1, 139264, src) == 139264) {
-                auto scan_section = [&](size_t offset, size_t len) {
-                    for (size_t i = 0; i < len; ++i) {
-                        if (probe[offset + i] != 0xFF) return true;
-                    }
-                    return false;
-                };
-                if (scan_section(0, 0x8000) && !scan_section(0x8000, 0x1A000)) {
-                    readOffset = 0;
-                    writeLimit = 0x8000; // SRAM 32KB
-                } else if (scan_section(0, 0x10000) && !scan_section(0x10000, 0x10000)) {
-                    readOffset = 0;
-                    writeLimit = 0x10000; // FLASH 64KB
-                } else if (scan_section(0, 0x20000)) {
-                    readOffset = 0;
-                    writeLimit = 0x20000; // FLASH 128KB (e.g. Pokemon Emerald)
-                } else if (scan_section(0x20000, 512) && !scan_section(0x20000 + 512, 0x2000 - 512)) {
-                    readOffset = 0x20000;
-                    writeLimit = 512; // EEPROM 512B
-                } else if (scan_section(0x20000, 0x2000)) {
-                    readOffset = 0x20000;
-                    writeLimit = 0x2000; // EEPROM 8KB
-                } else {
-                    readOffset = 0;
-                    writeLimit = 131072;
-                }
+        std::string gbaType = detectGbaSaveType(title.romPath);
+        if (!gbaType.empty()) {
+            emit("GBA hardware save type in ROM: " + gbaType);
+        }
+
+        size_t expectedSize = 0;
+        if (gbaType == "FLASH1M") expectedSize = 131072;
+        else if (gbaType == "FLASH512") expectedSize = 65536;
+        else if (gbaType == "SRAM") expectedSize = 32768;
+        else if (gbaType == "EEPROM") expectedSize = 8192;
+
+        if (expectedSize == 0 && !title.savePath.empty()) {
+            struct stat est;
+            if (stat(title.savePath.c_str(), &est) == 0 && est.st_size > 0) {
+                expectedSize = static_cast<size_t>(est.st_size);
+                emit("Existing local save size: " + std::to_string(expectedSize) + " B");
             }
-            fseek(src, 0, SEEK_SET);
+        }
+
+        if (srcSize == 139264) { // 0x22000 (Libretro VBA-M / VBA-Next .srm)
+            emit("Detected Libretro 136KB (.srm) container.");
+            if (expectedSize == 131072) {
+                readOffset = 0;
+                writeLimit = 131072;
+                emit("Extracted 128KB Flash payload from offset 0.");
+            } else if (expectedSize == 65536) {
+                readOffset = 0;
+                writeLimit = 65536;
+                emit("Extracted 64KB Flash payload from offset 0.");
+            } else if (expectedSize == 32768) {
+                readOffset = 0;
+                writeLimit = 32768;
+                emit("Extracted 32KB SRAM payload from offset 0.");
+            } else if (expectedSize == 8192 || expectedSize == 512 || gbaType == "EEPROM") {
+                readOffset = 0x20000;
+                writeLimit = (expectedSize > 0) ? expectedSize : 8192;
+                isEeprom = true;
+                emit("Extracted EEPROM payload (" + std::to_string(writeLimit) + " B) from offset 0x20000.");
+            } else {
+                std::vector<uint8_t> probe(139264);
+                if (fread(probe.data(), 1, 139264, src) == 139264) {
+                    auto scan_section = [&](size_t offset, size_t len) {
+                        for (size_t i = 0; i < len; ++i) {
+                            if (probe[offset + i] != 0xFF) return true;
+                        }
+                        return false;
+                    };
+                    if (scan_section(0, 0x8000) && !scan_section(0x8000, 0x1A000)) {
+                        readOffset = 0;
+                        writeLimit = 0x8000;
+                    } else if (scan_section(0, 0x10000) && !scan_section(0x10000, 0x10000)) {
+                        readOffset = 0;
+                        writeLimit = 0x10000;
+                    } else if (scan_section(0, 0x20000)) {
+                        readOffset = 0;
+                        writeLimit = 0x20000;
+                    } else if (scan_section(0x20000, 512) && !scan_section(0x20000 + 512, 0x2000 - 512)) {
+                        readOffset = 0x20000;
+                        writeLimit = 512;
+                        isEeprom = true;
+                    } else if (scan_section(0x20000, 0x2000)) {
+                        readOffset = 0x20000;
+                        writeLimit = 0x2000;
+                        isEeprom = true;
+                    } else {
+                        readOffset = 0;
+                        writeLimit = 131072;
+                    }
+                }
+                fseek(src, 0, SEEK_SET);
+                emit("Heuristic extracted " + std::to_string(writeLimit) + " B payload from offset " + std::to_string(readOffset) + ".");
+            }
         } else if (srcSize > 131072) {
-            // Trim RTC metadata or extra padding down to exact 128 KB
             readOffset = 0;
             writeLimit = 131072;
-        } else if (srcSize > 65536 && srcSize < 131072) {
+            emit("Trimmed " + std::to_string(srcSize) + " B -> 131072 B (128KB Flash).");
+        } else if (expectedSize > 0 && (size_t)srcSize > expectedSize) {
             readOffset = 0;
-            writeLimit = 65536;
+            writeLimit = expectedSize;
+            emit("Trimmed " + std::to_string(srcSize) + " B -> expected " + std::to_string(expectedSize) + " B.");
+        } else {
+            readOffset = 0;
+            writeLimit = static_cast<size_t>(srcSize);
+            emit("Using raw save payload (" + std::to_string(writeLimit) + " B).");
         }
     }
 
     std::vector<uint8_t> payload(writeLimit);
     if (fseek(src, readOffset, SEEK_SET) != 0) {
         fclose(src);
+        emit("[ERROR] Seek failed in source save.");
         return false;
     }
     size_t bytesRead = fread(payload.data(), 1, writeLimit, src);
     fclose(src);
     if (bytesRead != writeLimit) {
+        emit("[ERROR] Incomplete read: " + std::to_string(bytesRead) + "/" + std::to_string(writeLimit));
         return false;
+    }
+
+    if (isEeprom) {
+        emit("Byte-swapping 64-bit EEPROM chunks for mGBA...");
+        for (size_t i = 0; i + 8 <= payload.size(); i += 8) {
+            for (int j = 0; j < 4; ++j) {
+                std::swap(payload[i + j], payload[i + 7 - j]);
+            }
+        }
     }
 
     auto writePayloadToFile = [&](const std::string& path) -> bool {
         ConfigManager::ensureDirectories(path);
         FILE* out = fopen(path.c_str(), "wb");
-        if (!out) return false;
+        if (!out) {
+            emit("[ERROR] Could not open destination: " + path);
+            return false;
+        }
         bool written = (fwrite(payload.data(), 1, payload.size(), out) == payload.size());
         fclose(out);
+        if (written) {
+            emit("[OK] Wrote " + path + " (" + std::to_string(payload.size()) + " B)");
+        } else {
+            emit("[ERROR] Failed writing to " + path);
+        }
         return written;
     };
 
     bool ok = writePayloadToFile(targetSavePath);
 
-    // If GBA, write to all candidate paths so mGBA and TWiLight Menu both see the new save
     if (ok && title.console == "GBA") {
         std::set<std::string> destinations;
         destinations.insert(targetSavePath);
 
         // 1. Primary mGBA location: always write directly alongside ROM
         std::string romDirSave = dir + "/" + baseName + ".sav";
-        writePayloadToFile(romDirSave);
-        destinations.insert(romDirSave);
+        if (destinations.find(romDirSave) == destinations.end()) {
+            writePayloadToFile(romDirSave);
+            destinations.insert(romDirSave);
+        }
 
         // 2. If dir/saves/ directory exists, also write there for TWiLight Menu
         struct stat sdir;
         std::string savesSubDir = dir + "/saves";
         if (stat(savesSubDir.c_str(), &sdir) == 0 && S_ISDIR(sdir.st_mode)) {
             std::string subSave = savesSubDir + "/" + baseName + ".sav";
-            writePayloadToFile(subSave);
-            destinations.insert(subSave);
+            if (destinations.find(subSave) == destinations.end()) {
+                writePayloadToFile(subSave);
+                destinations.insert(subSave);
+            }
         }
 
-        // 3. Overwrite any existing save files in other mGBA directories
+        // 3. Write to any existing mGBA save directories (e.g. sdmc:/3ds/mgba/saves/)
         std::vector<std::string> mgbaDirs = getMgbaSaveDirectories();
         for (const auto& md : mgbaDirs) {
+            struct stat mdst;
             std::string cand = md + baseName + ".sav";
-            if (destinations.find(cand) == destinations.end()) {
-                struct stat cst;
-                if (stat(cand.c_str(), &cst) == 0) {
+            if ((stat(md.c_str(), &mdst) == 0 && S_ISDIR(mdst.st_mode)) || stat(cand.c_str(), &mdst) == 0) {
+                if (destinations.find(cand) == destinations.end()) {
                     writePayloadToFile(cand);
                     destinations.insert(cand);
                 }
             }
         }
 
-        // 4. In case mGBA has an old savestate (.ss0 / .state) that autoloads, backup stale states
-        std::vector<std::string> stateExts = {".ss0", ".ss1", ".state"};
-        for (const auto& sext : stateExts) {
-            std::string stateFile = dir + "/" + baseName + sext;
+        // 4. Overwrite any stale .srm files on the SD card so they cannot shadow .sav
+        std::vector<std::string> staleSrms = { dir + "/" + baseName + ".srm", dir + "/saves/" + baseName + ".srm" };
+        for (const auto& srmp : staleSrms) {
             struct stat sst;
-            if (stat(stateFile.c_str(), &sst) == 0) {
-                std::string bakFile = stateFile + ".bak";
-                remove(bakFile.c_str());
-                rename(stateFile.c_str(), bakFile.c_str());
+            if (stat(srmp.c_str(), &sst) == 0) {
+                emit("Updating local .srm with new save: " + srmp);
+                writePayloadToFile(srmp);
+            }
+        }
+
+        // 5. In case mGBA has an old savestate (.ss0 / .state) that autoloads, backup stale states
+        std::vector<std::string> stateExts = {".ss0", ".ss1", ".ss2", ".state"};
+        std::vector<std::string> stateDirs = {dir};
+        for (const auto& md : mgbaDirs) {
+            stateDirs.push_back(md);
+            stateDirs.push_back(md + "states/");
+        }
+        for (const auto& sdirPath : stateDirs) {
+            for (const auto& sext : stateExts) {
+                std::string sPath = sdirPath;
+                if (!sPath.empty() && sPath.back() != '/') sPath += '/';
+                std::string stateFile = sPath + baseName + sext;
+                struct stat sst;
+                if (stat(stateFile.c_str(), &sst) == 0) {
+                    std::string bakFile = stateFile + ".bak";
+                    remove(bakFile.c_str());
+                    if (rename(stateFile.c_str(), bakFile.c_str()) == 0) {
+                        emit("Backed up savestate: " + stateFile + " -> .bak");
+                    }
+                }
             }
         }
     }

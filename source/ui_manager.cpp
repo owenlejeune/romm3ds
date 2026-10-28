@@ -341,14 +341,14 @@ void UIManager::syncSelectedGame() {
         return;
     }
 
-    m_statusMessage = "Syncing " + item.localTitle.name + "...";
-    m_loadingMessage = "Syncing " + item.localTitle.name + "...";
-    render();
-    render();
+    openOperationLog("Sync: " + item.localTitle.name);
+    auto logger = [this](const std::string& msg) {
+        addOperationLog(msg);
+    };
 
-    m_syncMgr->syncItem(item);
-    m_loadingMessage.clear();
+    m_syncMgr->syncItem(item, ConflictChoice::OVERWRITE_LOCAL, logger);
     m_statusMessage = m_syncMgr->getLastMessage();
+    finishOperationLog();
     updateLocalFilteredList();
 }
 
@@ -357,6 +357,11 @@ void UIManager::syncAllGames() {
         m_statusMessage = "No installed titles found.";
         return;
     }
+
+    openOperationLog("Batch Sync");
+    auto logger = [this](const std::string& msg) {
+        addOperationLog(msg);
+    };
 
     size_t count = 0;
     for (size_t i = 0; i < m_syncMgr->getItems().size(); ++i) {
@@ -367,34 +372,18 @@ void UIManager::syncAllGames() {
 
         SyncAction act = m_syncMgr->evaluateItem(item);
         if (act == SyncAction::CONFLICT) {
-            m_conflictGameIndex = i;
-            time_t localTime = item.localTitle.saveTime;
-            time_t remoteTime = item.remoteSaveTime != 0 ? item.remoteSaveTime : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
-            if (remoteTime > localTime) {
-                m_conflictChoiceIndex = 0;
-            } else if (localTime > remoteTime) {
-                m_conflictChoiceIndex = 1;
-            } else {
-                m_conflictChoiceIndex = 0;
-            }
-            m_state = UIState::CONFLICT_PROMPT;
-            return;
+            logger("[WARN] Skipping conflict for: " + item.localTitle.name + " (resolve individually)");
+            continue;
         }
 
-        m_statusMessage = "Syncing (" + std::to_string(i + 1) + "/" +
-                          std::to_string(m_syncMgr->getItems().size()) + "): " + item.localTitle.name;
-        m_loadingMessage = "Syncing (" + std::to_string(i + 1) + "/" +
-                           std::to_string(m_syncMgr->getItems().size()) + ")\n" + item.localTitle.name;
-        render();
-        render();
-
-        if (m_syncMgr->syncItem(item)) {
+        if (m_syncMgr->syncItem(item, ConflictChoice::OVERWRITE_LOCAL, logger)) {
             count++;
         }
     }
 
-    m_loadingMessage.clear();
+    logger("Batch sync finished (" + std::to_string(count) + " games synced).");
     m_statusMessage = "Batch sync complete (" + std::to_string(count) + " games synced).";
+    finishOperationLog();
     updateLocalFilteredList();
 }
 
@@ -404,14 +393,15 @@ void UIManager::forceUploadSelected() {
 
     size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
     SyncItem& item = m_syncMgr->getItems()[actualIdx];
-    m_statusMessage = "Uploading save for " + item.localTitle.name + "...";
-    m_loadingMessage = "Uploading save for " + item.localTitle.name + "...";
-    render();
-    render();
 
-    m_syncMgr->forceUpload(item);
-    m_loadingMessage.clear();
+    openOperationLog("Upload Save: " + item.localTitle.name);
+    auto logger = [this](const std::string& msg) {
+        addOperationLog(msg);
+    };
+
+    m_syncMgr->forceUpload(item, logger);
     m_statusMessage = m_syncMgr->getLastMessage();
+    finishOperationLog();
     updateLocalFilteredList();
 }
 
@@ -421,14 +411,15 @@ void UIManager::forceDownloadSelected() {
 
     size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
     SyncItem& item = m_syncMgr->getItems()[actualIdx];
-    m_statusMessage = "Downloading save for " + item.localTitle.name + "...";
-    m_loadingMessage = "Downloading save for " + item.localTitle.name + "...";
-    render();
-    render();
 
-    m_syncMgr->forceDownload(item);
-    m_loadingMessage.clear();
+    openOperationLog("Download Save: " + item.localTitle.name);
+    auto logger = [this](const std::string& msg) {
+        addOperationLog(msg);
+    };
+
+    m_syncMgr->forceDownload(item, logger);
     m_statusMessage = m_syncMgr->getLastMessage();
+    finishOperationLog();
     updateLocalFilteredList();
 }
 
@@ -524,27 +515,65 @@ void UIManager::resolveConflict(int choice) {
                              (choice == 1) ? ConflictChoice::OVERWRITE_REMOTE :
                                              ConflictChoice::SKIP;
 
-    if (cChoice == ConflictChoice::OVERWRITE_LOCAL) {
-        m_statusMessage = "Downloading save from RomM...";
-        m_loadingMessage = "Downloading save from RomM...";
-        render();
-        render();
-    } else if (cChoice == ConflictChoice::OVERWRITE_REMOTE) {
-        m_statusMessage = "Uploading save to RomM...";
-        m_loadingMessage = "Uploading save to RomM...";
-        render();
-        render();
-    } else {
-        m_statusMessage = "Skipping save resolution...";
+    if (cChoice == ConflictChoice::SKIP) {
+        m_statusMessage = "Skipped conflict for " + item.localTitle.name;
+        m_state = UIState::MAIN_MENU;
+        return;
     }
 
-    m_syncMgr->syncItem(item, cChoice);
-    m_loadingMessage.clear();
+    std::string opTitle = (choice == 0) ? "Overwrite Local: " : "Overwrite Remote: ";
+    opTitle += item.localTitle.name;
+    openOperationLog(opTitle);
+
+    auto logger = [this](const std::string& msg) {
+        addOperationLog(msg);
+    };
+
+    m_syncMgr->syncItem(item, cChoice, logger);
     m_statusMessage = m_syncMgr->getLastMessage();
     m_state = UIState::MAIN_MENU;
+    finishOperationLog();
 }
 
 void UIManager::handleInput(u32 kDown, const touchPosition& touch) {
+    if (m_showLogDialog) {
+        if (!m_operationInProgress) {
+            if (kDown & (KEY_A | KEY_B | KEY_START)) {
+                m_showLogDialog = false;
+                m_operationLogs.clear();
+                m_logScrollOffset = 0;
+                updateLocalFilteredList();
+                return;
+            }
+            if (kDown & KEY_TOUCH) {
+                if (touch.py >= 196) {
+                    m_showLogDialog = false;
+                    m_operationLogs.clear();
+                    m_logScrollOffset = 0;
+                    updateLocalFilteredList();
+                    return;
+                }
+                if (touch.py >= 30 && touch.py < 114) {
+                    constexpr int maxVisible = 12;
+                    if ((int)m_operationLogs.size() > maxVisible) {
+                        m_logScrollOffset = std::min(m_logScrollOffset + 1, (int)m_operationLogs.size() - maxVisible);
+                    }
+                } else if (touch.py >= 114 && touch.py < 196) {
+                    m_logScrollOffset = std::max(0, m_logScrollOffset - 1);
+                }
+            }
+            if (kDown & KEY_UP) {
+                constexpr int maxVisible = 12;
+                if ((int)m_operationLogs.size() > maxVisible) {
+                    m_logScrollOffset = std::min(m_logScrollOffset + 1, (int)m_operationLogs.size() - maxVisible);
+                }
+            } else if (kDown & KEY_DOWN) {
+                m_logScrollOffset = std::max(0, m_logScrollOffset - 1);
+            }
+        }
+        return;
+    }
+
     if (m_state == UIState::FIRST_LAUNCH) {
         if (kDown & KEY_UP) {
             m_setupSelectedIndex = (m_setupSelectedIndex - 1 + 3) % 3;
@@ -854,6 +883,185 @@ void UIManager::drawLoadingOverlay(const std::string& message) {
         msgScale *= ((boxW - 32.0f) / msgW);
     }
     C2D_DrawText(&msgText, C2D_WithColor, boxX + 16.0f, boxY + 40.0f, 0.8f, msgScale, msgScale, CLR_TEXT_WHITE);
+}
+
+static std::vector<std::string> softWrapLogLine(const std::string& line, size_t maxLen = 38) {
+    std::vector<std::string> result;
+    if (line.empty()) {
+        result.push_back("");
+        return result;
+    }
+
+    size_t lineStart = 0;
+    while (lineStart < line.size()) {
+        size_t newlinePos = line.find('\n', lineStart);
+        std::string segment = (newlinePos == std::string::npos) 
+            ? line.substr(lineStart) 
+            : line.substr(lineStart, newlinePos - lineStart);
+
+        if (segment.empty()) {
+            result.push_back("");
+        } else {
+            size_t segStart = 0;
+            bool isFirstSubLine = (result.empty());
+
+            while (segStart < segment.size()) {
+                size_t currentLimit = isFirstSubLine ? maxLen : (maxLen > 2 ? maxLen - 2 : maxLen);
+                size_t remaining = segment.size() - segStart;
+
+                if (remaining <= currentLimit) {
+                    std::string chunk = segment.substr(segStart);
+                    if (!isFirstSubLine) {
+                        chunk = "  " + chunk;
+                    }
+                    result.push_back(chunk);
+                    break;
+                }
+
+                size_t targetEnd = segStart + currentLimit;
+                size_t breakPos = std::string::npos;
+                for (size_t p = targetEnd; p > segStart + (currentLimit / 3); --p) {
+                    char c = segment[p - 1];
+                    if (c == ' ' || c == '/' || c == '\\' || c == '-' || c == '_') {
+                        breakPos = p;
+                        break;
+                    }
+                }
+
+                if (breakPos == std::string::npos) {
+                    breakPos = targetEnd;
+                }
+
+                std::string chunk = segment.substr(segStart, breakPos - segStart);
+                if (!chunk.empty() && chunk.back() == ' ') {
+                    chunk.pop_back();
+                }
+
+                if (!isFirstSubLine) {
+                    chunk = "  " + chunk;
+                }
+                result.push_back(chunk);
+
+                segStart = breakPos;
+                while (segStart < segment.size() && segment[segStart] == ' ') {
+                    segStart++;
+                }
+
+                isFirstSubLine = false;
+            }
+        }
+
+        if (newlinePos == std::string::npos) break;
+        lineStart = newlinePos + 1;
+    }
+
+    return result;
+}
+
+void UIManager::openOperationLog(const std::string& title) {
+    m_showLogDialog = true;
+    m_operationInProgress = true;
+    m_logDialogTitle = title;
+    m_operationLogs.clear();
+    m_logScrollOffset = 0;
+    render();
+    render();
+}
+
+void UIManager::addOperationLog(const std::string& message) {
+    u32 color = C2D_Color32(0xD0, 0xD8, 0xE5, 0xFF);
+    if (message.rfind("[SUCCESS]", 0) == 0 || message.rfind("[OK]", 0) == 0) {
+        color = C2D_Color32(0x40, 0xE0, 0x60, 0xFF);
+    } else if (message.rfind("[ERROR]", 0) == 0 || message.rfind("[FAIL]", 0) == 0) {
+        color = C2D_Color32(0xFF, 0x50, 0x50, 0xFF);
+    } else if (message.rfind("[Sync]", 0) == 0 || message.rfind("[Download]", 0) == 0 || message.rfind("[Upload]", 0) == 0) {
+        color = CLR_ACCENT;
+    } else if (message.rfind("[WARN]", 0) == 0) {
+        color = C2D_Color32(0xFF, 0xCC, 0x00, 0xFF);
+    } else if (message.rfind("Existing", 0) == 0 || message.rfind("Remote", 0) == 0 || message.rfind("Local", 0) == 0 || message.rfind("ROM", 0) == 0) {
+        color = C2D_Color32(0x80, 0xD0, 0xFF, 0xFF);
+    }
+
+    std::vector<std::string> wrapped = softWrapLogLine(message, 38);
+    for (const auto& wLine : wrapped) {
+        m_operationLogs.push_back({ wLine, color });
+    }
+    m_logScrollOffset = 0;
+    render();
+}
+
+void UIManager::finishOperationLog() {
+    m_operationInProgress = false;
+    addOperationLog("Operation finished. Press (A) or tap to dismiss.");
+    render();
+}
+
+void UIManager::renderOperationLogOverlay() {
+    constexpr u32 CLR_OVERLAY_DIM = C2D_Color32(0x05, 0x07, 0x0B, 0xE0);
+    C2D_DrawRectSolid(0.0f, 0.0f, 0.7f, RomM3DS::SCREEN_BOTTOM_WIDTH, RomM3DS::SCREEN_BOTTOM_HEIGHT, CLR_OVERLAY_DIM);
+
+    float boxX = 6.0f;
+    float boxY = 6.0f;
+    float boxW = RomM3DS::SCREEN_BOTTOM_WIDTH - 12.0f;
+    float boxH = RomM3DS::SCREEN_BOTTOM_HEIGHT - 12.0f;
+
+    C2D_DrawRectSolid(boxX, boxY, 0.72f, boxW, boxH, CLR_ACCENT);
+    C2D_DrawRectSolid(boxX + 2.0f, boxY + 2.0f, 0.72f, boxW - 4.0f, boxH - 4.0f, CLR_HEADER);
+
+    C2D_Text titleText;
+    C2D_TextParse(&titleText, m_textBuf, m_logDialogTitle.c_str());
+    C2D_TextOptimize(&titleText);
+    C2D_DrawText(&titleText, C2D_WithColor, boxX + 8.0f, boxY + 6.0f, 0.75f, 0.46f, 0.46f, CLR_TEXT_WHITE);
+
+    float logX = boxX + 6.0f;
+    float logY = boxY + 24.0f;
+    float logW = boxW - 12.0f;
+    float logH = 168.0f;
+    constexpr u32 CLR_TERM_BG = C2D_Color32(0x0a, 0x0f, 0x18, 0xFF);
+    constexpr u32 CLR_TERM_BORDER = C2D_Color32(0x1e, 0x2c, 0x40, 0xFF);
+    C2D_DrawRectSolid(logX, logY, 0.75f, logW, logH, CLR_TERM_BORDER);
+    C2D_DrawRectSolid(logX + 1.0f, logY + 1.0f, 0.75f, logW - 2.0f, logH - 2.0f, CLR_TERM_BG);
+
+    constexpr float LINE_HEIGHT = 13.5f;
+    int maxVisibleLines = static_cast<int>((logH - 6.0f) / LINE_HEIGHT);
+    int totalLines = static_cast<int>(m_operationLogs.size());
+
+    int startLine = totalLines - maxVisibleLines - m_logScrollOffset;
+    if (startLine < 0) startLine = 0;
+    int endLine = startLine + maxVisibleLines;
+    if (endLine > totalLines) endLine = totalLines;
+
+    if (totalLines > maxVisibleLines) {
+        std::string scrollInfo = "^ v Scroll";
+        C2D_Text scText;
+        C2D_TextParse(&scText, m_textBuf, scrollInfo.c_str());
+        C2D_TextOptimize(&scText);
+        float scW = 0.0f, scH = 0.0f;
+        C2D_TextGetDimensions(&scText, 0.35f, 0.35f, &scW, &scH);
+        C2D_DrawText(&scText, C2D_WithColor, boxX + boxW - scW - 8.0f, boxY + 8.0f, 0.75f, 0.35f, 0.35f, CLR_TEXT_MUTED);
+    }
+
+    float textY = logY + 4.0f;
+    constexpr float LOG_FONT_SCALE = 0.38f;
+    for (int i = startLine; i < endLine; ++i) {
+        const auto& entry = m_operationLogs[i];
+
+        C2D_Text lText;
+        C2D_TextParse(&lText, m_textBuf, entry.text.c_str());
+        C2D_TextOptimize(&lText);
+        C2D_DrawText(&lText, C2D_WithColor, logX + 5.0f, textY, 0.8f, LOG_FONT_SCALE, LOG_FONT_SCALE, entry.color);
+        textY += LINE_HEIGHT;
+    }
+
+    float actionY = boxY + 196.0f;
+    if (m_operationInProgress) {
+        C2D_Text waitText;
+        C2D_TextParse(&waitText, m_textBuf, "Operation running... please wait");
+        C2D_TextOptimize(&waitText);
+        C2D_DrawText(&waitText, C2D_WithColor, boxX + 16.0f, actionY + 6.0f, 0.75f, 0.42f, 0.42f, CLR_TEXT_MUTED);
+    } else {
+        drawButton(boxX + 24.0f, actionY + 2.0f, boxW - 48.0f, 24.0f, "[ (A) Close / Dismiss Log ]", true);
+    }
 }
 
 void UIManager::renderFirstLaunchTop() {
@@ -1525,7 +1733,9 @@ void UIManager::renderBottomScreen() {
             break;
     }
 
-    if (!m_loadingMessage.empty()) {
+    if (m_showLogDialog) {
+        renderOperationLogOverlay();
+    } else if (!m_loadingMessage.empty()) {
         drawLoadingOverlay(m_loadingMessage);
     }
 }

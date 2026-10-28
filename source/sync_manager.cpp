@@ -568,21 +568,42 @@ SyncAction SyncManager::evaluateItem(const SyncItem& item) {
     return SyncAction::NO_SAVES;
 }
 
-bool SyncManager::forceUpload(SyncItem& item) {
+bool SyncManager::forceUpload(SyncItem& item, LogCallback log) {
+    auto emit = [&](const std::string& m) { if (log) log(m); };
     if (item.isIgnored) {
+        emit("[WARN] Game is ignored: " + item.localTitle.name);
         m_lastMessage = "Game is ignored: " + item.localTitle.name;
         return false;
     }
     if (!item.isMatched || !m_saveMgr || !m_netMgr) {
+        emit("[ERROR] Cannot upload: Unmatched game or subsystems missing.");
         m_lastMessage = "Cannot upload: Unmatched or subsystems missing.";
         return false;
+    }
+
+    emit("[Upload] " + item.localTitle.name);
+    if (item.localTitle.isFileRom) {
+        emit("ROM: " + item.localTitle.romPath);
+        std::string existing = item.localTitle.savePath;
+        if (existing.empty()) {
+            existing = m_saveMgr->findSaveFileForRom(item.localTitle.romPath, item.localTitle.console);
+        }
+        if (!existing.empty()) {
+            struct stat est;
+            if (stat(existing.c_str(), &est) == 0) {
+                emit("Existing local save: " + existing);
+                emit("Local save size: " + std::to_string(est.st_size) + " B, Modified: " + formatTimestamp(est.st_mtime));
+            }
+        }
     }
 
     std::string stagingDir = getStagingDirectory(item.localTitle.titleId);
     clearDirectory(stagingDir);
     ConfigManager::ensureDirectories(stagingDir + "/");
 
-    if (!m_saveMgr->backupSave(item.localTitle, stagingDir)) {
+    emit("Backing up local save to staging...");
+    if (!m_saveMgr->backupSave(item.localTitle, stagingDir, log)) {
+        emit("[ERROR] Failed to backup local save.");
         m_lastMessage = "Failed to backup local save from 3DS FS.";
         return false;
     }
@@ -601,9 +622,14 @@ bool SyncManager::forceUpload(SyncItem& item) {
     }
 
     if (targetFile.empty()) {
+        emit("[ERROR] No save files found in dump directory.");
         m_lastMessage = "No save files found in dump directory.";
         return false;
     }
+
+    struct stat tst;
+    long saveSize = (stat(targetFile.c_str(), &tst) == 0) ? (long)tst.st_size : 0;
+    emit("Prepared save file: " + targetFile + " (" + std::to_string(saveSize) + " B)");
 
     std::string remoteFileName;
     // 1. If RomM already has a save for this ROM, match that exact filename
@@ -629,7 +655,6 @@ bool SyncManager::forceUpload(SyncItem& item) {
         } else if (item.localTitle.console == "3DS") {
             remoteFileName = "main";
         } else {
-            // For emulated / VC consoles (GBA, NDS, etc.), use the game's ROM filename or title + .sav
             const RommGame* rGame = nullptr;
             for (const auto& rg : m_remoteGames) {
                 if (rg.id == item.remoteGameId) {
@@ -650,34 +675,65 @@ bool SyncManager::forceUpload(SyncItem& item) {
         }
     }
 
+    emit("Target remote file: " + remoteFileName);
+    emit("Uploading to RomM (Game ID: " + std::to_string(item.remoteGameId) + ")...");
     NetworkResult res = m_netMgr->uploadSave(item.remoteGameId, targetFile, remoteFileName);
     if (res.success) {
         item.remoteHasSave = true;
+        emit("[SUCCESS] Successfully uploaded save to RomM!");
         m_lastMessage = "Successfully uploaded save for " + item.localTitle.name;
         return true;
     }
 
+    emit("[ERROR] Upload failed: " + res.errorMessage);
     m_lastMessage = "Upload failed: " + res.errorMessage;
     return false;
 }
 
-bool SyncManager::forceDownload(SyncItem& item) {
+bool SyncManager::forceDownload(SyncItem& item, LogCallback log) {
+    auto emit = [&](const std::string& m) { if (log) log(m); };
     if (item.isIgnored) {
+        emit("[WARN] Game is ignored: " + item.localTitle.name);
         m_lastMessage = "Game is ignored: " + item.localTitle.name;
         return false;
     }
     if (!item.isMatched || !m_saveMgr || !m_netMgr) {
+        emit("[ERROR] Cannot download: Unmatched game or subsystems missing.");
         m_lastMessage = "Cannot download: Unmatched or subsystems missing.";
         return false;
+    }
+
+    emit("[Download] " + item.localTitle.name);
+    emit("Console: " + item.localTitle.console);
+
+    if (item.localTitle.isFileRom) {
+        emit("ROM location: " + item.localTitle.romPath);
+        std::string existing = item.localTitle.savePath;
+        if (existing.empty()) {
+            existing = m_saveMgr->findSaveFileForRom(item.localTitle.romPath, item.localTitle.console);
+        }
+        if (!existing.empty()) {
+            struct stat est;
+            if (stat(existing.c_str(), &est) == 0) {
+                emit("Existing local save: " + existing);
+                emit("Local save size: " + std::to_string(est.st_size) + " B, Modified: " + formatTimestamp(est.st_mtime));
+            } else {
+                emit("Existing local save location: " + existing + " (file not yet created)");
+            }
+        } else {
+            emit("Existing local save location: None found on SD");
+        }
     }
 
     std::string stagingDir = getStagingDirectory(item.localTitle.titleId);
     clearDirectory(stagingDir);
     ConfigManager::ensureDirectories(stagingDir + "/");
 
+    emit("Fetching remote saves for game ID " + std::to_string(item.remoteGameId) + "...");
     std::vector<RommSave> saves;
     m_netMgr->fetchSaves(saves, item.remoteGameId);
     if (saves.empty()) {
+        emit("[ERROR] No remote save found in RomM for " + item.remoteTitle);
         m_lastMessage = "No remote save found in RomM for " + item.remoteTitle;
         return false;
     }
@@ -690,6 +746,9 @@ bool SyncManager::forceDownload(SyncItem& item) {
         if (a.updatedAt != b.updatedAt) return a.updatedAt > b.updatedAt;
         return a.id > b.id;
     });
+
+    emit("Selected remote save ID: " + std::to_string(saves[0].id));
+    emit("Remote save file: " + saves[0].fileName + " (" + formatIsoTimestamp(saves[0].updatedAt) + ")");
 
     std::string localFileName = "main";
     if (item.localTitle.isFileRom) {
@@ -719,14 +778,23 @@ bool SyncManager::forceDownload(SyncItem& item) {
     }
 
     std::string targetFile = stagingDir + "/" + localFileName;
+    emit("Staging target: " + targetFile);
+    emit("Downloading remote save from RomM...");
     NetworkResult res = m_netMgr->downloadSaveById(saves[0].id, targetFile);
     if (!res.success) {
+        emit("[ERROR] Download failed: " + res.errorMessage);
         m_lastMessage = "Download failed: " + res.errorMessage;
         return false;
     }
 
+    struct stat dst;
+    long dlSize = (stat(targetFile.c_str(), &dst) == 0) ? (long)dst.st_size : 0;
+    emit("[OK] Download finished (" + std::to_string(dlSize) + " bytes).");
+
     std::string injectSource = item.localTitle.isFileRom ? targetFile : stagingDir;
-    if (!m_saveMgr->injectSave(item.localTitle, injectSource)) {
+    emit("Injecting save into local storage...");
+    if (!m_saveMgr->injectSave(item.localTitle, injectSource, log)) {
+        emit("[ERROR] Save injection failed.");
         m_lastMessage = "Save downloaded but injection into 3DS save archive failed.";
         return false;
     }
@@ -734,37 +802,43 @@ bool SyncManager::forceDownload(SyncItem& item) {
     item.localTitle.hasSave = true;
     if (item.localTitle.isFileRom) {
         item.localTitle.savePath = m_saveMgr->findSaveFileForRom(item.localTitle.romPath, item.localTitle.console);
+        emit("Active local save path: " + item.localTitle.savePath);
     }
     item.localTitle.saveTime = m_saveMgr->getSaveTime(item.localTitle);
+    emit("Local save time updated to: " + formatTimestamp(item.localTitle.saveTime));
+    emit("[SUCCESS] Save successfully downloaded and applied!");
     m_lastMessage = "Downloaded & injected save for " + item.localTitle.name;
     return true;
 }
 
-bool SyncManager::syncItem(SyncItem& item, ConflictChoice choice) {
+bool SyncManager::syncItem(SyncItem& item, ConflictChoice choice, LogCallback log) {
     SyncAction action = evaluateItem(item);
 
     switch (action) {
         case SyncAction::DOWNLOAD_REMOTE_TO_LOCAL:
-            return forceDownload(item);
+            return forceDownload(item, log);
 
         case SyncAction::UPLOAD_LOCAL_TO_REMOTE:
-            return forceUpload(item);
+            return forceUpload(item, log);
 
         case SyncAction::CONFLICT:
             if (choice == ConflictChoice::OVERWRITE_LOCAL) {
-                return forceDownload(item);
+                return forceDownload(item, log);
             } else if (choice == ConflictChoice::OVERWRITE_REMOTE) {
-                return forceUpload(item);
+                return forceUpload(item, log);
             } else {
+                if (log) log("Skipped conflict for " + item.localTitle.name);
                 m_lastMessage = "Skipped conflict for " + item.localTitle.name;
                 return true;
             }
 
         case SyncAction::NO_SAVES:
+            if (log) log("No save data found to synchronize for " + item.localTitle.name);
             m_lastMessage = "No save data found to synchronize for " + item.localTitle.name;
             return true;
 
         case SyncAction::UP_TO_DATE:
+            if (log) log(item.localTitle.name + " is already up to date.");
             m_lastMessage = item.localTitle.name + " is already up to date.";
             return true;
     }

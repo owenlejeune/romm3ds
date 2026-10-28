@@ -58,9 +58,9 @@ public:
     bool manualMatch(size_t itemIndex, const RommGame& remoteGame);
     SyncAction evaluateItem(const SyncItem& item);
 
-    bool syncItem(SyncItem& item, ConflictChoice choice = ConflictChoice::OVERWRITE_LOCAL);
-    bool forceUpload(SyncItem& item);
-    bool forceDownload(SyncItem& item);
+    bool syncItem(SyncItem& item, ConflictChoice choice = ConflictChoice::OVERWRITE_LOCAL, LogCallback log = nullptr);
+    bool forceUpload(SyncItem& item, LogCallback log = nullptr);
+    bool forceDownload(SyncItem& item, LogCallback log = nullptr);
 
     const std::string& getLastMessage() const { return m_lastMessage; }
 
