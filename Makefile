@@ -166,8 +166,12 @@ else
 
 $(OUTPUT).3dsx	:	$(OUTPUT).elf $(_3DSXDEPS)
 
-$(OUTPUT).cia: $(OUTPUT).elf $(CIA_DIR)/banner.bnr $(OUTPUT).smdh $(CIA_DIR)/app.rsf
-	$(MAKEROM) -f cxi -o $(OUTPUT).cxi -target t -desc app:7 -rsf $(CIA_DIR)/app.rsf -elf $(OUTPUT).elf -icon $(OUTPUT).smdh -banner $(CIA_DIR)/banner.bnr
+$(TOPDIR)/$(OUTPUT_DIR)/forwarder.elf: $(TOPDIR)/$(CIA_DIR)/forwarder/main.c
+	@mkdir -p $(TOPDIR)/$(OUTPUT_DIR)
+	$(CC) $(ARCH) -O2 -Wall -Wextra -ffunction-sections -fdata-sections -D__3DS__ -I$(CTRULIB)/include -specs=3dsx.specs -Wl,--gc-sections -L$(CTRULIB)/lib $< -lctru -o $@
+
+$(OUTPUT).cia: $(TOPDIR)/$(OUTPUT_DIR)/forwarder.elf $(CIA_DIR)/banner.bnr $(OUTPUT).smdh $(CIA_DIR)/app.rsf
+	$(MAKEROM) -f cxi -o $(OUTPUT).cxi -target t -desc app:7 -rsf $(CIA_DIR)/app.rsf -elf $(TOPDIR)/$(OUTPUT_DIR)/forwarder.elf -icon $(OUTPUT).smdh -banner $(CIA_DIR)/banner.bnr
 	$(MAKEROM) -f cia -o $@ -content $(OUTPUT).cxi:0:000400000$(subst 0x,,$(TITLE_ID))00
 
 $(CIA_DIR)/banner.bnr: $(CIA_DIR)/banner.png $(CIA_DIR)/audio.wav

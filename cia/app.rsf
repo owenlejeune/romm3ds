@@ -26,6 +26,7 @@ AccessControlInfo:
   Priority : 16
   MaxCpu : 0x84
   MemoryType : Application
+  CanWriteSharedPage : true
 
   FileSystemAccess:
    - DirectSdmc

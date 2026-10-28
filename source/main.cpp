@@ -44,9 +44,28 @@ void consolidateExecutable() {
   }
 }
 
+constexpr const char *FORWARDER_RESTORE_ARG = "romm3ds-forwarder:hbldr-tid=";
+
+void restoreLumaHbldrTitle(int argc, char *argv[]) {
+  const size_t prefixLen = strlen(FORWARDER_RESTORE_ARG);
+  for (int i = 1; i < argc; i++) {
+    const char *arg = argv[i];
+    if (arg == nullptr || strncmp(arg, FORWARDER_RESTORE_ARG, prefixLen) != 0) {
+      continue;
+    }
+    char *end = nullptr;
+    u64 tid = strtoull(arg + prefixLen, &end, 16);
+    s64 luma = 0;
+    if (end && *end == 0 && tid != 0 && R_SUCCEEDED(svcGetSystemInfo(&luma, 0x10000, 0))) {
+      *(volatile u64 *)(OS_SHAREDCFG_VADDR + 0x808) = tid;
+    }
+  }
+}
+
 } // namespace
 
 int main(int argc, char *argv[]) {
+  restoreLumaHbldrTitle(argc, argv);
   gfxInitDefault();
 
   bool romfsInitialized = R_SUCCEEDED(romfsInit());
