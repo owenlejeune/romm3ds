@@ -18,6 +18,37 @@ using json = nlohmann::json;
 
 namespace {
 
+bool isPathPointingToMgbaOrGba(const std::string& path) {
+    if (path.empty()) return false;
+    std::string lower = path;
+    for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (lower.find("mgba") != std::string::npos || lower.find(".gba") != std::string::npos) {
+        return true;
+    }
+    size_t slash = path.find_last_of("/\\");
+    if (slash != std::string::npos) {
+        std::string dir = path.substr(0, slash);
+        DIR* d = opendir(dir.c_str());
+        if (d) {
+            struct dirent* e = nullptr;
+            while ((e = readdir(d)) != nullptr) {
+                if (e->d_name[0] == '.') continue;
+                std::string fn = e->d_name;
+                if (fn.size() >= 4) {
+                    std::string ext = fn.substr(fn.size() - 4);
+                    for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                    if (ext == ".gba") {
+                        closedir(d);
+                        return true;
+                    }
+                }
+            }
+            closedir(d);
+        }
+    }
+    return false;
+}
+
 void clearDirectory(const std::string& dirPath) {
     DIR* d = opendir(dirPath.c_str());
     if (!d) return;
@@ -238,6 +269,13 @@ bool SyncManager::isPlatformCompatible(const std::string& localConsole, const st
     if (lc == "snes" && (rp == "snes" || rp == "sfc")) return true;
     if (lc == "gg" && (rp == "gg" || rp == "gamegear")) return true;
     if (lc == "pce" && (rp == "pce" || rp == "tg16" || rp == "turbografx16")) return true;
+
+    // 3DS installed forwarder CIAs can run retro games
+    if (lc == "3ds") {
+        return (rp == "gba" || rp == "nds" || rp == "ds" || rp == "gbc" || rp == "gb" ||
+                rp == "dmg" || rp == "snes" || rp == "sfc" || rp == "nes" || rp == "famicom" ||
+                rp == "fc" || rp == "gg" || rp == "gamegear" || rp == "pce");
+    }
 
     return false;
 }
@@ -528,6 +566,18 @@ bool SyncManager::refresh() {
 
         if (!item.isIgnored) {
             const GameMapping* mapping = m_configMgr ? m_configMgr->findMappingByTitleId(local.titleIdHex) : nullptr;
+            if (mapping && !mapping->customSavePath.empty()) {
+                item.localTitle.savePath = mapping->customSavePath;
+                struct stat st;
+                if (stat(item.localTitle.savePath.c_str(), &st) == 0 && st.st_size > 0) {
+                    item.localTitle.hasSave = true;
+                    item.localTitle.saveTime = st.st_mtime;
+                }
+                if (item.localTitle.console == "3DS" && isPathPointingToMgbaOrGba(mapping->customSavePath)) {
+                    item.localTitle.console = "GBA";
+                }
+            }
+
             if (mapping && mapping->remoteGameId != 0) {
                 item.isMatched = true;
                 item.remoteGameId = mapping->remoteGameId;
@@ -542,6 +592,19 @@ bool SyncManager::refresh() {
                     item.remoteHasSave = false;
                     item.remoteSaveUpdatedAt = "";
                     item.remoteSaveTime = 0;
+                }
+
+                if (item.localTitle.console == "3DS" && !item.localTitle.savePath.empty()) {
+                    for (const auto& r : m_remoteGames) {
+                        if (r.id == item.remoteGameId && !r.platform.empty()) {
+                            std::string pUpper = r.platform;
+                            for (char& c : pUpper) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                            if (pUpper != "3DS") {
+                                item.localTitle.console = pUpper;
+                            }
+                            break;
+                        }
+                    }
                 }
             } else {
                 // First attempt match with platform-compatible games
@@ -578,12 +641,21 @@ bool SyncManager::refresh() {
                         item.remoteSaveTime = 0;
                     }
 
+                    if (item.localTitle.console == "3DS" && !item.localTitle.savePath.empty() && !matchTarget->platform.empty()) {
+                        std::string pUpper = matchTarget->platform;
+                        for (char& c : pUpper) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                        if (pUpper != "3DS") {
+                            item.localTitle.console = pUpper;
+                        }
+                    }
+
                     if (m_configMgr) {
                         GameMapping newMap;
                         newMap.titleId = local.titleIdHex;
                         newMap.localName = local.name;
                         newMap.remoteGameId = matchTarget->id;
                         newMap.remoteTitle = matchTarget->title;
+                        newMap.customSavePath = local.savePath;
                         m_configMgr->addOrUpdateMapping(newMap);
                     }
                 }
@@ -641,17 +713,79 @@ bool SyncManager::manualMatch(size_t itemIndex, const RommGame& remoteGame) {
         item.remoteSaveTime = 0;
     }
 
+    if (item.localTitle.console == "3DS" && !item.localTitle.savePath.empty() && !remoteGame.platform.empty()) {
+        std::string pUpper = remoteGame.platform;
+        for (char& c : pUpper) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        if (pUpper != "3DS") {
+            item.localTitle.console = pUpper;
+        }
+    }
+
     if (m_configMgr) {
         GameMapping map;
         map.titleId = item.localTitle.titleIdHex;
         map.localName = item.localTitle.name;
         map.remoteGameId = remoteGame.id;
         map.remoteTitle = remoteGame.title;
+        map.customSavePath = item.localTitle.savePath;
         m_configMgr->addOrUpdateMapping(map);
         m_configMgr->saveMappings();
     }
 
     m_lastMessage = "Matched " + item.localTitle.name + " -> " + remoteGame.title;
+    return true;
+}
+
+bool SyncManager::setCustomSavePath(size_t itemIndex, const std::string& savePath) {
+    if (itemIndex >= m_items.size()) return false;
+    SyncItem& item = m_items[itemIndex];
+    item.localTitle.savePath = savePath;
+
+    if (!savePath.empty()) {
+        struct stat st;
+        if (stat(savePath.c_str(), &st) == 0 && st.st_size > 0) {
+            item.localTitle.hasSave = true;
+            item.localTitle.saveTime = st.st_mtime;
+        } else {
+            item.localTitle.hasSave = false;
+            item.localTitle.saveTime = 0;
+        }
+
+        if (item.localTitle.console == "3DS" && isPathPointingToMgbaOrGba(savePath)) {
+            item.localTitle.console = "GBA";
+        }
+    } else {
+        // Reset to auto-detection
+        if (item.localTitle.isFileRom) {
+            item.localTitle.savePath = m_saveMgr ? m_saveMgr->findSaveFileForRom(item.localTitle.romPath, item.localTitle.console) : "";
+        } else {
+            item.localTitle.savePath = m_saveMgr ? SaveManager::findSaveForInstalledTitle(item.localTitle) : "";
+        }
+        item.localTitle.hasSave = m_saveMgr ? m_saveMgr->checkSaveExists(item.localTitle) : false;
+        item.localTitle.saveTime = m_saveMgr ? m_saveMgr->getSaveTime(item.localTitle) : 0;
+    }
+
+    if (m_configMgr) {
+        GameMapping map;
+        const GameMapping* existing = m_configMgr->findMappingByTitleId(item.localTitle.titleIdHex);
+        if (existing) {
+            map = *existing;
+        } else {
+            map.titleId = item.localTitle.titleIdHex;
+            map.localName = item.localTitle.name;
+            map.remoteGameId = item.isMatched ? item.remoteGameId : 0;
+            map.remoteTitle = item.isMatched ? item.remoteTitle : "";
+        }
+        map.customSavePath = savePath;
+        m_configMgr->addOrUpdateMapping(map);
+        m_configMgr->saveMappings();
+    }
+
+    if (!savePath.empty()) {
+        m_lastMessage = "Set save path for " + item.localTitle.name;
+    } else {
+        m_lastMessage = "Reset save path for " + item.localTitle.name;
+    }
     return true;
 }
 
@@ -690,10 +824,12 @@ bool SyncManager::forceUpload(SyncItem& item, LogCallback log) {
     }
 
     emit("[Upload] " + item.localTitle.name);
-    if (item.localTitle.isFileRom) {
-        emit("ROM: " + item.localTitle.romPath);
+    if (item.localTitle.isFileRom || !item.localTitle.savePath.empty()) {
+        if (item.localTitle.isFileRom) {
+            emit("ROM: " + item.localTitle.romPath);
+        }
         std::string existing = item.localTitle.savePath;
-        if (existing.empty()) {
+        if (existing.empty() && item.localTitle.isFileRom) {
             existing = m_saveMgr->findSaveFileForRom(item.localTitle.romPath, item.localTitle.console);
         }
         if (!existing.empty()) {
@@ -755,7 +891,7 @@ bool SyncManager::forceUpload(SyncItem& item, LogCallback log) {
         std::string localBaseName = (slashPos != std::string::npos) ? targetFile.substr(slashPos + 1) : targetFile;
         if (localBaseName.find('.') != std::string::npos && localBaseName != "main") {
             remoteFileName = localBaseName;
-        } else if (item.localTitle.console == "3DS") {
+        } else if (item.localTitle.console == "3DS" && item.localTitle.savePath.empty()) {
             remoteFileName = "main";
         } else {
             const RommGame* rGame = nullptr;
@@ -809,10 +945,12 @@ bool SyncManager::forceDownload(SyncItem& item, LogCallback log) {
     emit("[Download] " + item.localTitle.name);
     emit("Console: " + item.localTitle.console);
 
-    if (item.localTitle.isFileRom) {
-        emit("ROM location: " + item.localTitle.romPath);
+    if (item.localTitle.isFileRom || !item.localTitle.savePath.empty()) {
+        if (item.localTitle.isFileRom) {
+            emit("ROM location: " + item.localTitle.romPath);
+        }
         std::string existing = item.localTitle.savePath;
-        if (existing.empty()) {
+        if (existing.empty() && item.localTitle.isFileRom) {
             existing = m_saveMgr->findSaveFileForRom(item.localTitle.romPath, item.localTitle.console);
         }
         if (!existing.empty()) {
@@ -854,12 +992,17 @@ bool SyncManager::forceDownload(SyncItem& item, LogCallback log) {
     emit("Remote save file: " + saves[0].fileName + " (" + formatIsoTimestamp(saves[0].updatedAt) + ")");
 
     std::string localFileName = "main";
-    if (item.localTitle.isFileRom) {
-        size_t slashPos = item.localTitle.romPath.find_last_of("/\\");
-        std::string filename = (slashPos != std::string::npos) ? item.localTitle.romPath.substr(slashPos + 1) : item.localTitle.romPath;
-        size_t dotPos = filename.find_last_of('.');
-        std::string base = (dotPos != std::string::npos) ? filename.substr(0, dotPos) : filename;
-        localFileName = base + ".sav";
+    if (item.localTitle.isFileRom || !item.localTitle.savePath.empty()) {
+        if (!item.localTitle.savePath.empty()) {
+            size_t slashPos = item.localTitle.savePath.find_last_of("/\\");
+            localFileName = (slashPos != std::string::npos) ? item.localTitle.savePath.substr(slashPos + 1) : item.localTitle.savePath;
+        } else {
+            size_t slashPos = item.localTitle.romPath.find_last_of("/\\");
+            std::string filename = (slashPos != std::string::npos) ? item.localTitle.romPath.substr(slashPos + 1) : item.localTitle.romPath;
+            size_t dotPos = filename.find_last_of('.');
+            std::string base = (dotPos != std::string::npos) ? filename.substr(0, dotPos) : filename;
+            localFileName = base + ".sav";
+        }
         if (!saves[0].fileName.empty()) {
             localFileName = saves[0].fileName;
         }
@@ -888,17 +1031,19 @@ bool SyncManager::forceDownload(SyncItem& item, LogCallback log) {
     long dlSize = (stat(targetFile.c_str(), &dst) == 0) ? (long)dst.st_size : 0;
     emit("[OK] Download finished (" + std::to_string(dlSize) + " bytes).");
 
-    std::string injectSource = item.localTitle.isFileRom ? targetFile : stagingDir;
+    std::string injectSource = (item.localTitle.isFileRom || !item.localTitle.savePath.empty()) ? targetFile : stagingDir;
     emit("Injecting save into local storage...");
     if (!m_saveMgr->injectSave(item.localTitle, injectSource, log)) {
         emit("[ERROR] Save injection failed.");
-        m_lastMessage = "Save downloaded but injection into 3DS save archive failed.";
+        m_lastMessage = "Save downloaded but injection failed.";
         return false;
     }
 
     item.localTitle.hasSave = true;
-    if (item.localTitle.isFileRom) {
-        item.localTitle.savePath = m_saveMgr->findSaveFileForRom(item.localTitle.romPath, item.localTitle.console);
+    if (item.localTitle.isFileRom || !item.localTitle.savePath.empty()) {
+        if (item.localTitle.savePath.empty() && item.localTitle.isFileRom) {
+            item.localTitle.savePath = m_saveMgr->findSaveFileForRom(item.localTitle.romPath, item.localTitle.console);
+        }
         emit("Active local save path: " + item.localTitle.savePath);
     }
     item.localTitle.saveTime = m_saveMgr->getSaveTime(item.localTitle);

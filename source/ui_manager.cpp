@@ -7,7 +7,10 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
+#include <dirent.h>
 #include <map>
+#include <sys/stat.h>
 
 namespace RomM3DS {
 
@@ -777,9 +780,11 @@ void UIManager::handleInput(u32 kDown, const touchPosition& touch) {
                 syncSelectedGame();
             } else if (isTouchInside(touch, 166.0f, 163.0f, 138.0f, 26.0f)) {
                 syncAllGames();
-            } else if (isTouchInside(touch, 16.0f, 193.0f, 138.0f, 26.0f)) {
+            } else if (isTouchInside(touch, 16.0f, 193.0f, 90.0f, 26.0f)) {
                 openManualMatch();
-            } else if (isTouchInside(touch, 166.0f, 193.0f, 138.0f, 26.0f)) {
+            } else if (isTouchInside(touch, 114.0f, 193.0f, 92.0f, 26.0f)) {
+                openSavePicker();
+            } else if (isTouchInside(touch, 214.0f, 193.0f, 90.0f, 26.0f)) {
                 toggleIgnoreSelected();
             } else {
                 for (size_t i = 0; i < 4 && i < total; ++i) {
@@ -931,6 +936,8 @@ void UIManager::handleInput(u32 kDown, const touchPosition& touch) {
                 resolveConflict(2);
             }
         }
+    } else if (m_state == UIState::SAVE_PICKER) {
+        handleSavePickerInput(kDown, touch);
     }
 }
 
@@ -1259,7 +1266,7 @@ void UIManager::renderMainMenuTop() {
         C2D_DrawText(&nameText, C2D_WithColor, 16.0f, 48.0f, 0.5f, nameScale, nameScale, nameColor);
 
         std::string matchDesc = item.isIgnored ? "Status: Ignored / Excluded from Sync"
-                                : (item.isMatched ? ("Matched: " + item.remoteTitle) : "Unmatched (Press SELECT for RomM Library)");
+                                : (item.isMatched ? ("Matched: " + item.remoteTitle) : "Unmatched (Press SELECT to match)");
         u32 matchColor = item.isIgnored ? CLR_TEXT_MUTED : (item.isMatched ? CLR_GREEN : CLR_YELLOW);
         C2D_Text matchText;
         C2D_TextParse(&matchText, m_textBuf, matchDesc.c_str());
@@ -1317,15 +1324,31 @@ void UIManager::renderMainMenuTop() {
         u32 saveColor = remoteIsNewer ? CLR_GREEN : (localIsNewer ? CLR_YELLOW : ((item.localTitle.hasSave || item.remoteHasSave) ? CLR_TEXT_WHITE : CLR_TEXT_MUTED));
         C2D_DrawText(&detailText2, C2D_WithColor, 16.0f, 108.0f, 0.5f, 0.42f, 0.42f, saveColor);
 
+        std::string detailLine3;
+        if (!item.localTitle.savePath.empty()) {
+            detailLine3 = "Save Path: " + item.localTitle.savePath;
+            C2D_Text detailText3;
+            C2D_TextParse(&detailText3, m_textBuf, detailLine3.c_str());
+            C2D_TextOptimize(&detailText3);
+            float d3Scale = 0.38f;
+            float d3W = 0.0f, d3H = 0.0f;
+            C2D_TextGetDimensions(&detailText3, d3Scale, d3Scale, &d3W, &d3H);
+            if (d3W > 368.0f && d3W > 0.0f) {
+                d3Scale *= (368.0f / d3W);
+            }
+            C2D_DrawText(&detailText3, C2D_WithColor, 16.0f, 124.0f, 0.5f, d3Scale, d3Scale, CLR_TEXT_MUTED);
+        }
+
+        float ctrlY = detailLine3.empty() ? 128.0f : 140.0f;
         std::string controls = "Controls:\n"
                                "  (A) Sync Selected       (X) Batch Sync All\n"
                                "  (L) Force Upload Save   (R) Force Download Save\n"
-                               "  (SELECT) RomM Library   (Y) Search Filter\n"
-                               "  (D-Pad L/R) Prev/Next Page | Tap [Sort] / [Filter] to toggle";
+                               "  (SELECT) Match Title    (Y) Search Filter\n"
+                               "  Tap [Match], [Save Path], [Hide], or [Sort]/[Filter]";
         C2D_Text ctrlText;
         C2D_TextParse(&ctrlText, m_textBuf, controls.c_str());
         C2D_TextOptimize(&ctrlText);
-        C2D_DrawText(&ctrlText, C2D_WithColor, 16.0f, 128.0f, 0.5f, 0.44f, 0.44f, CLR_TEXT_WHITE);
+        C2D_DrawText(&ctrlText, C2D_WithColor, 16.0f, ctrlY, 0.5f, 0.42f, 0.42f, CLR_TEXT_WHITE);
     } else {
         C2D_Text emptyText;
         std::string msg = "No installed titles match the current filter.\n\n"
@@ -1453,14 +1476,15 @@ void UIManager::renderMainMenuBottom() {
     drawButton(16.0f, 163.0f, 138.0f, 26.0f, "[ Sync (A) ]", false);
     drawButton(166.0f, 163.0f, 138.0f, 26.0f, "[ Sync All (X) ]", false);
 
-    drawButton(16.0f, 193.0f, 138.0f, 26.0f, "[ RomM Lib (SELECT) ]", false);
+    drawButton(16.0f, 193.0f, 90.0f, 26.0f, "[ Match ]", false);
+    drawButton(114.0f, 193.0f, 92.0f, 26.0f, "[ Save Path ]", false);
 
     bool isCurrentlyIgnored = (!m_filteredLocalIndices.empty() &&
                                m_selectedGameIndex < m_filteredLocalIndices.size() &&
                                m_syncMgr->getItems()[m_filteredLocalIndices[m_selectedGameIndex]].isIgnored);
-    const char* ignoreLabel = isCurrentlyIgnored ? "[ Unhide Game ]" : "[ Hide Game ]";
+    const char* ignoreLabel = isCurrentlyIgnored ? "[ Unhide ]" : "[ Hide ]";
     u32 ignoreAccent = isCurrentlyIgnored ? CLR_GREEN : 0;
-    drawButton(166.0f, 193.0f, 138.0f, 26.0f, ignoreLabel, false, ignoreAccent);
+    drawButton(214.0f, 193.0f, 90.0f, 26.0f, ignoreLabel, false, ignoreAccent);
 
     u32 statusColor = (m_statusMessage.find("Error") != std::string::npos ||
                        m_statusMessage.find("Failed") != std::string::npos) ? CLR_ERROR : CLR_GREEN;
@@ -1843,6 +1867,9 @@ void UIManager::renderTopScreen() {
         case UIState::CONFLICT_PROMPT:
             renderConflictTop();
             break;
+        case UIState::SAVE_PICKER:
+            renderSavePickerTop();
+            break;
     }
 }
 
@@ -1859,6 +1886,9 @@ void UIManager::renderBottomScreen() {
             break;
         case UIState::CONFLICT_PROMPT:
             renderConflictBottom();
+            break;
+        case UIState::SAVE_PICKER:
+            renderSavePickerBottom();
             break;
     }
 
@@ -1884,4 +1914,428 @@ void UIManager::render() {
     C3D_FrameEnd(0);
 }
 
+void UIManager::openSavePicker() {
+    if (!m_syncMgr || m_filteredLocalIndices.empty()) return;
+    if (m_selectedGameIndex >= m_filteredLocalIndices.size()) return;
+
+    size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
+    const auto& item = m_syncMgr->getItems()[actualIdx];
+
+    std::string startDir = "sdmc:/3ds";
+    if (!item.localTitle.savePath.empty()) {
+        size_t slash = item.localTitle.savePath.find_last_of("/\\");
+        if (slash != std::string::npos) {
+            startDir = item.localTitle.savePath.substr(0, slash);
+        }
+    } else if (item.localTitle.isFileRom && !item.localTitle.romPath.empty()) {
+        size_t slash = item.localTitle.romPath.find_last_of("/\\");
+        if (slash != std::string::npos) {
+            startDir = item.localTitle.romPath.substr(0, slash);
+        }
+    }
+
+    struct stat st;
+    if (stat(startDir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
+        startDir = "sdmc:/3ds";
+        if (stat(startDir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
+            startDir = "sdmc:/";
+        }
+    }
+
+    loadBrowserDirectory(startDir);
+
+    if (!item.localTitle.savePath.empty()) {
+        size_t slash = item.localTitle.savePath.find_last_of("/\\");
+        std::string fileName = (slash != std::string::npos) ? item.localTitle.savePath.substr(slash + 1) : item.localTitle.savePath;
+        for (size_t i = 0; i < m_browserEntries.size(); ++i) {
+            if (m_browserEntries[i].name == fileName) {
+                m_browserSelectedIndex = i;
+                break;
+            }
+        }
+    }
+
+    m_state = UIState::SAVE_PICKER;
+}
+
+void UIManager::loadBrowserDirectory(const std::string& dir) {
+    m_browserCurrentDir = dir;
+    if (m_browserCurrentDir.empty()) m_browserCurrentDir = "sdmc:/";
+    if (m_browserCurrentDir.back() != '/') m_browserCurrentDir += '/';
+
+    m_browserEntries.clear();
+    m_browserSelectedIndex = 0;
+
+    if (m_browserCurrentDir != "sdmc:/" && m_browserCurrentDir != "/") {
+        FileEntry parent;
+        parent.name = "..";
+        parent.isDir = true;
+        m_browserEntries.push_back(parent);
+    }
+
+    DIR* d = opendir(m_browserCurrentDir.c_str());
+    if (d) {
+        struct dirent* entry = nullptr;
+        std::vector<FileEntry> dirs;
+        std::vector<FileEntry> files;
+
+        while ((entry = readdir(d)) != nullptr) {
+            const char* name = entry->d_name;
+            if (!name || name[0] == '\0') continue;
+            if (std::strcmp(name, ".") == 0 || std::strcmp(name, "..") == 0) continue;
+            if (name[0] == '.') continue;
+
+            std::string full = m_browserCurrentDir + name;
+            struct stat st;
+            if (stat(full.c_str(), &st) != 0) continue;
+
+            FileEntry fe;
+            fe.name = name;
+            fe.isDir = S_ISDIR(st.st_mode);
+            fe.size = st.st_size;
+            fe.mtime = st.st_mtime;
+
+            if (fe.isDir) {
+                dirs.push_back(fe);
+            } else {
+                files.push_back(fe);
+            }
+        }
+        closedir(d);
+
+        std::sort(dirs.begin(), dirs.end(), [](const FileEntry& a, const FileEntry& b) {
+            return a.name < b.name;
+        });
+
+        auto isSaveExt = [](const std::string& n) {
+            size_t dot = n.find_last_of('.');
+            if (dot == std::string::npos) return false;
+            std::string ext = n.substr(dot);
+            for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return (ext == ".sav" || ext == ".srm" || ext == ".dsv");
+        };
+
+        std::sort(files.begin(), files.end(), [&](const FileEntry& a, const FileEntry& b) {
+            bool aSave = isSaveExt(a.name);
+            bool bSave = isSaveExt(b.name);
+            if (aSave != bSave) return aSave > bSave;
+            return a.name < b.name;
+        });
+
+        for (const auto& de : dirs) m_browserEntries.push_back(de);
+        for (const auto& fe : files) m_browserEntries.push_back(fe);
+    }
+}
+
+void UIManager::applyCustomSavePath(const std::string& path) {
+    if (!m_syncMgr || m_filteredLocalIndices.empty()) return;
+    if (m_selectedGameIndex >= m_filteredLocalIndices.size()) return;
+
+    size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
+    m_syncMgr->setCustomSavePath(actualIdx, path);
+    m_statusMessage = m_syncMgr->getLastMessage();
+    updateLocalFilteredList();
+    m_state = UIState::MAIN_MENU;
+}
+
+void UIManager::handleSavePickerInput(u32 kDown, const touchPosition& touch) {
+    size_t total = m_browserEntries.size();
+
+    if (total > 0) {
+        if (kDown & KEY_UP) {
+            m_browserSelectedIndex = (m_browserSelectedIndex > 0) ? (m_browserSelectedIndex - 1) : (total - 1);
+        } else if (kDown & KEY_DOWN) {
+            m_browserSelectedIndex = (m_browserSelectedIndex + 1 < total) ? (m_browserSelectedIndex + 1) : 0;
+        } else if (kDown & KEY_LEFT) {
+            m_browserSelectedIndex = (m_browserSelectedIndex >= 5) ? (m_browserSelectedIndex - 5) : 0;
+        } else if (kDown & KEY_RIGHT) {
+            m_browserSelectedIndex = (m_browserSelectedIndex + 5 < total) ? (m_browserSelectedIndex + 5) : (total - 1);
+        }
+    }
+
+    if (kDown & KEY_A) {
+        if (total > 0 && m_browserSelectedIndex < total) {
+            const auto& fe = m_browserEntries[m_browserSelectedIndex];
+            if (fe.name == "..") {
+                std::string cur = m_browserCurrentDir;
+                while (!cur.empty() && cur.back() == '/') cur.pop_back();
+                size_t slash = cur.find_last_of("/\\");
+                if (slash != std::string::npos) {
+                    std::string parent = cur.substr(0, slash + 1);
+                    if (parent.empty() || parent == "sdmc:" || parent == "sdmc") parent = "sdmc:/";
+                    loadBrowserDirectory(parent);
+                } else {
+                    loadBrowserDirectory("sdmc:/");
+                }
+            } else if (fe.isDir) {
+                std::string next = m_browserCurrentDir;
+                if (!next.empty() && next.back() != '/') next += '/';
+                next += fe.name;
+                loadBrowserDirectory(next);
+            } else {
+                std::string fullPath = m_browserCurrentDir;
+                if (!fullPath.empty() && fullPath.back() != '/') fullPath += '/';
+                fullPath += fe.name;
+                applyCustomSavePath(fullPath);
+            }
+        }
+    } else if (kDown & KEY_X) {
+        std::string initText = m_browserCurrentDir;
+        if (!m_filteredLocalIndices.empty() && m_selectedGameIndex < m_filteredLocalIndices.size()) {
+            size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
+            const auto& item = m_syncMgr->getItems()[actualIdx];
+            if (!item.localTitle.savePath.empty()) {
+                initText = item.localTitle.savePath;
+            }
+        }
+        std::string entered = launchKeyboard("Enter save path on SD (sdmc:/...)", initText, 256);
+        if (!entered.empty() && entered != initText) {
+            if (entered.rfind("sdmc:", 0) != 0 && entered.rfind("/", 0) == 0) {
+                entered = "sdmc:" + entered;
+            } else if (entered.rfind("sdmc:", 0) != 0) {
+                entered = "sdmc:/" + entered;
+            }
+            applyCustomSavePath(entered);
+        }
+    } else if (kDown & KEY_Y) {
+        applyCustomSavePath("");
+    } else if (kDown & KEY_B) {
+        m_state = UIState::MAIN_MENU;
+    }
+
+    if (kDown & KEY_TOUCH) {
+        if (isTouchInside(touch, 8.0f, 206.0f, 72.0f, 26.0f)) {
+            if (total > 0 && m_browserSelectedIndex < total) {
+                const auto& fe = m_browserEntries[m_browserSelectedIndex];
+                if (fe.name == "..") {
+                    std::string cur = m_browserCurrentDir;
+                    while (!cur.empty() && cur.back() == '/') cur.pop_back();
+                    size_t slash = cur.find_last_of("/\\");
+                    if (slash != std::string::npos) {
+                        std::string parent = cur.substr(0, slash + 1);
+                        if (parent.empty() || parent == "sdmc:" || parent == "sdmc") parent = "sdmc:/";
+                        loadBrowserDirectory(parent);
+                    } else {
+                        loadBrowserDirectory("sdmc:/");
+                    }
+                } else if (fe.isDir) {
+                    std::string next = m_browserCurrentDir;
+                    if (!next.empty() && next.back() != '/') next += '/';
+                    next += fe.name;
+                    loadBrowserDirectory(next);
+                } else {
+                    std::string fullPath = m_browserCurrentDir;
+                    if (!fullPath.empty() && fullPath.back() != '/') fullPath += '/';
+                    fullPath += fe.name;
+                    applyCustomSavePath(fullPath);
+                }
+            }
+        } else if (isTouchInside(touch, 84.0f, 206.0f, 82.0f, 26.0f)) {
+            std::string initText = m_browserCurrentDir;
+            if (!m_filteredLocalIndices.empty() && m_selectedGameIndex < m_filteredLocalIndices.size()) {
+                size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
+                const auto& item = m_syncMgr->getItems()[actualIdx];
+                if (!item.localTitle.savePath.empty()) {
+                    initText = item.localTitle.savePath;
+                }
+            }
+            std::string entered = launchKeyboard("Enter save path on SD (sdmc:/...)", initText, 256);
+            if (!entered.empty() && entered != initText) {
+                if (entered.rfind("sdmc:", 0) != 0 && entered.rfind("/", 0) == 0) {
+                    entered = "sdmc:" + entered;
+                } else if (entered.rfind("sdmc:", 0) != 0) {
+                    entered = "sdmc:/" + entered;
+                }
+                applyCustomSavePath(entered);
+            }
+        } else if (isTouchInside(touch, 170.0f, 206.0f, 68.0f, 26.0f)) {
+            applyCustomSavePath("");
+        } else if (isTouchInside(touch, 242.0f, 206.0f, 70.0f, 26.0f)) {
+            m_state = UIState::MAIN_MENU;
+        } else {
+            size_t pageOffset = (m_browserSelectedIndex / 5) * 5;
+            for (size_t i = 0; i < 5 && (pageOffset + i) < total; ++i) {
+                float rowY = 32.0f + static_cast<float>(i * 34.0f);
+                if (isTouchInside(touch, 8.0f, rowY, RomM3DS::SCREEN_BOTTOM_WIDTH - 16.0f, 32.0f)) {
+                    size_t target = pageOffset + i;
+                    if (m_browserSelectedIndex == target) {
+                        const auto& fe = m_browserEntries[target];
+                        if (fe.name == "..") {
+                            std::string cur = m_browserCurrentDir;
+                            while (!cur.empty() && cur.back() == '/') cur.pop_back();
+                            size_t slash = cur.find_last_of("/\\");
+                            if (slash != std::string::npos) {
+                                std::string parent = cur.substr(0, slash + 1);
+                                if (parent.empty() || parent == "sdmc:" || parent == "sdmc") parent = "sdmc:/";
+                                loadBrowserDirectory(parent);
+                            } else {
+                                loadBrowserDirectory("sdmc:/");
+                            }
+                        } else if (fe.isDir) {
+                            std::string next = m_browserCurrentDir;
+                            if (!next.empty() && next.back() != '/') next += '/';
+                            next += fe.name;
+                            loadBrowserDirectory(next);
+                        } else {
+                            std::string fullPath = m_browserCurrentDir;
+                            if (!fullPath.empty() && fullPath.back() != '/') fullPath += '/';
+                            fullPath += fe.name;
+                            applyCustomSavePath(fullPath);
+                        }
+                    } else {
+                        m_browserSelectedIndex = target;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+}
+
+void UIManager::renderSavePickerTop() {
+    C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, RomM3DS::SCREEN_TOP_HEIGHT, CLR_BG_TOP);
+
+    C2D_DrawRectSolid(8.0f, 6.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH - 16.0f, 110.0f, CLR_CARD);
+
+    C2D_Text titleText;
+    C2D_TextParse(&titleText, m_textBuf, "Set Custom Save Location");
+    C2D_TextOptimize(&titleText);
+    C2D_DrawText(&titleText, C2D_WithColor, 16.0f, 12.0f, 0.5f, 0.55f, 0.55f, CLR_ACCENT);
+
+    std::string gameName = "Unknown Title";
+    std::string curSavePath = "(None / Auto-detect)";
+    bool hasSave = false;
+
+    if (m_syncMgr && !m_filteredLocalIndices.empty() && m_selectedGameIndex < m_filteredLocalIndices.size()) {
+        size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
+        const auto& item = m_syncMgr->getItems()[actualIdx];
+        gameName = item.localTitle.name;
+        if (!item.localTitle.savePath.empty()) {
+            curSavePath = item.localTitle.savePath;
+        }
+        hasSave = item.localTitle.hasSave;
+    }
+
+    C2D_Text nameText;
+    C2D_TextParse(&nameText, m_textBuf, gameName.c_str());
+    C2D_TextOptimize(&nameText);
+    float nScale = 0.52f;
+    float nW = 0.0f, nH = 0.0f;
+    C2D_TextGetDimensions(&nameText, nScale, nScale, &nW, &nH);
+    if (nW > 360.0f && nW > 0.0f) nScale *= (360.0f / nW);
+    C2D_DrawText(&nameText, C2D_WithColor, 16.0f, 36.0f, 0.5f, nScale, nScale, CLR_TEXT_WHITE);
+
+    std::string pathLine = "Active Path: " + curSavePath;
+    C2D_Text pathText;
+    C2D_TextParse(&pathText, m_textBuf, pathLine.c_str());
+    C2D_TextOptimize(&pathText);
+    float pScale = 0.40f;
+    float pW = 0.0f, pH = 0.0f;
+    C2D_TextGetDimensions(&pathText, pScale, pScale, &pW, &pH);
+    if (pW > 360.0f && pW > 0.0f) pScale *= (360.0f / pW);
+    C2D_DrawText(&pathText, C2D_WithColor, 16.0f, 62.0f, 0.5f, pScale, pScale, CLR_TEXT_MUTED);
+
+    std::string statusLine = hasSave ? "Save file verified on SD (Ready for sync)" : "No save file found at active path";
+    u32 statusColor = hasSave ? CLR_GREEN : CLR_YELLOW;
+    C2D_Text stText;
+    C2D_TextParse(&stText, m_textBuf, statusLine.c_str());
+    C2D_TextOptimize(&stText);
+    C2D_DrawText(&stText, C2D_WithColor, 16.0f, 84.0f, 0.5f, 0.42f, 0.42f, statusColor);
+
+    C2D_DrawRectSolid(8.0f, 122.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH - 16.0f, 110.0f, CLR_CARD);
+
+    std::string inst = "Instructions:\n"
+                       "  (A) Select highlighted .sav file, or open folder\n"
+                       "  (X) Manual keyboard entry (enter exact SD path)\n"
+                       "  (Y) Reset / Clear custom override (use auto-detect)\n"
+                       "  (B) Cancel and return to library\n"
+                       "  D-Pad Up/Down to browse, Left/Right for page jumps";
+    C2D_Text instText;
+    C2D_TextParse(&instText, m_textBuf, inst.c_str());
+    C2D_TextOptimize(&instText);
+    C2D_DrawText(&instText, C2D_WithColor, 16.0f, 130.0f, 0.5f, 0.40f, 0.40f, CLR_TEXT_WHITE);
+}
+
+void UIManager::renderSavePickerBottom() {
+    C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_BOTTOM_WIDTH, RomM3DS::SCREEN_BOTTOM_HEIGHT, CLR_BG_BOTTOM);
+
+    C2D_DrawRectSolid(8.0f, 6.0f, 0.5f, RomM3DS::SCREEN_BOTTOM_WIDTH - 16.0f, 22.0f, CLR_CARD);
+
+    std::string dirLabel = "Folder: " + m_browserCurrentDir;
+    C2D_Text dirText;
+    C2D_TextParse(&dirText, m_textBuf, dirLabel.c_str());
+    C2D_TextOptimize(&dirText);
+    float dScale = 0.38f;
+    float dW = 0.0f, dH = 0.0f;
+    C2D_TextGetDimensions(&dirText, dScale, dScale, &dW, &dH);
+    if (dW > 290.0f && dW > 0.0f) dScale *= (290.0f / dW);
+    C2D_DrawText(&dirText, C2D_WithColor, 14.0f, 10.0f, 0.5f, dScale, dScale, CLR_ACCENT);
+
+    size_t total = m_browserEntries.size();
+    if (total == 0) {
+        C2D_Text emptyText;
+        C2D_TextParse(&emptyText, m_textBuf, "(Directory is empty)");
+        C2D_TextOptimize(&emptyText);
+        C2D_DrawText(&emptyText, C2D_WithColor, 16.0f, 60.0f, 0.5f, 0.44f, 0.44f, CLR_TEXT_MUTED);
+    } else {
+        size_t pageOffset = (m_browserSelectedIndex / 5) * 5;
+        for (size_t i = 0; i < 5 && (pageOffset + i) < total; ++i) {
+            size_t idx = pageOffset + i;
+            const auto& fe = m_browserEntries[idx];
+            bool selected = (idx == m_browserSelectedIndex);
+            float y = 32.0f + static_cast<float>(i * 34.0f);
+
+            u32 rowBg = selected ? CLR_HEADER : CLR_INPUT_BG;
+            u32 borderColor = selected ? CLR_ACCENT : CLR_BORDER_OFF;
+            C2D_DrawRectSolid(8.0f, y, 0.5f, RomM3DS::SCREEN_BOTTOM_WIDTH - 16.0f, 30.0f, borderColor);
+            C2D_DrawRectSolid(9.5f, y + 1.5f, 0.5f, RomM3DS::SCREEN_BOTTOM_WIDTH - 19.0f, 27.0f, rowBg);
+
+            std::string prefix = fe.isDir ? "[DIR] " : "      ";
+            auto isSaveExt = [](const std::string& n) {
+                size_t dot = n.find_last_of('.');
+                if (dot == std::string::npos) return false;
+                std::string ext = n.substr(dot);
+                for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                return (ext == ".sav" || ext == ".srm" || ext == ".dsv");
+            };
+            if (!fe.isDir && isSaveExt(fe.name)) {
+                prefix = "[SAV] ";
+            }
+
+            u32 nameColor = fe.isDir ? CLR_YELLOW : (isSaveExt(fe.name) ? CLR_GREEN : CLR_TEXT_WHITE);
+            std::string rowLabel = prefix + fe.name;
+
+            C2D_Text rowText;
+            C2D_TextParse(&rowText, m_textBuf, rowLabel.c_str());
+            C2D_TextOptimize(&rowText);
+            float rScale = 0.42f;
+            float rW = 0.0f, rH = 0.0f;
+            C2D_TextGetDimensions(&rowText, rScale, rScale, &rW, &rH);
+            float maxNameW = fe.isDir ? 280.0f : 210.0f;
+            if (rW > maxNameW && rW > 0.0f) rScale *= (maxNameW / rW);
+            C2D_DrawText(&rowText, C2D_WithColor, 14.0f, y + 6.0f, 0.5f, rScale, rScale, nameColor);
+
+            if (!fe.isDir) {
+                std::string sizeStr;
+                if (fe.size < 1024) sizeStr = std::to_string(fe.size) + " B";
+                else if (fe.size < 1024 * 1024) sizeStr = std::to_string(fe.size / 1024) + " KB";
+                else sizeStr = std::to_string(fe.size / (1024 * 1024)) + " MB";
+
+                C2D_Text sizeText;
+                C2D_TextParse(&sizeText, m_textBuf, sizeStr.c_str());
+                C2D_TextOptimize(&sizeText);
+                float sW = 0.0f, sH = 0.0f;
+                C2D_TextGetDimensions(&sizeText, 0.38f, 0.38f, &sW, &sH);
+                C2D_DrawText(&sizeText, C2D_WithColor, RomM3DS::SCREEN_BOTTOM_WIDTH - 16.0f - sW, y + 7.0f, 0.5f, 0.38f, 0.38f, CLR_TEXT_MUTED);
+            }
+        }
+    }
+
+    drawButton(8.0f, 206.0f, 72.0f, 26.0f, "[ Select ]", false);
+    drawButton(84.0f, 206.0f, 82.0f, 26.0f, "[ Keyboard ]", false);
+    drawButton(170.0f, 206.0f, 68.0f, 26.0f, "[ Reset ]", false);
+    drawButton(242.0f, 206.0f, 70.0f, 26.0f, "[ Back ]", false);
+}
+
 } // namespace RomM3DS
+

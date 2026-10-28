@@ -56,6 +56,7 @@ public:
     void clearLibraryCache();
 
     bool manualMatch(size_t itemIndex, const RommGame& remoteGame);
+    bool setCustomSavePath(size_t itemIndex, const std::string& savePath);
     SyncAction evaluateItem(const SyncItem& item);
 
     bool syncItem(SyncItem& item, ConflictChoice choice = ConflictChoice::OVERWRITE_LOCAL, LogCallback log = nullptr);

@@ -114,6 +114,7 @@ bool ConfigManager::loadMappings(const std::string& path) {
             mapping.localName = item.value("local_name", "");
             mapping.remoteGameId = item.value("remote_game_id", (uint64_t)0);
             mapping.remoteTitle = item.value("remote_title", "");
+            mapping.customSavePath = item.value("custom_save_path", item.value("save_path", ""));
             m_mappings.push_back(mapping);
         }
     }
@@ -131,12 +132,16 @@ bool ConfigManager::saveMappings(const std::string& path) {
 
     json jArray = json::array();
     for (const auto& m : m_mappings) {
-        jArray.push_back({
+        json jItem = {
             {"title_id", m.titleId},
             {"local_name", m.localName},
             {"remote_game_id", m.remoteGameId},
             {"remote_title", m.remoteTitle}
-        });
+        };
+        if (!m.customSavePath.empty()) {
+            jItem["custom_save_path"] = m.customSavePath;
+        }
+        jArray.push_back(jItem);
     }
 
     json root = {

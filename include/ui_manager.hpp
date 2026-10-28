@@ -17,7 +17,8 @@ enum class UIState {
     FIRST_LAUNCH,
     MAIN_MENU,
     MATCHING,
-    CONFLICT_PROMPT
+    CONFLICT_PROMPT,
+    SAVE_PICKER
 };
 
 enum class MatchingSubState {
@@ -91,6 +92,13 @@ private:
     void renderConflictTop();
     void renderConflictBottom();
 
+    void renderSavePickerTop();
+    void renderSavePickerBottom();
+    void handleSavePickerInput(u32 kDown, const touchPosition& touch);
+    void openSavePicker();
+    void loadBrowserDirectory(const std::string& dir);
+    void applyCustomSavePath(const std::string& path);
+
     void drawInputBox(float x, float y, float w, float h, const char* label, const std::string& value, bool selected);
     void drawButton(float x, float y, float w, float h, const char* label, bool selected, u32 accentColor = 0);
     void drawLoadingOverlay(const std::string& message);
@@ -158,6 +166,16 @@ private:
 
     std::string m_remoteFilterText;
     std::vector<size_t> m_filteredRemoteIndices;
+
+    struct FileEntry {
+        std::string name;
+        bool isDir = false;
+        off_t size = 0;
+        time_t mtime = 0;
+    };
+    std::string m_browserCurrentDir;
+    std::vector<FileEntry> m_browserEntries;
+    size_t m_browserSelectedIndex = 0;
 };
 
 } // namespace RomM3DS

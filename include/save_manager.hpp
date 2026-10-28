@@ -48,6 +48,7 @@ public:
     static uint64_t parseTitleId(const std::string& hexStr);
     static std::string determineConsole(const std::string& productCode, uint64_t titleId);
     static std::string findSaveFileForRom(const std::string& romPath, const std::string& console);
+    static std::string findSaveForInstalledTitle(const InstalledTitle& title);
     static uint64_t hashRomPath(const std::string& path);
 
 private:
