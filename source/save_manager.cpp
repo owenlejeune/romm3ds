@@ -1,5 +1,6 @@
 #include "save_manager.hpp"
 #include "config_manager.hpp"
+#include "zip_helper.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -968,26 +969,37 @@ bool SaveManager::copyFsDirToArchive(uint64_t archiveHandle, const std::string& 
             emit("Writing file: " + dstItem + " (" + std::to_string(fileSize) + " B)");
 
             FS_Path fPath = fsMakePath(PATH_ASCII, dstItem.c_str());
-            Result resDel = FSUSER_DeleteFile(archive, fPath);
-            if (R_FAILED(resDel)) {
-                emit("[DEBUG] FSUSER_DeleteFile for " + dstItem + " returned " + formatResultHex(resDel));
-            }
-
-            Result resCreate = FSUSER_CreateFile(archive, fPath, 0, fileSize);
-            if (R_FAILED(resCreate)) {
-                emit("[ERROR] FSUSER_CreateFile failed for " + dstItem + " (size: " + std::to_string(fileSize) + " B): " + formatResultHex(resCreate));
-                fclose(srcFile);
-                success = false;
-                continue;
-            }
 
             Handle dstFile = 0;
+            // First attempt: Open existing file with write privileges (preserves DISA container file entry)
             Result resOpen = FSUSER_OpenFile(&dstFile, archive, fPath, FS_OPEN_WRITE, 0);
-            if (R_FAILED(resOpen)) {
-                emit("[ERROR] FSUSER_OpenFile failed for " + dstItem + ": " + formatResultHex(resOpen));
-                fclose(srcFile);
-                success = false;
-                continue;
+            if (R_SUCCEEDED(resOpen)) {
+                // Truncate / adjust to target file size
+                Result resSize = FSFILE_SetSize(dstFile, fileSize);
+                if (R_FAILED(resSize)) {
+                    emit("[DEBUG] FSFILE_SetSize returned " + formatResultHex(resSize) + " for " + dstItem);
+                }
+            } else {
+                // File does not exist yet; create it
+                Result resCreate = FSUSER_CreateFile(archive, fPath, 0, fileSize);
+                if (R_FAILED(resCreate)) {
+                    // If creation failed because file already exists, attempt delete and recreate
+                    FSUSER_DeleteFile(archive, fPath);
+                    resCreate = FSUSER_CreateFile(archive, fPath, 0, fileSize);
+                }
+                if (R_FAILED(resCreate)) {
+                    emit("[ERROR] FSUSER_CreateFile failed for " + dstItem + " (size: " + std::to_string(fileSize) + " B): " + formatResultHex(resCreate));
+                    fclose(srcFile);
+                    success = false;
+                    continue;
+                }
+                resOpen = FSUSER_OpenFile(&dstFile, archive, fPath, FS_OPEN_WRITE, 0);
+                if (R_FAILED(resOpen)) {
+                    emit("[ERROR] FSUSER_OpenFile failed for " + dstItem + ": " + formatResultHex(resOpen));
+                    fclose(srcFile);
+                    success = false;
+                    continue;
+                }
             }
 
             constexpr size_t BUFFER_SIZE = 0x10000;
@@ -2335,7 +2347,8 @@ bool SaveManager::injectSave(uint64_t titleId, const std::string& inDirectory, u
     emit("Target Title ID: 0x" + formatTitleId(titleId) + " (" + mediaTypeName + ")");
     emit("Staging directory: " + inDirectory);
 
-    // List and inspect files in inDirectory
+    // List and inspect files in inDirectory; automatically extract any ZIP archives
+    std::vector<std::string> zipFilesFound;
     DIR* testDir = opendir(inDirectory.c_str());
     if (testDir) {
         struct dirent* de = nullptr;
@@ -2345,27 +2358,25 @@ bool SaveManager::injectSave(uint64_t titleId, const std::string& inDirectory, u
             if (de->d_name[0] == '.') continue;
             std::string fullPath = inDirectory + "/" + de->d_name;
             struct stat fst;
-            if (stat(fullPath.c_str(), &fst) == 0) {
+            if (stat(fullPath.c_str(), &fst) == 0 && S_ISREG(fst.st_mode)) {
                 fileCount++;
                 emit("  Staged file: " + std::string(de->d_name) + " (" + std::to_string(fst.st_size) + " B)");
 
-                // Check for zip magic header (PK\x03\x04)
-                if (fst.st_size >= 4) {
-                    FILE* tf = fopen(fullPath.c_str(), "rb");
-                    if (tf) {
-                        uint8_t magic[4] = {0};
-                        if (fread(magic, 1, 4, tf) == 4) {
-                            if (magic[0] == 0x50 && magic[1] == 0x4B && magic[2] == 0x03 && magic[3] == 0x04) {
-                                emit("[WARN] '" + std::string(de->d_name) + "' is a ZIP archive! Raw 3DS save data expected.");
-                            }
-                        }
-                        fclose(tf);
-                    }
+                if (ZipHelper::isZipFile(fullPath)) {
+                    zipFilesFound.push_back(fullPath);
                 }
             }
         }
         closedir(testDir);
-        if (fileCount == 0) {
+
+        for (const auto& zf : zipFilesFound) {
+            emit("[INFO] Extracting staged ZIP archive for injection: " + zf);
+            if (ZipHelper::extractZip(zf, inDirectory, log, true)) {
+                remove(zf.c_str());
+            }
+        }
+
+        if (fileCount == 0 && zipFilesFound.empty()) {
             emit("[WARN] No files found in staging directory: " + inDirectory);
         }
     } else {
@@ -2411,6 +2422,23 @@ bool SaveManager::injectSave(uint64_t titleId, const std::string& inDirectory, u
     }
 
     FSUSER_CloseArchive(archive);
+
+    if (success) {
+        // Clear Anti-Rollback Secure Value for 3DS titles (Pokémon, Animal Crossing, etc.)
+        u64 uniqueId = (titleId >> 8) & 0xFFFFF;
+        u8 existed = 0;
+        u64 secValSD = (((u64)SECUREVALUE_SLOT_SD) << 32) | (uniqueId << 8);
+        Result resSec = FSUSER_ControlSecureSave(SECURESAVE_ACTION_DELETE, &secValSD, sizeof(secValSD), &existed, sizeof(existed));
+        if (R_FAILED(resSec)) {
+            resSec = FSUSER_ControlSecureSave(SECURESAVE_ACTION_DELETE, &uniqueId, sizeof(uniqueId), &existed, sizeof(existed));
+        }
+        if (R_SUCCEEDED(resSec)) {
+            emit(existed ? "[OK] Anti-rollback secure value cleared." : "[INFO] No anti-rollback secure value was set.");
+        } else {
+            emit("[DEBUG] FSUSER_ControlSecureSave returned " + formatResultHex(resSec));
+        }
+    }
+
     return success;
 #else
     (void)titleId;

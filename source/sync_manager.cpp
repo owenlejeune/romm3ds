@@ -1,5 +1,6 @@
 #include "sync_manager.hpp"
 #include "common.hpp"
+#include "zip_helper.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -954,47 +955,73 @@ bool SyncManager::forceUpload(SyncItem& item, LogCallback log) {
         }
     }
 
-    std::string targetFile = findRegularSaveFile(stagingDir, remoteFileName);
-    if (targetFile.empty()) {
-        emit("[ERROR] No valid regular save file found in dump directory.");
-        m_lastMessage = "No save files found in dump directory.";
-        return false;
-    }
+    int stagedFiles = 0, stagedDirs = 0;
+    ZipHelper::getDirectoryStats(stagingDir, stagedFiles, stagedDirs);
 
-    struct stat tst;
-    if (stat(targetFile.c_str(), &tst) != 0 || !S_ISREG(tst.st_mode)) {
-        emit("[ERROR] Selected save path is not a valid regular file: " + targetFile);
-        m_lastMessage = "Selected save path is not a regular file.";
-        return false;
-    }
-    long saveSize = static_cast<long>(tst.st_size);
-    emit("Prepared save file: " + targetFile + " (" + std::to_string(saveSize) + " B)");
+    bool remoteIsZip = (!remoteFileName.empty() && remoteFileName.length() >= 4 &&
+                        (remoteFileName.rfind(".zip") == remoteFileName.length() - 4 ||
+                         remoteFileName.rfind(".ZIP") == remoteFileName.length() - 4));
 
-    if (remoteFileName.empty()) {
-        // 2. Otherwise determine appropriate filename
-        size_t slashPos = targetFile.find_last_of("/\\");
-        std::string localBaseName = (slashPos != std::string::npos) ? targetFile.substr(slashPos + 1) : targetFile;
-        if (localBaseName.find('.') != std::string::npos && localBaseName != "main") {
-            remoteFileName = localBaseName;
-        } else if (item.localTitle.console == "3DS" && item.localTitle.savePath.empty()) {
-            remoteFileName = "main";
-        } else {
-            const RommGame* rGame = nullptr;
-            for (const auto& rg : m_remoteGames) {
-                if (rg.id == item.remoteGameId) {
-                    rGame = &rg;
-                    break;
-                }
-            }
-            if (rGame && !rGame->romPath.empty()) {
-                std::string base = rGame->romPath;
-                size_t dotPos = base.find_last_of('.');
-                if (dotPos != std::string::npos) {
-                    base = base.substr(0, dotPos);
-                }
-                remoteFileName = base + ".sav";
+    // If there are multiple files/subdirectories, or if remote is already a zip:
+    bool packageAsZip = (stagedFiles > 1 || stagedDirs > 0 || remoteIsZip);
+
+    std::string targetFile;
+    if (packageAsZip) {
+        std::string zipPath = stagingDir + "/save.zip";
+        emit("Packaging " + std::to_string(stagedFiles) + " files and " + std::to_string(stagedDirs) + " dirs into ZIP archive...");
+        if (!ZipHelper::createZipFromDirectory(zipPath, stagingDir, log)) {
+            emit("[ERROR] Failed to create ZIP archive of save.");
+            m_lastMessage = "Failed to create save ZIP archive.";
+            return false;
+        }
+        targetFile = zipPath;
+
+        if (remoteFileName.empty() || remoteFileName == "main") {
+            remoteFileName = item.localTitle.titleIdHex + ".zip";
+        }
+    } else {
+        targetFile = findRegularSaveFile(stagingDir, remoteFileName);
+        if (targetFile.empty()) {
+            emit("[ERROR] No valid regular save file found in dump directory.");
+            m_lastMessage = "No save files found in dump directory.";
+            return false;
+        }
+
+        struct stat tst;
+        if (stat(targetFile.c_str(), &tst) != 0 || !S_ISREG(tst.st_mode)) {
+            emit("[ERROR] Selected save path is not a valid regular file: " + targetFile);
+            m_lastMessage = "Selected save path is not a regular file.";
+            return false;
+        }
+        long saveSize = static_cast<long>(tst.st_size);
+        emit("Prepared save file: " + targetFile + " (" + std::to_string(saveSize) + " B)");
+
+        if (remoteFileName.empty()) {
+            // Determine appropriate filename for single regular save file
+            size_t slashPos = targetFile.find_last_of("/\\");
+            std::string localBaseName = (slashPos != std::string::npos) ? targetFile.substr(slashPos + 1) : targetFile;
+            if (localBaseName.find('.') != std::string::npos && localBaseName != "main") {
+                remoteFileName = localBaseName;
+            } else if (item.localTitle.console == "3DS" && item.localTitle.savePath.empty()) {
+                remoteFileName = "main";
             } else {
-                remoteFileName = item.localTitle.name + ".sav";
+                const RommGame* rGame = nullptr;
+                for (const auto& rg : m_remoteGames) {
+                    if (rg.id == item.remoteGameId) {
+                        rGame = &rg;
+                        break;
+                    }
+                }
+                if (rGame && !rGame->romPath.empty()) {
+                    std::string base = rGame->romPath;
+                    size_t dotPos = base.find_last_of('.');
+                    if (dotPos != std::string::npos) {
+                        base = base.substr(0, dotPos);
+                    }
+                    remoteFileName = base + ".sav";
+                } else {
+                    remoteFileName = item.localTitle.name + ".sav";
+                }
             }
         }
     }
@@ -1086,7 +1113,9 @@ bool SyncManager::forceDownload(SyncItem& item, LogCallback log) {
     emit("Remote save file: " + saves[0].fileName + " (" + formatIsoTimestamp(saves[0].updatedAt) + ")");
 
     std::string localFileName = "main";
-    if (item.localTitle.isFileRom || !item.localTitle.savePath.empty()) {
+    if (!saves[0].fileName.empty()) {
+        localFileName = saves[0].fileName;
+    } else if (item.localTitle.isFileRom || !item.localTitle.savePath.empty()) {
         if (!item.localTitle.savePath.empty()) {
             size_t slashPos = item.localTitle.savePath.find_last_of("/\\");
             localFileName = (slashPos != std::string::npos) ? item.localTitle.savePath.substr(slashPos + 1) : item.localTitle.savePath;
@@ -1096,22 +1125,6 @@ bool SyncManager::forceDownload(SyncItem& item, LogCallback log) {
             size_t dotPos = filename.find_last_of('.');
             std::string base = (dotPos != std::string::npos) ? filename.substr(0, dotPos) : filename;
             localFileName = base + ".sav";
-        }
-        if (!saves[0].fileName.empty()) {
-            localFileName = saves[0].fileName;
-        }
-    } else if (item.localTitle.console != "3DS") {
-        std::string existingRegular = findRegularSaveFile(stagingDir, saves[0].fileName);
-        if (!existingRegular.empty()) {
-            size_t slashPos = existingRegular.find_last_of("/\\");
-            localFileName = (slashPos != std::string::npos) ? existingRegular.substr(slashPos + 1) : existingRegular;
-        }
-        if (localFileName == "main" && !saves[0].fileName.empty()) {
-            localFileName = saves[0].fileName;
-        }
-    } else {
-        if (!saves[0].fileName.empty() && saves[0].fileName != "main") {
-            emit("Remote 3DS save in RomM: " + saves[0].fileName);
         }
     }
 
@@ -1129,7 +1142,26 @@ bool SyncManager::forceDownload(SyncItem& item, LogCallback log) {
     long dlSize = (stat(targetFile.c_str(), &dst) == 0) ? (long)dst.st_size : 0;
     emit("[OK] Download finished (" + std::to_string(dlSize) + " bytes).");
 
-    std::string injectSource = (item.localTitle.isFileRom || !item.localTitle.savePath.empty()) ? targetFile : stagingDir;
+    // Check if downloaded file is a ZIP archive
+    if (ZipHelper::isZipFile(targetFile)) {
+        emit("[INFO] Remote save is a ZIP archive; extracting contents to staging...");
+        if (ZipHelper::extractZip(targetFile, stagingDir, log, true)) {
+            remove(targetFile.c_str());
+        } else {
+            emit("[WARN] ZIP extraction failed; will attempt direct injection.");
+        }
+    }
+
+    std::string injectSource;
+    if (item.localTitle.isFileRom || !item.localTitle.savePath.empty()) {
+        injectSource = findRegularSaveFile(stagingDir, localFileName);
+        if (injectSource.empty()) {
+            injectSource = targetFile;
+        }
+    } else {
+        injectSource = stagingDir;
+    }
+
     emit("Injecting save into local storage (" + item.localTitle.name + ")...");
     if (!m_saveMgr->injectSave(item.localTitle, injectSource, log)) {
         emit("[ERROR] Save injection failed for " + item.localTitle.name + " (Title ID: " + item.localTitle.titleIdHex + ").");
