@@ -1456,6 +1456,9 @@ void scanDirectoryRecursive(
             std::string lowerName = name;
             for (char& c : lowerName) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
             if (name[0] == '.' ||
+                name[0] == '_' ||
+                lowerName == "_nds" ||
+                lowerName == "_gba" ||
                 lowerName == "nintendo 3ds" ||
                 lowerName == "dcim" ||
                 lowerName == "$recycle.bin" ||
@@ -1563,6 +1566,80 @@ void scanDirectoryRecursive(
     }
 }
 
+static void findRomDirsRecursive(const std::string& currentDir, int depth, int maxDepth, std::vector<std::string>& outDirs) {
+    if (depth > maxDepth) return;
+
+    DIR* d = opendir(currentDir.c_str());
+    if (!d) return;
+
+    struct dirent* entry = nullptr;
+    std::vector<std::string> subdirsToSearch;
+
+    while ((entry = readdir(d)) != nullptr) {
+        if (!entry->d_name || entry->d_name[0] == '.' || entry->d_name[0] == '_') continue;
+
+        std::string name = entry->d_name;
+        std::string lowerName = name;
+        for (char& c : lowerName) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+        // Skip non-game and system folders
+        if (lowerName == "_nds" ||
+            lowerName == "_gba" ||
+            lowerName == "nintendo 3ds" ||
+            lowerName == "dcim" ||
+            lowerName == "$recycle.bin" ||
+            lowerName == "system volume information" ||
+            lowerName == "luma" ||
+            lowerName == "gm9" ||
+            lowerName == "fbi" ||
+            lowerName == "themes" ||
+            lowerName == "cheats" ||
+            lowerName == "bios" ||
+            lowerName == "screenshots" ||
+            lowerName == "borders" ||
+            lowerName == "patch" ||
+            lowerName == "temp") {
+            continue;
+        }
+
+        std::string fullPath = currentDir;
+        if (!fullPath.empty() && fullPath.back() != '/') fullPath += '/';
+        fullPath += name;
+
+        struct stat st;
+        if (stat(fullPath.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
+            continue;
+        }
+
+        // If directory is named "roms", "rom", or common emulator dir "mgba", "gba", "nds"
+        if (lowerName == "roms" || lowerName == "rom" ||
+            lowerName == "mgba" || lowerName == "gba" || lowerName == "nds") {
+            outDirs.push_back(fullPath);
+            // We found a ROM root directory. scanDirectoryRecursive will scan this
+            // directory and all of its subdirectories (e.g. /roms/gba, /pokedaisy/roms/...)
+            continue;
+        }
+
+        // For the "3ds" folder, do not recurse into all homebrew apps,
+        // but check if a "3ds/roms" directory exists
+        if (lowerName == "3ds") {
+            std::string subRoms = fullPath + "/roms";
+            struct stat subSt;
+            if (stat(subRoms.c_str(), &subSt) == 0 && S_ISDIR(subSt.st_mode)) {
+                outDirs.push_back(subRoms);
+            }
+            continue;
+        }
+
+        subdirsToSearch.push_back(fullPath);
+    }
+    closedir(d);
+
+    for (const auto& sdir : subdirsToSearch) {
+        findRomDirsRecursive(sdir, depth + 1, maxDepth, outDirs);
+    }
+}
+
 } // namespace
 
 std::vector<InstalledTitle> SaveManager::scanRomFiles(const std::vector<std::string>& customRomDirs) {
@@ -1570,22 +1647,84 @@ std::vector<InstalledTitle> SaveManager::scanRomFiles(const std::vector<std::str
     std::set<std::string> seenRomPaths;
     s_discoveredSavePaths.clear();
 
-    // 1. Scan any user-configured custom ROM directories
+    std::vector<std::string> romDirsToScan;
+
+    // 1. User-configured custom ROM directories
     for (const auto& d : customRomDirs) {
-        if (!d.empty()) {
-            scanDirectoryRecursive(d, 0, 8, titles, seenRomPaths);
+        if (!d.empty() && std::find(romDirsToScan.begin(), romDirsToScan.end(), d) == romDirsToScan.end()) {
+            romDirsToScan.push_back(d);
         }
     }
 
-    // 2. Scan entire SD card root
-    scanDirectoryRecursive("sdmc:/", 0, 8, titles, seenRomPaths);
-
-    // Fallback if running in environment where sdmc:/ is not mounted as prefix
-    if (titles.empty() && s_discoveredSavePaths.empty()) {
-        scanDirectoryRecursive("/", 0, 8, titles, seenRomPaths);
+    // 2. Discover ROM directories on SD card (e.g. /roms, /pokedaisy/roms, etc.)
+    DIR* dSd = opendir("sdmc:/");
+    if (dSd) {
+        closedir(dSd);
+        findRomDirsRecursive("sdmc:/", 0, 3, romDirsToScan);
+    } else {
+        // Fallback for non-3DS testing environment: check local directory for "roms"
+        DIR* dLocal = opendir("./roms");
+        if (dLocal) {
+            closedir(dLocal);
+            romDirsToScan.push_back("./roms");
+        }
     }
 
-    // 3. Resolve save files for all discovered ROM titles
+    // Also include common default paths if they exist
+    const std::vector<std::string> commonDefaults = {
+        "sdmc:/roms",
+        "sdmc:/mGBA",
+        "sdmc:/gba",
+        "sdmc:/nds"
+    };
+    for (const auto& def : commonDefaults) {
+        DIR* d = opendir(def.c_str());
+        if (d) {
+            closedir(d);
+            if (std::find(romDirsToScan.begin(), romDirsToScan.end(), def) == romDirsToScan.end()) {
+                romDirsToScan.push_back(def);
+            }
+        }
+    }
+
+    // De-duplicate discovered ROM directories
+    std::vector<std::string> uniqueRomDirs;
+    for (const auto& dir : romDirsToScan) {
+        if (std::find(uniqueRomDirs.begin(), uniqueRomDirs.end(), dir) == uniqueRomDirs.end()) {
+            uniqueRomDirs.push_back(dir);
+        }
+    }
+
+    // 3. Scan each discovered ROM directory and all of its subdirectories (e.g. /roms, /roms/gba, /pokedaisy/roms, etc.)
+    for (const auto& rdir : uniqueRomDirs) {
+        scanDirectoryRecursive(rdir, 0, 8, titles, seenRomPaths);
+
+        // Check if sibling saves directory exists (e.g. /pokedaisy/saves for /pokedaisy/roms)
+        size_t slash = rdir.find_last_of("/\\");
+        if (slash != std::string::npos) {
+            std::string parentDir = rdir.substr(0, slash);
+            std::string siblingSaves = parentDir + "/saves";
+            DIR* ds = opendir(siblingSaves.c_str());
+            if (ds) {
+                struct dirent* se = nullptr;
+                while ((se = readdir(ds)) != nullptr) {
+                    if (!se->d_name || se->d_name[0] == '.') continue;
+                    std::string sfn = se->d_name;
+                    size_t sdot = sfn.find_last_of('.');
+                    if (sdot != std::string::npos) {
+                        std::string sext = sfn.substr(sdot);
+                        for (char& c : sext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                        if (sext == ".sav" || sext == ".srm" || sext == ".dsv" || sext == ".dat") {
+                            s_discoveredSavePaths.push_back(siblingSaves + "/" + sfn);
+                        }
+                    }
+                }
+                closedir(ds);
+            }
+        }
+    }
+
+    // 4. Resolve save files for all discovered ROM titles
     for (auto& title : titles) {
         std::string foundSave = findSaveFileForRom(title.romPath, title.console);
         if (!foundSave.empty()) {
@@ -1616,12 +1755,13 @@ std::vector<InstalledTitle> SaveManager::scanRomFiles(const std::vector<std::str
 }
 
 std::vector<InstalledTitle> SaveManager::scanInstalledTitles(const std::vector<std::string>& customRomDirs) {
-    // Scan ROM files and discover all saves across the SD card first
+    // Scan ROM files and discover all saves across ROM directories first
     std::vector<InstalledTitle> romTitles = scanRomFiles(customRomDirs);
     std::vector<InstalledTitle> outTitles;
 
 #if defined(__3DS__) || defined(_3DS)
-    FS_MediaType mediaTypes[] = { MEDIATYPE_SD, MEDIATYPE_GAME_CARD };
+    FS_MediaType mediaTypes[] = { MEDIATYPE_SD, MEDIATYPE_GAME_CARD, MEDIATYPE_NAND };
+    std::set<u64> seenTitleIds;
 
     for (auto mediaType : mediaTypes) {
         u32 count = 0;
@@ -1637,11 +1777,21 @@ std::vector<InstalledTitle> SaveManager::scanInstalledTitles(const std::vector<s
 
         for (u32 i = 0; i < read; ++i) {
             u64 tid = ids[i];
+            if (seenTitleIds.count(tid) > 0) continue;
+
             u32 tidHigh = static_cast<u32>((tid >> 32) & 0xFFFFFFFF);
 
+            // Filter to installed 3DS games, CIAs, demos, and DSiWare
             if (tidHigh != 0x00040000 && tidHigh != 0x00040002 && tidHigh != 0x00048004) {
                 continue;
             }
+
+            // Exclude romm3ds itself
+            if (tid == 0x0004000000F17E00ULL) {
+                continue;
+            }
+
+            seenTitleIds.insert(tid);
 
             InstalledTitle title;
             title.titleId = tid;

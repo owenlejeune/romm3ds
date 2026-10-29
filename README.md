@@ -2,13 +2,13 @@
 
 **romm3ds** is a bidirectional save synchronization client for Nintendo 3DS that connects directly to your self-hosted [RomM](https://github.com/rommapp/romm) (Rom Manager) instance.
 
-It automatically detects installed Nintendo 3DS titles (SD/Cartridge), Virtual Console releases, and standalone ROMs across your SD card (GBA, NDS, GB/GBC, NES, SNES), compares save timestamps with your RomM server, and syncs progress seamlessly.
+It automatically detects installed Nintendo 3DS and CIA games (SD/Cartridge/NAND), along with standalone ROMs from any ROM directories and subdirectories on your SD card (e.g. `/roms`, `/roms/gba`, `/pokedaisy/roms`, etc.), compares save timestamps with your RomM server, and syncs progress seamlessly.
 
 ---
 
 ## Features
 
-- **Full SD Card & Installed Title Scanning**: Detects 3DS digital titles and game cards, along with ROMs and saves across your entire SD card (including custom directories like `/pokedaisy/roms`, `/roms/`, `/mGBA/`, etc.).
+- **Installed Title & ROM Directory Scanning**: Detects all installed 3DS and CIA games (SD, Game Card, and NAND), along with ROMs and saves in any ROM directories and subdirectories on your SD card (such as `/roms`, `/roms/gba`, `/pokedaisy/roms`, `/mGBA/`, and user-configured paths).
 - **Smart Save Priority**: Checks the ROM's immediate folder and local emulator subdirectories first before falling back to global searches.
 - **Top Screen Game Details & Logos**: Displays game metadata and icons/logos:
   - **3DS**: Embedded SMDH banners and icons.
