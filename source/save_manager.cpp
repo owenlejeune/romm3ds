@@ -732,7 +732,7 @@ bool SaveManager::getTitleIcon(const InstalledTitle& title, std::vector<uint8_t>
         }
     }
 
-    if (!title.savePath.empty()) {
+    if (!title.isFileRom && !title.savePath.empty()) {
         size_t slash = title.savePath.find_last_of("/\\");
         if (slash != std::string::npos) {
             std::string dir = title.savePath.substr(0, slash);
@@ -787,7 +787,7 @@ bool SaveManager::getTitleIcon(const InstalledTitle& title, std::vector<uint8_t>
         }
     }
 
-    if (!title.savePath.empty()) {
+    if (!title.isFileRom && !title.savePath.empty()) {
         size_t slash = title.savePath.find_last_of("/\\");
         if (slash != std::string::npos) {
             std::string dir = title.savePath.substr(0, slash);
@@ -1336,35 +1336,17 @@ std::string SaveManager::findSaveForInstalledTitle(const InstalledTitle& title) 
         }
     }
 
-    std::string cleanTitle;
-    std::vector<std::string> titleTokens;
-    {
-        std::string currentToken;
-        for (char c : title.name) {
-            if (std::isalnum(static_cast<unsigned char>(c))) {
-                char lower = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-                cleanTitle += lower;
-                currentToken += lower;
-            } else {
-                if (currentToken.length() >= 3) {
-                    if (currentToken != "the" && currentToken != "version" && currentToken != "edition" &&
-                        currentToken != "game" && currentToken != "rom" && currentToken != "3ds") {
-                        titleTokens.push_back(currentToken);
-                    }
-                }
-                currentToken.clear();
-            }
-        }
-        if (currentToken.length() >= 3 && currentToken != "the" && currentToken != "version" &&
-            currentToken != "edition" && currentToken != "game" && currentToken != "rom" && currentToken != "3ds") {
-            titleTokens.push_back(currentToken);
-        }
+    if (title.isFileRom) {
+        return findSaveFileForRom(title.romPath, title.console);
     }
 
-    std::string prodCodeClean;
-    for (char c : title.productCode) {
+    std::string cleanTitle;
+    std::string lowerTitleName;
+    for (char c : title.name) {
+        char lower = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        lowerTitleName += lower;
         if (std::isalnum(static_cast<unsigned char>(c))) {
-            prodCodeClean += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            cleanTitle += lower;
         }
     }
 
@@ -1376,48 +1358,22 @@ std::string SaveManager::findSaveForInstalledTitle(const InstalledTitle& title) 
             for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
             return (ext == ".sav" || ext == ".srm" || ext == ".dsv" || ext == ".dat");
         }
-        return (name == "main");
+        return false;
     };
 
-    auto get3dsxTitle = [](const std::string& path) -> std::string {
-#if defined(__3DS__) || defined(_3DS)
-        FILE* f = fopen(path.c_str(), "rb");
-        if (!f) return "";
-        u32 header[8];
-        if (fread(header, sizeof(u32), 8, f) != 8) {
-            fclose(f);
-            return "";
+    auto isExactBaseNameMatch = [&](const std::string& fname) -> bool {
+        if (lowerTitleName.empty()) return false;
+        size_t dot = fname.find_last_of('.');
+        std::string base = (dot != std::string::npos) ? fname.substr(0, dot) : fname;
+        std::string lowerBase;
+        for (char c : base) {
+            lowerBase += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
         }
-        if (header[0] != 0x58534433) { // '3DSX'
-            fclose(f);
-            return "";
-        }
-        u32 smdhOffset = header[5];
-        if (smdhOffset == 0) {
-            fclose(f);
-            return "";
-        }
-        if (fseek(f, smdhOffset, SEEK_SET) != 0) {
-            fclose(f);
-            return "";
-        }
-        smdh_s smdh;
-        if (fread(&smdh, 1, sizeof(smdh_s), f) >= 0x2040 && std::memcmp(smdh.magic, "SMDH", 4) == 0) {
-            fclose(f);
-            std::string name = extractTitleString(smdh.titles[1]);
-            if (name.empty()) name = extractTitleString(smdh.titles[0]);
-            return name;
-        }
-        fclose(f);
-#else
-        (void)path;
-#endif
-        return "";
+        return lowerBase == lowerTitleName;
     };
 
     struct MatchedCandidate {
         std::string savePath;
-        int score = 0;
         time_t mtime = 0;
     };
     std::vector<MatchedCandidate> candidates;
@@ -1451,167 +1407,59 @@ std::string SaveManager::findSaveForInstalledTitle(const InstalledTitle& title) 
             if (inspectedDirs.count(lowerDir) > 0) continue;
             inspectedDirs.insert(lowerDir);
 
-            int dirScore = 0;
-            std::string cleanDir;
-            for (char c : lowerDir) {
-                if (std::isalnum(static_cast<unsigned char>(c))) cleanDir += c;
-            }
-
-            if (!cleanDir.empty() && !cleanTitle.empty()) {
-                if (cleanTitle.find(cleanDir) != std::string::npos || cleanDir.find(cleanTitle) != std::string::npos) {
-                    dirScore += 50;
-                }
-            }
-
-            for (const auto& token : titleTokens) {
-                if (cleanDir.find(token) != std::string::npos) {
-                    dirScore += 25;
-                }
-            }
-
-            if (prodCodeClean.length() >= 4 && cleanDir.find(prodCodeClean.substr(prodCodeClean.length() - 4)) != std::string::npos) {
-                dirScore += 40;
-            }
-
             DIR* subD = opendir(fullDir.c_str());
             if (!subD) continue;
 
             struct dirent* subEnt = nullptr;
-            std::vector<std::string> dirSaveFiles;
-            std::string dirFirst3dsx;
-
             while ((subEnt = readdir(subD)) != nullptr) {
                 if (subEnt->d_name[0] == '.') continue;
                 std::string fname = subEnt->d_name;
+                if (!isSaveFileName(fname) || !isExactBaseNameMatch(fname)) continue;
+
                 std::string subFull = fullDir + "/" + fname;
-
                 struct stat sst;
-                if (stat(subFull.c_str(), &sst) != 0 || !S_ISREG(sst.st_mode)) {
-                    continue;
-                }
-
-                if (fname.length() >= 5 && fname.rfind(".3dsx") == fname.length() - 5) {
-                    if (dirFirst3dsx.empty()) dirFirst3dsx = subFull;
-                    std::string smdhTitle = get3dsxTitle(subFull);
-                    if (!smdhTitle.empty()) {
-                        std::string cleanSmdh;
-                        for (char c : smdhTitle) {
-                            if (std::isalnum(static_cast<unsigned char>(c))) {
-                                cleanSmdh += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-                            }
-                        }
-                        if (cleanSmdh == cleanTitle || cleanSmdh.find(cleanTitle) != std::string::npos || cleanTitle.find(cleanSmdh) != std::string::npos) {
-                            dirScore += 100;
-                        }
-                    }
-                } else if (isSaveFileName(fname)) {
-                    dirSaveFiles.push_back(subFull);
+                if (stat(subFull.c_str(), &sst) == 0 && S_ISREG(sst.st_mode) && sst.st_size > 0) {
+                    candidates.push_back({subFull, sst.st_mtime});
                 }
             }
             closedir(subD);
-
-            if (!dirSaveFiles.empty() && dirScore > 0) {
-                for (const auto& sf : dirSaveFiles) {
-                    size_t slash = sf.find_last_of("/\\");
-                    std::string sName = (slash != std::string::npos) ? sf.substr(slash + 1) : sf;
-                    std::string sLower = sName;
-                    for (char& c : sLower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-
-                    int fileScore = dirScore;
-                    for (const auto& token : titleTokens) {
-                        if (sLower.find(token) != std::string::npos) {
-                            fileScore += 20;
-                        }
-                    }
-
-                    struct stat sfStat;
-                    time_t mtime = 0;
-                    if (stat(sf.c_str(), &sfStat) == 0) {
-                        mtime = sfStat.st_mtime;
-                        if (sfStat.st_size > 0) fileScore += 10;
-                    }
-
-                    MatchedCandidate cand;
-                    cand.savePath = sf;
-                    cand.score = fileScore;
-                    cand.mtime = mtime;
-                    candidates.push_back(cand);
-                }
-            } else if (dirSaveFiles.empty() && dirScore >= 50 && !dirFirst3dsx.empty()) {
-                size_t slash = dirFirst3dsx.find_last_of("/\\");
-                std::string bname = (slash != std::string::npos) ? dirFirst3dsx.substr(slash + 1) : "save";
-                size_t dot = bname.find_last_of('.');
-                if (dot != std::string::npos) bname = bname.substr(0, dot);
-
-                MatchedCandidate cand;
-                cand.savePath = fullDir + "/" + bname + ".sav";
-                cand.score = dirScore;
-                cand.mtime = 0;
-                candidates.push_back(cand);
-            }
         }
         closedir(d);
     }
 
-    if (candidates.empty()) {
-        const std::vector<std::string> extraDirs = {
-            "sdmc:/3ds/saves", "/3ds/saves",
-            "sdmc:/mGBA", "/mGBA",
-            "sdmc:/gba", "/gba",
-            "sdmc:/roms/gba", "/roms/gba",
-            "sdmc:/saves", "/saves"
-        };
-        for (const auto& ed : extraDirs) {
-            DIR* edDir = opendir(ed.c_str());
-            if (!edDir) continue;
-            struct dirent* e = nullptr;
-            while ((e = readdir(edDir)) != nullptr) {
-                if (e->d_name[0] == '.') continue;
-                std::string fname = e->d_name;
-                if (!isSaveFileName(fname)) continue;
+    const std::vector<std::string> extraDirs = {
+        "sdmc:/3ds/saves", "/3ds/saves",
+        "sdmc:/mGBA", "/mGBA",
+        "sdmc:/gba", "/gba",
+        "sdmc:/roms/gba", "/roms/gba",
+        "sdmc:/saves", "/saves"
+    };
+    for (const auto& ed : extraDirs) {
+        DIR* edDir = opendir(ed.c_str());
+        if (!edDir) continue;
+        struct dirent* e = nullptr;
+        while ((e = readdir(edDir)) != nullptr) {
+            if (e->d_name[0] == '.') continue;
+            std::string fname = e->d_name;
+            if (!isSaveFileName(fname) || !isExactBaseNameMatch(fname)) continue;
 
-                std::string fLower = fname;
-                for (char& c : fLower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-
-                int fScore = 0;
-                for (const auto& token : titleTokens) {
-                    if (fLower.find(token) != std::string::npos) fScore += 25;
-                }
-                if (fScore >= 25) {
-                    std::string fPath = ed + "/" + fname;
-                    struct stat st;
-                    time_t mt = (stat(fPath.c_str(), &st) == 0) ? st.st_mtime : 0;
-                    candidates.push_back({fPath, fScore, mt});
-                }
+            std::string fPath = ed + "/" + fname;
+            struct stat st;
+            if (stat(fPath.c_str(), &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0) {
+                candidates.push_back({fPath, st.st_mtime});
             }
-            closedir(edDir);
         }
+        closedir(edDir);
+    }
 
-        for (const auto& sf : s_discoveredSavePaths) {
-            size_t slash = sf.find_last_of("/\\");
-            std::string fname = (slash != std::string::npos) ? sf.substr(slash + 1) : sf;
-            std::string fLower = fname;
-            for (char& c : fLower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    for (const auto& sf : s_discoveredSavePaths) {
+        size_t slash = sf.find_last_of("/\\");
+        std::string fname = (slash != std::string::npos) ? sf.substr(slash + 1) : sf;
+        if (!isSaveFileName(fname) || !isExactBaseNameMatch(fname)) continue;
 
-            int fScore = 0;
-            std::string fClean;
-            for (char c : fname) {
-                if (std::isalnum(static_cast<unsigned char>(c))) {
-                    fClean += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-                }
-            }
-
-            if (!cleanTitle.empty() && fClean.find(cleanTitle) != std::string::npos) {
-                fScore += 80;
-            }
-            for (const auto& token : titleTokens) {
-                if (fLower.find(token) != std::string::npos) fScore += 25;
-            }
-            if (fScore >= 25) {
-                struct stat st;
-                time_t mt = (stat(sf.c_str(), &st) == 0) ? st.st_mtime : 0;
-                candidates.push_back({sf, fScore, mt});
-            }
+        struct stat st;
+        if (stat(sf.c_str(), &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0) {
+            candidates.push_back({sf, st.st_mtime});
         }
     }
 
@@ -1620,7 +1468,6 @@ std::string SaveManager::findSaveForInstalledTitle(const InstalledTitle& title) 
     }
 
     std::sort(candidates.begin(), candidates.end(), [](const MatchedCandidate& a, const MatchedCandidate& b) {
-        if (a.score != b.score) return a.score > b.score;
         return a.mtime > b.mtime;
     });
 
@@ -1946,18 +1793,7 @@ std::vector<InstalledTitle> SaveManager::scanRomFiles(const std::vector<std::str
             }
         } else {
             title.hasSave = false;
-            size_t slash = title.romPath.find_last_of("/\\");
-            std::string baseDir = (slash != std::string::npos) ? title.romPath.substr(0, slash) : ".";
-            if (title.console == "DS") {
-                struct stat stSaves;
-                if (stat((baseDir + "/saves").c_str(), &stSaves) == 0 && S_ISDIR(stSaves.st_mode)) {
-                    title.savePath = baseDir + "/saves/" + title.name + ".sav";
-                } else {
-                    title.savePath = baseDir + "/" + title.name + ".sav";
-                }
-            } else {
-                title.savePath = baseDir + "/" + title.name + ".sav";
-            }
+            title.savePath.clear();
         }
     }
 

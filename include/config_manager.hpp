@@ -24,6 +24,7 @@ struct GameMapping {
     uint64_t remoteGameId = 0;
     std::string remoteTitle;
     std::string customSavePath;
+    bool customSavePathExplicit = false;
 };
 
 class ConfigManager {

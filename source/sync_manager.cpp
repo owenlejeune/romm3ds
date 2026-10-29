@@ -646,7 +646,7 @@ bool SyncManager::refresh() {
 
         if (!item.isIgnored) {
             const GameMapping* mapping = m_configMgr ? m_configMgr->findMappingByTitleId(local.titleIdHex) : nullptr;
-            if (mapping && !mapping->customSavePath.empty()) {
+            if (mapping && mapping->customSavePathExplicit && !mapping->customSavePath.empty()) {
                 item.localTitle.savePath = mapping->customSavePath;
                 struct stat st;
                 if (stat(item.localTitle.savePath.c_str(), &st) == 0 && st.st_size > 0) {
@@ -735,7 +735,6 @@ bool SyncManager::refresh() {
                         newMap.localName = local.name;
                         newMap.remoteGameId = matchTarget->id;
                         newMap.remoteTitle = matchTarget->title;
-                        newMap.customSavePath = local.savePath;
                         m_configMgr->addOrUpdateMapping(newMap);
                     }
                 }
@@ -809,11 +808,15 @@ bool SyncManager::manualMatch(size_t itemIndex, const RommGame& remoteGame) {
 
     if (m_configMgr) {
         GameMapping map;
+        const GameMapping* existing = m_configMgr->findMappingByTitleId(item.localTitle.titleIdHex);
+        if (existing && existing->customSavePathExplicit) {
+            map.customSavePath = existing->customSavePath;
+            map.customSavePathExplicit = true;
+        }
         map.titleId = item.localTitle.titleIdHex;
         map.localName = item.localTitle.name;
         map.remoteGameId = remoteGame.id;
         map.remoteTitle = remoteGame.title;
-        map.customSavePath = item.localTitle.savePath;
         m_configMgr->addOrUpdateMapping(map);
         m_configMgr->saveMappings();
     }
@@ -863,6 +866,7 @@ bool SyncManager::setCustomSavePath(size_t itemIndex, const std::string& savePat
             map.remoteTitle = item.isMatched ? item.remoteTitle : "";
         }
         map.customSavePath = savePath;
+        map.customSavePathExplicit = !savePath.empty();
         m_configMgr->addOrUpdateMapping(map);
         m_configMgr->saveMappings();
     }

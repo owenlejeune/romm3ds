@@ -117,6 +117,7 @@ bool ConfigManager::loadMappings(const std::string& path) {
             mapping.remoteGameId = item.value("remote_game_id", (uint64_t)0);
             mapping.remoteTitle = item.value("remote_title", "");
             mapping.customSavePath = item.value("custom_save_path", item.value("save_path", ""));
+            mapping.customSavePathExplicit = item.value("custom_save_path_explicit", false);
             m_mappings.push_back(mapping);
         }
     }
@@ -140,8 +141,9 @@ bool ConfigManager::saveMappings(const std::string& path) {
             {"remote_game_id", m.remoteGameId},
             {"remote_title", m.remoteTitle}
         };
-        if (!m.customSavePath.empty()) {
+        if (m.customSavePathExplicit && !m.customSavePath.empty()) {
             jItem["custom_save_path"] = m.customSavePath;
+            jItem["custom_save_path_explicit"] = true;
         }
         jArray.push_back(jItem);
     }
