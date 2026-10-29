@@ -45,6 +45,7 @@ bool ConfigManager::loadConfig(const std::string& path) {
     if (j.contains("rom_directories") && j["rom_directories"].is_array()) {
         m_config.romDirectories = j["rom_directories"].get<std::vector<std::string>>();
     }
+    m_config.detectedTimezoneOffsetSeconds = j.value("detected_timezone_offset_seconds", 0L);
     return true;
 }
 
@@ -61,7 +62,8 @@ bool ConfigManager::saveConfig(const std::string& path) {
         {"server_endpoint", m_config.serverEndpoint},
         {"api_key", m_config.apiKey},
         {"ignored_title_ids", m_config.ignoredTitleIds},
-        {"rom_directories", m_config.romDirectories}
+        {"rom_directories", m_config.romDirectories},
+        {"detected_timezone_offset_seconds", m_config.detectedTimezoneOffsetSeconds}
     };
 
     file << j.dump(4);

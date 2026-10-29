@@ -11,6 +11,7 @@ struct AppConfig {
     std::string apiKey;
     std::vector<std::string> ignoredTitleIds;
     std::vector<std::string> romDirectories;
+    long detectedTimezoneOffsetSeconds = 0;
 
     bool isValid() const {
         return !serverEndpoint.empty() && !apiKey.empty();
@@ -37,6 +38,9 @@ public:
     void setConfig(const AppConfig& config) { m_config = config; }
     void setEndpoint(const std::string& endpoint) { m_config.serverEndpoint = endpoint; }
     void setApiKey(const std::string& apiKey) { m_config.apiKey = apiKey; }
+
+    long getDetectedTimezoneOffsetSeconds() const { return m_config.detectedTimezoneOffsetSeconds; }
+    void setDetectedTimezoneOffsetSeconds(long offset) { m_config.detectedTimezoneOffsetSeconds = offset; }
 
     const std::vector<std::string>& getRomDirectories() const { return m_config.romDirectories; }
     void setRomDirectories(const std::vector<std::string>& dirs) { m_config.romDirectories = dirs; }

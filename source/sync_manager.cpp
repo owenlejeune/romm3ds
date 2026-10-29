@@ -158,9 +158,34 @@ std::string findRegularSaveFile(const std::string& dirPath, const std::string& p
 } // namespace
 
 
+static time_t utcToEpoch(int year, int month, int day, int hour, int minute, int second) {
+    static const int daysBeforeMonth[] = {0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334};
+    int y = year;
+    int m = (month < 1) ? 1 : ((month > 12) ? 12 : month);
+    int leapYears = ((y - 1) / 4) - ((y - 1) / 100) + ((y - 1) / 400)
+                  - (1969 / 4 - 1969 / 100 + 1969 / 400);
+    int days = (y - 1970) * 365 + leapYears + daysBeforeMonth[m - 1] + (day - 1);
+    bool isLeap = ((y % 4 == 0 && y % 100 != 0) || (y % 400 == 0));
+    if (isLeap && m > 2) {
+        days += 1;
+    }
+    return static_cast<time_t>(days) * 86400 + hour * 3600 + minute * 60 + second;
+}
+
+static long s_autoDetectedUtcOffset = 0;
+static bool s_hasDetectedUtcOffset = false;
+static int s_manualTimezoneOffsetMinutes = -99999;
+
 SyncManager::SyncManager(ConfigManager* cfg, NetworkManager* net, SaveManager* save)
     : m_configMgr(cfg), m_netMgr(net), m_saveMgr(save) {
     clearLibraryCache();
+    if (m_configMgr) {
+        long savedOffset = m_configMgr->getDetectedTimezoneOffsetSeconds();
+        if (savedOffset != 0 && !s_hasDetectedUtcOffset) {
+            s_autoDetectedUtcOffset = savedOffset;
+            s_hasDetectedUtcOffset = true;
+        }
+    }
 }
 
 SyncManager::~SyncManager() {
@@ -169,6 +194,33 @@ SyncManager::~SyncManager() {
 
 std::string SyncManager::getStagingDirectory(uint64_t titleId) {
     return "sdmc:/3ds/romm3ds/saves/" + SaveManager::formatTitleId(titleId);
+}
+
+void SyncManager::updateServerTimeOffset(time_t serverTime) {
+    if (serverTime <= 0) return;
+    time_t localRtc = time(nullptr);
+    long diff = static_cast<long>(localRtc) - static_cast<long>(serverTime);
+    long rounded = std::lround(static_cast<double>(diff) / 900.0) * 900;
+    s_autoDetectedUtcOffset = rounded;
+    s_hasDetectedUtcOffset = true;
+}
+
+long SyncManager::getLocalTimezoneOffset() {
+    if (s_manualTimezoneOffsetMinutes != -99999) {
+        return static_cast<long>(s_manualTimezoneOffsetMinutes) * 60L;
+    }
+    if (s_hasDetectedUtcOffset) {
+        return s_autoDetectedUtcOffset;
+    }
+    return 0;
+}
+
+void SyncManager::setManualTimezoneOffsetMinutes(int minutes) {
+    s_manualTimezoneOffsetMinutes = minutes;
+}
+
+bool SyncManager::hasDetectedTimezoneOffset() {
+    return s_hasDetectedUtcOffset;
 }
 
 std::string SyncManager::formatTimestamp(time_t t) {
@@ -182,30 +234,57 @@ std::string SyncManager::formatTimestamp(time_t t) {
 
 std::string SyncManager::formatIsoTimestamp(const std::string& iso) {
     if (iso.empty()) return "Unknown";
-    int y = 0, m = 0, d = 0, h = 0, min = 0, s = 0;
-    if (sscanf(iso.c_str(), "%d-%d-%d%*c%d:%d:%d", &y, &m, &d, &h, &min, &s) >= 6) {
-        char buf[32];
-        snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d:%02d", y, m, d, h, min, s);
-        return std::string(buf);
-    }
-    return iso;
+    time_t t = parseIsoTimestamp(iso);
+    if (t <= 0) return iso;
+    return formatTimestamp(t);
 }
 
 time_t SyncManager::parseIsoTimestamp(const std::string& iso) {
     if (iso.empty()) return 0;
     int y = 0, m = 0, d = 0, h = 0, min = 0, s = 0;
-    if (sscanf(iso.c_str(), "%d-%d-%d%*c%d:%d:%d", &y, &m, &d, &h, &min, &s) >= 6) {
-        struct tm t = {};
-        t.tm_year = y - 1900;
-        t.tm_mon = m - 1;
-        t.tm_mday = d;
-        t.tm_hour = h;
-        t.tm_min = min;
-        t.tm_sec = s;
-        t.tm_isdst = -1;
-        return mktime(&t);
+    int charsRead = 0;
+    if (sscanf(iso.c_str(), "%d-%d-%d%*c%d:%d:%d%n", &y, &m, &d, &h, &min, &s, &charsRead) < 6) {
+        return 0;
     }
-    return 0;
+
+    time_t utcEpoch = utcToEpoch(y, m, d, h, min, s);
+
+    // Look for timezone indicator after seconds (skip fractional seconds like .123456)
+    std::string remainder = (charsRead > 0 && charsRead < (int)iso.length()) ? iso.substr(charsRead) : "";
+    size_t dotPos = remainder.find('.');
+    if (dotPos != std::string::npos) {
+        size_t endNum = remainder.find_first_not_of("0123456789", dotPos + 1);
+        if (endNum != std::string::npos) {
+            remainder = remainder.substr(endNum);
+        } else {
+            remainder.clear();
+        }
+    }
+
+    int stringOffsetSeconds = 0;
+    bool hasExplicitTimezone = false;
+    if (!remainder.empty()) {
+        if (remainder[0] == 'Z' || remainder[0] == 'z') {
+            stringOffsetSeconds = 0;
+            hasExplicitTimezone = true;
+        } else if (remainder[0] == '+' || remainder[0] == '-') {
+            int offH = 0, offM = 0;
+            if (sscanf(remainder.c_str() + 1, "%d:%d", &offH, &offM) >= 1 ||
+                sscanf(remainder.c_str() + 1, "%2d%2d", &offH, &offM) >= 1) {
+                int totalSec = offH * 3600 + offM * 60;
+                stringOffsetSeconds = (remainder[0] == '-') ? -totalSec : totalSec;
+                hasExplicitTimezone = true;
+            }
+        }
+    }
+
+    if (hasExplicitTimezone) {
+        utcEpoch -= stringOffsetSeconds;
+    }
+
+    // Convert UTC epoch to 3DS local time by adding local UTC offset
+    long localOffset = getLocalTimezoneOffset();
+    return utcEpoch + localOffset;
 }
 
 std::string SyncManager::normalizeName(const std::string& str) {
@@ -1030,11 +1109,15 @@ bool SyncManager::forceDownload(SyncItem& item, LogCallback log) {
         if (localFileName == "main" && !saves[0].fileName.empty()) {
             localFileName = saves[0].fileName;
         }
+    } else {
+        if (!saves[0].fileName.empty() && saves[0].fileName != "main") {
+            emit("Remote 3DS save in RomM: " + saves[0].fileName);
+        }
     }
 
     std::string targetFile = stagingDir + "/" + localFileName;
     emit("Staging target: " + targetFile);
-    emit("Downloading remote save from RomM...");
+    emit("Downloading remote save from RomM (File: " + saves[0].fileName + ")...");
     NetworkResult res = m_netMgr->downloadSaveById(saves[0].id, targetFile);
     if (!res.success) {
         emit("[ERROR] Download failed: " + res.errorMessage);
@@ -1047,10 +1130,10 @@ bool SyncManager::forceDownload(SyncItem& item, LogCallback log) {
     emit("[OK] Download finished (" + std::to_string(dlSize) + " bytes).");
 
     std::string injectSource = (item.localTitle.isFileRom || !item.localTitle.savePath.empty()) ? targetFile : stagingDir;
-    emit("Injecting save into local storage...");
+    emit("Injecting save into local storage (" + item.localTitle.name + ")...");
     if (!m_saveMgr->injectSave(item.localTitle, injectSource, log)) {
-        emit("[ERROR] Save injection failed.");
-        m_lastMessage = "Save downloaded but injection failed.";
+        emit("[ERROR] Save injection failed for " + item.localTitle.name + " (Title ID: " + item.localTitle.titleIdHex + ").");
+        m_lastMessage = "Save downloaded but injection failed for " + item.localTitle.name;
         return false;
     }
 

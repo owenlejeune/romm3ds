@@ -71,6 +71,10 @@ public:
     static std::string formatTimestamp(time_t t);
     static std::string formatIsoTimestamp(const std::string& iso);
     static time_t parseIsoTimestamp(const std::string& iso);
+    static void updateServerTimeOffset(time_t serverTime);
+    static long getLocalTimezoneOffset();
+    static void setManualTimezoneOffsetMinutes(int minutes);
+    static bool hasDetectedTimezoneOffset();
 
 private:
     void autoMatchTitles();

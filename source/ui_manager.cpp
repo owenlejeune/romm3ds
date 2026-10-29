@@ -391,9 +391,9 @@ void UIManager::syncSelectedGame() {
         m_conflictGameIndex = actualIdx;
         time_t localTime = item.localTitle.saveTime;
         time_t remoteTime = item.remoteSaveTime != 0 ? item.remoteSaveTime : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
-        if (remoteTime > localTime) {
+        if (remoteTime > localTime + 5) {
             m_conflictChoiceIndex = 0;
-        } else if (localTime > remoteTime) {
+        } else if (localTime > remoteTime + 5) {
             m_conflictChoiceIndex = 1;
         } else {
             m_conflictChoiceIndex = 0;
@@ -455,9 +455,9 @@ void UIManager::processBatchSync() {
             m_conflictGameIndex = m_batchSyncIndex;
             time_t localTime = item.localTitle.saveTime;
             time_t remoteTime = item.remoteSaveTime != 0 ? item.remoteSaveTime : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
-            if (remoteTime > localTime) {
+            if (remoteTime > localTime + 5) {
                 m_conflictChoiceIndex = 0;
-            } else if (localTime > remoteTime) {
+            } else if (localTime > remoteTime + 5) {
                 m_conflictChoiceIndex = 1;
             } else {
                 m_conflictChoiceIndex = 0;
@@ -1316,13 +1316,14 @@ void UIManager::renderMainMenuTop() {
 
         time_t localTime = item.localTitle.saveTime;
         time_t remoteTime = item.remoteSaveTime != 0 ? item.remoteSaveTime : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
-        bool remoteIsNewer = (remoteTime > 0 && (localTime == 0 || remoteTime > localTime));
-        bool localIsNewer = (localTime > 0 && (remoteTime == 0 || localTime > remoteTime));
+        bool remoteIsNewer = (remoteTime > 0 && (localTime == 0 || remoteTime > localTime + 5));
+        bool localIsNewer = (localTime > 0 && (remoteTime == 0 || localTime > remoteTime + 5));
 
         std::string detailLine2 = "Local: " + std::string(item.localTitle.hasSave ? "YES" : "NO") +
                                   "  |  Remote: " + std::string(item.remoteHasSave ? "YES" : "NO");
         if (item.remoteHasSave && !item.remoteSaveUpdatedAt.empty()) {
-            detailLine2 += " (" + item.remoteSaveUpdatedAt.substr(0, 10) + ")";
+            std::string formattedRemote = SyncManager::formatIsoTimestamp(item.remoteSaveUpdatedAt);
+            detailLine2 += " (" + formattedRemote.substr(0, 10) + ")";
         }
         if (item.localTitle.hasSave && item.remoteHasSave) {
             if (remoteIsNewer) {
@@ -1766,8 +1767,8 @@ void UIManager::renderConflictTop() {
     time_t localTime = item.localTitle.saveTime;
     time_t remoteTime = item.remoteSaveTime != 0 ? item.remoteSaveTime : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
 
-    bool remoteIsNewer = (remoteTime > 0 && (localTime == 0 || remoteTime > localTime));
-    bool localIsNewer = (localTime > 0 && (remoteTime == 0 || localTime > remoteTime));
+    bool remoteIsNewer = (remoteTime > 0 && (localTime == 0 || remoteTime > localTime + 5));
+    bool localIsNewer = (localTime > 0 && (remoteTime == 0 || localTime > remoteTime + 5));
 
     // Card 1: Local (3DS) Save
     float card1Y = 68.0f;
@@ -1856,8 +1857,8 @@ void UIManager::renderConflictBottom() {
         const auto& item = m_syncMgr->getItems()[m_conflictGameIndex];
         time_t localTime = item.localTitle.saveTime;
         time_t remoteTime = item.remoteSaveTime != 0 ? item.remoteSaveTime : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
-        remoteIsNewer = (remoteTime > 0 && (localTime == 0 || remoteTime > localTime));
-        localIsNewer = (localTime > 0 && (remoteTime == 0 || localTime > remoteTime));
+        remoteIsNewer = (remoteTime > 0 && (localTime == 0 || remoteTime > localTime + 5));
+        localIsNewer = (localTime > 0 && (remoteTime == 0 || localTime > remoteTime + 5));
     }
 
     std::string btnLocal = remoteIsNewer ? "[ Download Save (Overwrite Local) * ]" : "[ Download Save (Overwrite Local) ]";

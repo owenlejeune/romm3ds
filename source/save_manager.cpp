@@ -795,6 +795,48 @@ bool SaveManager::getTitleIcon(const InstalledTitle& title, std::vector<uint8_t>
     return generateConsoleBadgeIcon(title.console, outIconData);
 }
 
+#if defined(__3DS__) || defined(_3DS)
+static std::string formatResultHex(Result res) {
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "0x%08lX (L=%u, S=%u, M=%u, D=%u)",
+                  static_cast<unsigned long>(static_cast<u32>(res)),
+                  static_cast<unsigned>(R_LEVEL(res)),
+                  static_cast<unsigned>(R_SUMMARY(res)),
+                  static_cast<unsigned>(R_MODULE(res)),
+                  static_cast<unsigned>(R_DESCRIPTION(res)));
+    return std::string(buf);
+}
+
+static std::vector<std::pair<std::string, u64>> listArchiveFiles(FS_Archive archive, const std::string& archivePath) {
+    std::vector<std::pair<std::string, u64>> results;
+    Handle dirHandle = 0;
+    FS_Path dPath = fsMakePath(PATH_ASCII, archivePath.c_str());
+    if (R_FAILED(FSUSER_OpenDirectory(&dirHandle, archive, dPath))) {
+        return results;
+    }
+
+    constexpr u32 ENTRY_COUNT = 32;
+    std::vector<FS_DirectoryEntry> entries(ENTRY_COUNT);
+    u32 readCount = 0;
+
+    while (R_SUCCEEDED(FSDIR_Read(dirHandle, &readCount, ENTRY_COUNT, entries.data())) && readCount > 0) {
+        for (u32 i = 0; i < readCount; ++i) {
+            std::string entryName = decodeUtf16(entries[i].name, 256);
+            if (entryName == "." || entryName == "..") continue;
+            std::string itemPath = (archivePath == "/") ? ("/" + entryName) : (archivePath + "/" + entryName);
+            if (entries[i].attributes & FS_ATTRIBUTE_DIRECTORY) {
+                auto sub = listArchiveFiles(archive, itemPath);
+                results.insert(results.end(), sub.begin(), sub.end());
+            } else {
+                results.push_back({itemPath, entries[i].fileSize});
+            }
+        }
+    }
+    FSDIR_Close(dirHandle);
+    return results;
+}
+#endif
+
 bool SaveManager::copyArchiveDirToFs(uint64_t archiveHandle, const std::string& archivePath, const std::string& fsDestPath) {
     FS_Archive archive = static_cast<FS_Archive>(archiveHandle);
     Handle dirHandle = 0;
@@ -864,15 +906,19 @@ bool SaveManager::copyArchiveDirToFs(uint64_t archiveHandle, const std::string& 
     return success;
 }
 
-bool SaveManager::copyFsDirToArchive(uint64_t archiveHandle, const std::string& fsSrcPath, const std::string& archiveDestPath) {
+bool SaveManager::copyFsDirToArchive(uint64_t archiveHandle, const std::string& fsSrcPath, const std::string& archiveDestPath, LogCallback log) {
+    auto emit = [&](const std::string& m) { if (log) log(m); };
     FS_Archive archive = static_cast<FS_Archive>(archiveHandle);
     DIR* dir = opendir(fsSrcPath.c_str());
     if (!dir) {
+        emit("[ERROR] Could not open staging directory: " + fsSrcPath);
         return false;
     }
 
     bool success = true;
     struct dirent* entry = nullptr;
+    int itemsFound = 0;
+    int filesWritten = 0;
 
     while ((entry = readdir(dir)) != nullptr) {
         std::string name = entry->d_name;
@@ -880,23 +926,37 @@ bool SaveManager::copyFsDirToArchive(uint64_t archiveHandle, const std::string& 
             continue;
         }
 
+        // Skip macOS dotfiles, hidden files, and desktop metadata (._*, .DS_Store)
+        if (name[0] == '.') {
+            emit("[DEBUG] Skipping hidden file: " + name);
+            continue;
+        }
+
+        itemsFound++;
         std::string srcItem = fsSrcPath + "/" + name;
         std::string dstItem = (archiveDestPath == "/") ? ("/" + name) : (archiveDestPath + "/" + name);
 
         struct stat st;
         if (stat(srcItem.c_str(), &st) != 0) {
+            emit("[WARN] Could not stat " + srcItem);
             continue;
         }
 
         if (S_ISDIR(st.st_mode)) {
+            emit("Creating directory in archive: " + dstItem);
             FS_Path dPath = fsMakePath(PATH_ASCII, dstItem.c_str());
-            FSUSER_CreateDirectory(archive, dPath, 0);
-            if (!copyFsDirToArchive(archiveHandle, srcItem, dstItem)) {
+            Result resDir = FSUSER_CreateDirectory(archive, dPath, 0);
+            if (R_FAILED(resDir)) {
+                // If directory already exists, it is not fatal
+                emit("[DEBUG] FSUSER_CreateDirectory returned " + formatResultHex(resDir) + " for " + dstItem);
+            }
+            if (!copyFsDirToArchive(archiveHandle, srcItem, dstItem, log)) {
                 success = false;
             }
         } else {
             FILE* srcFile = fopen(srcItem.c_str(), "rb");
             if (!srcFile) {
+                emit("[ERROR] Failed opening staging file: " + srcItem);
                 success = false;
                 continue;
             }
@@ -905,12 +965,26 @@ bool SaveManager::copyFsDirToArchive(uint64_t archiveHandle, const std::string& 
             u64 fileSize = ftell(srcFile);
             fseek(srcFile, 0, SEEK_SET);
 
+            emit("Writing file: " + dstItem + " (" + std::to_string(fileSize) + " B)");
+
             FS_Path fPath = fsMakePath(PATH_ASCII, dstItem.c_str());
-            FSUSER_DeleteFile(archive, fPath);
-            FSUSER_CreateFile(archive, fPath, 0, fileSize);
+            Result resDel = FSUSER_DeleteFile(archive, fPath);
+            if (R_FAILED(resDel)) {
+                emit("[DEBUG] FSUSER_DeleteFile for " + dstItem + " returned " + formatResultHex(resDel));
+            }
+
+            Result resCreate = FSUSER_CreateFile(archive, fPath, 0, fileSize);
+            if (R_FAILED(resCreate)) {
+                emit("[ERROR] FSUSER_CreateFile failed for " + dstItem + " (size: " + std::to_string(fileSize) + " B): " + formatResultHex(resCreate));
+                fclose(srcFile);
+                success = false;
+                continue;
+            }
 
             Handle dstFile = 0;
-            if (R_FAILED(FSUSER_OpenFile(&dstFile, archive, fPath, FS_OPEN_WRITE, 0))) {
+            Result resOpen = FSUSER_OpenFile(&dstFile, archive, fPath, FS_OPEN_WRITE, 0);
+            if (R_FAILED(resOpen)) {
+                emit("[ERROR] FSUSER_OpenFile failed for " + dstItem + ": " + formatResultHex(resOpen));
                 fclose(srcFile);
                 success = false;
                 continue;
@@ -920,19 +994,42 @@ bool SaveManager::copyFsDirToArchive(uint64_t archiveHandle, const std::string& 
             std::vector<u8> buffer(BUFFER_SIZE);
             u64 offset = 0;
             size_t bytesRead = 0;
+            bool writeOk = true;
 
             while ((bytesRead = fread(buffer.data(), 1, BUFFER_SIZE, srcFile)) > 0) {
                 u32 bytesWritten = 0;
-                FSFILE_Write(dstFile, &bytesWritten, offset, buffer.data(), bytesRead, FS_WRITE_FLUSH);
+                Result resWrite = FSFILE_Write(dstFile, &bytesWritten, offset, buffer.data(), bytesRead, FS_WRITE_FLUSH);
+                if (R_FAILED(resWrite)) {
+                    emit("[ERROR] FSFILE_Write failed for " + dstItem + " at offset " + std::to_string(offset) + ": " + formatResultHex(resWrite));
+                    writeOk = false;
+                    break;
+                }
+                if (bytesWritten != bytesRead) {
+                    emit("[ERROR] Short write for " + dstItem + ": wrote " + std::to_string(bytesWritten) + " of " + std::to_string(bytesRead) + " bytes");
+                    writeOk = false;
+                    break;
+                }
                 offset += bytesWritten;
             }
 
             FSFILE_Close(dstFile);
             fclose(srcFile);
+
+            if (!writeOk) {
+                success = false;
+            } else {
+                filesWritten++;
+                emit("[OK] Successfully wrote " + dstItem + " (" + std::to_string(offset) + " B)");
+            }
         }
     }
 
     closedir(dir);
+    if (itemsFound == 0) {
+        emit("[WARN] No files or directories found in staging: " + fsSrcPath);
+    } else {
+        emit("[INFO] Archive transfer complete: " + std::to_string(filesWritten) + " file(s) written.");
+    }
     return success;
 }
 
@@ -2149,7 +2246,7 @@ bool SaveManager::backupSave(uint64_t titleId, const std::string& outDirectory, 
     FS_Archive archive = 0;
     Result res = openSaveArchive(&archive, titleId, mediaType);
     if (R_FAILED(res)) {
-        emit("[ERROR] Failed to open 3DS save archive (Result 0x" + formatTitleId(res) + ")");
+        emit("[ERROR] Failed to open 3DS save archive: " + formatResultHex(res));
         return false;
     }
 
@@ -2232,18 +2329,83 @@ bool SaveManager::backupSave(const InstalledTitle& title, const std::string& out
 bool SaveManager::injectSave(uint64_t titleId, const std::string& inDirectory, uint8_t mediaType, LogCallback log) {
     auto emit = [&](const std::string& m) { if (log) log(m); };
 #if defined(__3DS__) || defined(_3DS)
+    std::string mediaTypeName = (mediaType == MEDIATYPE_NAND) ? "NAND" :
+                                (mediaType == MEDIATYPE_SD) ? "SD" :
+                                (mediaType == MEDIATYPE_GAME_CARD) ? "Game Card" : ("Type " + std::to_string(mediaType));
+    emit("Target Title ID: 0x" + formatTitleId(titleId) + " (" + mediaTypeName + ")");
+    emit("Staging directory: " + inDirectory);
+
+    // List and inspect files in inDirectory
+    DIR* testDir = opendir(inDirectory.c_str());
+    if (testDir) {
+        struct dirent* de = nullptr;
+        int fileCount = 0;
+        while ((de = readdir(testDir)) != nullptr) {
+            if (std::strcmp(de->d_name, ".") == 0 || std::strcmp(de->d_name, "..") == 0) continue;
+            if (de->d_name[0] == '.') continue;
+            std::string fullPath = inDirectory + "/" + de->d_name;
+            struct stat fst;
+            if (stat(fullPath.c_str(), &fst) == 0) {
+                fileCount++;
+                emit("  Staged file: " + std::string(de->d_name) + " (" + std::to_string(fst.st_size) + " B)");
+
+                // Check for zip magic header (PK\x03\x04)
+                if (fst.st_size >= 4) {
+                    FILE* tf = fopen(fullPath.c_str(), "rb");
+                    if (tf) {
+                        uint8_t magic[4] = {0};
+                        if (fread(magic, 1, 4, tf) == 4) {
+                            if (magic[0] == 0x50 && magic[1] == 0x4B && magic[2] == 0x03 && magic[3] == 0x04) {
+                                emit("[WARN] '" + std::string(de->d_name) + "' is a ZIP archive! Raw 3DS save data expected.");
+                            }
+                        }
+                        fclose(tf);
+                    }
+                }
+            }
+        }
+        closedir(testDir);
+        if (fileCount == 0) {
+            emit("[WARN] No files found in staging directory: " + inDirectory);
+        }
+    } else {
+        emit("[ERROR] Could not open staging directory: " + inDirectory);
+    }
+
     FS_Archive archive = 0;
     Result res = openSaveArchive(&archive, titleId, mediaType);
     if (R_FAILED(res)) {
-        emit("[ERROR] Failed to open 3DS save archive for injection (Result 0x" + formatTitleId(res) + ")");
+        emit("[ERROR] Failed to open 3DS save archive for injection: " + formatResultHex(res));
         return false;
     }
 
+    // Inspect existing files in archive for debugging comparison
+    auto existingFiles = listArchiveFiles(archive, "/");
+    if (!existingFiles.empty()) {
+        std::string existingList;
+        for (size_t i = 0; i < existingFiles.size(); ++i) {
+            if (i > 0) existingList += ", ";
+            existingList += existingFiles[i].first + " (" + std::to_string(existingFiles[i].second) + " B)";
+            if (i >= 5 && existingFiles.size() > 6) {
+                existingList += " ... (" + std::to_string(existingFiles.size() - 6) + " more)";
+                break;
+            }
+        }
+        emit("Existing archive files: " + existingList);
+    } else {
+        emit("Existing archive files: (empty or could not enumerate)");
+    }
+
     emit("Writing save files into 3DS archive...");
-    bool success = copyFsDirToArchive(archive, inDirectory, "/");
+    bool success = copyFsDirToArchive(archive, inDirectory, "/", log);
     if (success) {
-        FSUSER_ControlArchive(archive, ARCHIVE_ACTION_COMMIT_SAVE_DATA, nullptr, 0, nullptr, 0);
-        emit("[OK] Committed save data to 3DS archive.");
+        Result resCommit = FSUSER_ControlArchive(archive, ARCHIVE_ACTION_COMMIT_SAVE_DATA, nullptr, 0, nullptr, 0);
+        if (R_SUCCEEDED(resCommit)) {
+            emit("[OK] Committed save data to 3DS archive.");
+        } else {
+            emit("[ERROR] Failed committing save data to 3DS archive: " + formatResultHex(resCommit));
+            success = false;
+        }
     } else {
         emit("[ERROR] Failed writing save files to 3DS archive.");
     }

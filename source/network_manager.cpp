@@ -1,9 +1,12 @@
 #include "network_manager.hpp"
 #include "config_manager.hpp"
+#include "sync_manager.hpp"
 
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
 #include <cstdio>
+#include <cstring>
+#include <strings.h>
 #include <sys/stat.h>
 
 #if defined(__3DS__) || defined(_3DS)
@@ -22,6 +25,23 @@ static u32* s_socBuffer = nullptr;
 static constexpr size_t SOC_BUFFERSIZE = 0x100000;
 #endif
 static bool s_networkInitialized = false;
+
+size_t headerCallback(char* buffer, size_t size, size_t nmemb, void* userp) {
+    (void)userp;
+    size_t totalBytes = size * nmemb;
+    if (totalBytes >= 5) {
+        if (strncasecmp(buffer, "Date:", 5) == 0) {
+            std::string line(buffer + 5, totalBytes - 5);
+            while (!line.empty() && (line.front() == ' ' || line.front() == '\t')) line.erase(0, 1);
+            while (!line.empty() && (line.back() == '\r' || line.back() == '\n' || line.back() == ' ')) line.pop_back();
+            time_t serverTime = curl_getdate(line.c_str(), nullptr);
+            if (serverTime > 0) {
+                SyncManager::updateServerTimeOffset(serverTime);
+            }
+        }
+    }
+    return totalBytes;
+}
 
 size_t stringWriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
     size_t totalBytes = size * nmemb;
@@ -189,6 +209,7 @@ NetworkResult NetworkManager::testConnection() {
 
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, headerCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, stringWriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseData);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
@@ -247,6 +268,7 @@ NetworkResult NetworkManager::fetchPlatforms(std::vector<RommPlatform>& outPlatf
 
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, headerCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, stringWriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseData);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
@@ -341,6 +363,7 @@ NetworkResult NetworkManager::fetchLibrary(std::vector<RommGame>& outGames, uint
 
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, headerCallback);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, stringWriteCallback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseData);
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
@@ -443,6 +466,7 @@ NetworkResult NetworkManager::fetchSaves(std::vector<RommSave>& outSaves, uint64
 
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, headerCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, stringWriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseData);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
@@ -547,6 +571,7 @@ NetworkResult NetworkManager::uploadSave(uint64_t gameId, const std::string& fil
 
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, headerCallback);
     curl_easy_setopt(curl, CURLOPT_MIMEPOST, mime);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, stringWriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseData);
@@ -623,6 +648,7 @@ NetworkResult NetworkManager::downloadSaveById(uint64_t saveId, const std::strin
 
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, headerCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, fileWriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
