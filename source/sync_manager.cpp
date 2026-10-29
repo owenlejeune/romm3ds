@@ -664,6 +664,9 @@ bool SyncManager::refresh() {
 
         if (item.localTitle.saveTime == 0 && item.localTitle.hasSave && m_saveMgr) {
             item.localTitle.saveTime = m_saveMgr->getSaveTime(item.localTitle);
+            if (item.localTitle.saveTime == 0) {
+                item.localTitle.saveTime = m_saveMgr->getCachedSaveTime(item.localTitle.titleIdHex);
+            }
         }
 
         m_items.push_back(item);
@@ -677,6 +680,9 @@ bool SyncManager::refresh() {
 
     if (m_configMgr) {
         m_configMgr->saveMappings();
+    }
+    if (m_saveMgr) {
+        m_saveMgr->saveTimestampCache();
     }
 
     m_lastMessage = "Found " + std::to_string(m_items.size()) + " local titles, " +
@@ -918,7 +924,16 @@ bool SyncManager::forceUpload(SyncItem& item, LogCallback log) {
     emit("Uploading to RomM (Game ID: " + std::to_string(item.remoteGameId) + ")...");
     NetworkResult res = m_netMgr->uploadSave(item.remoteGameId, targetFile, remoteFileName);
     if (res.success) {
+        time_t now = time(nullptr);
         item.remoteHasSave = true;
+        item.remoteSaveTime = now;
+        item.remoteSaveUpdatedAt = formatTimestamp(now);
+        item.localTitle.hasSave = true;
+        item.localTitle.saveTime = now;
+        if (m_saveMgr) {
+            m_saveMgr->setCachedSaveTime(item.localTitle.titleIdHex, now);
+            m_saveMgr->saveTimestampCache();
+        }
         emit("[SUCCESS] Successfully uploaded save to RomM!");
         m_lastMessage = "Successfully uploaded save for " + item.localTitle.name;
         return true;
@@ -1046,7 +1061,13 @@ bool SyncManager::forceDownload(SyncItem& item, LogCallback log) {
         }
         emit("Active local save path: " + item.localTitle.savePath);
     }
-    item.localTitle.saveTime = m_saveMgr->getSaveTime(item.localTitle);
+    time_t rawSaveTime = m_saveMgr->getSaveTime(item.localTitle);
+    time_t syncedTime = (rawSaveTime > 0) ? rawSaveTime : ((item.remoteSaveTime > 0) ? item.remoteSaveTime : time(nullptr));
+    item.localTitle.saveTime = syncedTime;
+    if (m_saveMgr) {
+        m_saveMgr->setCachedSaveTime(item.localTitle.titleIdHex, syncedTime);
+        m_saveMgr->saveTimestampCache();
+    }
     emit("Local save time updated to: " + formatTimestamp(item.localTitle.saveTime));
     emit("[SUCCESS] Save successfully downloaded and applied!");
     m_lastMessage = "Downloaded & injected save for " + item.localTitle.name;
