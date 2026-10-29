@@ -49,7 +49,10 @@ const char* getFilterModeName(LocalFilterMode mode) {
         case LocalFilterMode::MATCHED:    return "Matched";
         case LocalFilterMode::UNMATCHED:  return "Unmatched";
         case LocalFilterMode::WITH_SAVES: return "Has Save";
+        case LocalFilterMode::OUTDATED:   return "Outdated";
+        case LocalFilterMode::UPDATED:    return "Updated";
         case LocalFilterMode::HIDDEN:     return "Hidden";
+        case LocalFilterMode::CONSOLE:    return "Console";
     }
     return "All";
 }
@@ -57,7 +60,6 @@ const char* getFilterModeName(LocalFilterMode mode) {
 const char* getSortModeName(LocalSortMode mode) {
     switch (mode) {
         case LocalSortMode::TITLE:       return "Title";
-        case LocalSortMode::CONSOLE:     return "Console";
         case LocalSortMode::SAVE_STATUS: return "Save";
     }
     return "Title";
@@ -183,6 +185,22 @@ void UIManager::updateLocalFilteredList() {
             continue;
         } else if (m_localFilterMode == LocalFilterMode::WITH_SAVES && !item.localTitle.hasSave) {
             continue;
+        } else if (m_localFilterMode == LocalFilterMode::OUTDATED) {
+            if (!item.isMatched || !item.remoteHasSave) continue;
+            time_t localTime = item.localTitle.saveTime;
+            time_t remoteTime = item.remoteSaveTime != 0 ? item.remoteSaveTime : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
+            bool remoteIsNewer = !item.localTitle.hasSave || (remoteTime > 0 && (localTime == 0 || remoteTime > localTime + 5));
+            if (!remoteIsNewer) continue;
+        } else if (m_localFilterMode == LocalFilterMode::UPDATED) {
+            if (!item.isMatched || !item.localTitle.hasSave) continue;
+            time_t localTime = item.localTitle.saveTime;
+            time_t remoteTime = item.remoteSaveTime != 0 ? item.remoteSaveTime : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
+            bool localIsNewer = !item.remoteHasSave || (localTime > 0 && (remoteTime == 0 || localTime > remoteTime + 5));
+            if (!localIsNewer) continue;
+        } else if (m_localFilterMode == LocalFilterMode::CONSOLE) {
+            if (strcasecmp(item.localTitle.console.c_str(), m_localFilterConsole.c_str()) != 0) {
+                continue;
+            }
         }
 
         if (!m_localFilterText.empty()) {
@@ -202,13 +220,7 @@ void UIManager::updateLocalFilteredList() {
         const auto& itemA = items[a];
         const auto& itemB = items[b];
 
-        if (m_localSortMode == LocalSortMode::CONSOLE) {
-            int cCmp = strcasecmp(itemA.localTitle.console.c_str(), itemB.localTitle.console.c_str());
-            if (cCmp != 0) return cCmp < 0;
-            int nCmp = strcasecmp(itemA.localTitle.name.c_str(), itemB.localTitle.name.c_str());
-            if (nCmp != 0) return nCmp < 0;
-            return itemA.localTitle.titleIdHex < itemB.localTitle.titleIdHex;
-        } else if (m_localSortMode == LocalSortMode::SAVE_STATUS) {
+        if (m_localSortMode == LocalSortMode::SAVE_STATUS) {
             bool aHas = itemA.localTitle.hasSave || itemA.remoteHasSave;
             bool bHas = itemB.localTitle.hasSave || itemB.remoteHasSave;
             if (aHas != bHas) return aHas > bHas;
@@ -269,40 +281,89 @@ void UIManager::updateRemoteFilteredList() {
     }
 }
 
-void UIManager::cycleLocalFilterMode() {
-    switch (m_localFilterMode) {
-        case LocalFilterMode::ALL:
-            m_localFilterMode = LocalFilterMode::MATCHED;
-            break;
-        case LocalFilterMode::MATCHED:
-            m_localFilterMode = LocalFilterMode::UNMATCHED;
-            break;
-        case LocalFilterMode::UNMATCHED:
-            m_localFilterMode = LocalFilterMode::WITH_SAVES;
-            break;
-        case LocalFilterMode::WITH_SAVES:
-            m_localFilterMode = LocalFilterMode::HIDDEN;
-            break;
-        case LocalFilterMode::HIDDEN:
-            m_localFilterMode = LocalFilterMode::ALL;
-            break;
+std::string UIManager::getActiveFilterButtonLabel() const {
+    if (m_localFilterMode == LocalFilterMode::CONSOLE && !m_localFilterConsole.empty()) {
+        return m_localFilterConsole;
     }
-    updateLocalFilteredList();
+    return getFilterModeName(m_localFilterMode);
+}
+
+std::string UIManager::getActiveFilterDescription() const {
+    switch (m_localFilterMode) {
+        case LocalFilterMode::ALL:        return "All";
+        case LocalFilterMode::MATCHED:    return "Matched";
+        case LocalFilterMode::UNMATCHED:  return "Unmatched";
+        case LocalFilterMode::WITH_SAVES: return "Has Save";
+        case LocalFilterMode::OUTDATED:   return "Outdated (Remote Newer)";
+        case LocalFilterMode::UPDATED:    return "Updated (Local Newer)";
+        case LocalFilterMode::HIDDEN:     return "Hidden";
+        case LocalFilterMode::CONSOLE:    return "Console: " + m_localFilterConsole;
+    }
+    return "All";
+}
+
+void UIManager::openFilterPicker() {
+    m_filterOptions.clear();
+    m_filterOptions.push_back({LocalFilterMode::ALL, "", "All"});
+    m_filterOptions.push_back({LocalFilterMode::MATCHED, "", "Matched"});
+    m_filterOptions.push_back({LocalFilterMode::UNMATCHED, "", "Unmatched"});
+    m_filterOptions.push_back({LocalFilterMode::WITH_SAVES, "", "Has Save"});
+    m_filterOptions.push_back({LocalFilterMode::OUTDATED, "", "Outdated (Remote Newer)"});
+    m_filterOptions.push_back({LocalFilterMode::UPDATED, "", "Updated (Local Newer)"});
+    m_filterOptions.push_back({LocalFilterMode::HIDDEN, "", "Hidden"});
+
+    if (m_syncMgr) {
+        std::vector<std::string> consoles;
+        for (const auto& item : m_syncMgr->getItems()) {
+            if (item.localTitle.console.empty()) continue;
+            std::string cUpper = item.localTitle.console;
+            for (char& ch : cUpper) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+            if (std::find(consoles.begin(), consoles.end(), cUpper) == consoles.end()) {
+                consoles.push_back(cUpper);
+            }
+        }
+        std::sort(consoles.begin(), consoles.end());
+        for (const auto& c : consoles) {
+            m_filterOptions.push_back({LocalFilterMode::CONSOLE, c, "Console: " + c});
+        }
+    }
+
+    m_selectedFilterPickerIndex = 0;
+    for (size_t i = 0; i < m_filterOptions.size(); ++i) {
+        if (m_filterOptions[i].mode == m_localFilterMode) {
+            if (m_localFilterMode != LocalFilterMode::CONSOLE ||
+                strcasecmp(m_filterOptions[i].console.c_str(), m_localFilterConsole.c_str()) == 0) {
+                m_selectedFilterPickerIndex = i;
+                break;
+            }
+        }
+    }
+
+    m_state = UIState::FILTER_PICKER;
+}
+
+void UIManager::openSortPicker() {
+    m_sortOptions.clear();
+    m_sortOptions.push_back({LocalSortMode::TITLE, "Title (A-Z)"});
+    m_sortOptions.push_back({LocalSortMode::SAVE_STATUS, "Save (Newest First)"});
+
+    m_selectedSortPickerIndex = 0;
+    for (size_t i = 0; i < m_sortOptions.size(); ++i) {
+        if (m_sortOptions[i].mode == m_localSortMode) {
+            m_selectedSortPickerIndex = i;
+            break;
+        }
+    }
+
+    m_state = UIState::SORT_PICKER;
+}
+
+void UIManager::cycleLocalFilterMode() {
+    openFilterPicker();
 }
 
 void UIManager::cycleLocalSortMode() {
-    switch (m_localSortMode) {
-        case LocalSortMode::TITLE:
-            m_localSortMode = LocalSortMode::CONSOLE;
-            break;
-        case LocalSortMode::CONSOLE:
-            m_localSortMode = LocalSortMode::SAVE_STATUS;
-            break;
-        case LocalSortMode::SAVE_STATUS:
-            m_localSortMode = LocalSortMode::TITLE;
-            break;
-    }
-    updateLocalFilteredList();
+    openSortPicker();
 }
 
 void UIManager::toggleIgnoreSelected() {
@@ -763,9 +824,9 @@ void UIManager::handleInput(u32 kDown, const touchPosition& touch) {
 
         if (kDown & KEY_TOUCH) {
             if (isTouchInside(touch, 124.0f, 7.0f, 84.0f, 20.0f)) {
-                cycleLocalSortMode();
+                openSortPicker();
             } else if (isTouchInside(touch, 212.0f, 7.0f, 92.0f, 20.0f)) {
-                cycleLocalFilterMode();
+                openFilterPicker();
             } else if (isTouchInside(touch, 16.0f, 30.0f, 230.0f, 22.0f)) {
                 std::string q = launchKeyboard("Search installed games...", m_localFilterText, 64);
                 if (q != m_localFilterText) {
@@ -939,6 +1000,10 @@ void UIManager::handleInput(u32 kDown, const touchPosition& touch) {
         }
     } else if (m_state == UIState::SAVE_PICKER) {
         handleSavePickerInput(kDown, touch);
+    } else if (m_state == UIState::FILTER_PICKER) {
+        handleFilterPickerInput(kDown, touch);
+    } else if (m_state == UIState::SORT_PICKER) {
+        handleSortPickerInput(kDown, touch);
     }
 }
 
@@ -1372,12 +1437,12 @@ void UIManager::renderMainMenuTop() {
     } else {
         C2D_Text emptyText;
         std::string msg = "No installed titles match the current filter.\n\n"
-                          "- Filter Mode: " + std::string(getFilterModeName(m_localFilterMode)) + "\n"
+                          "- Filter Mode: " + getActiveFilterDescription() + "\n"
                           "- Sort Mode: " + std::string(getSortModeName(m_localSortMode)) + "\n";
         if (!m_localFilterText.empty()) {
             msg += "- Search Query: \"" + m_localFilterText + "\"\n";
         }
-        msg += "\nTap [Clr], [Sort], or [Filter] to reset view, or (START) to exit.";
+        msg += "\nTap [Clr], [Sort], or [Filter] to change view, or (START) to exit.";
         C2D_TextParse(&emptyText, m_textBuf, msg.c_str());
         C2D_TextOptimize(&emptyText);
         C2D_DrawText(&emptyText, C2D_WithColor, 16.0f, 65.0f, 0.5f, 0.48f, 0.48f, CLR_TEXT_MUTED);
@@ -1398,7 +1463,7 @@ void UIManager::renderMainMenuBottom() {
     std::string sortLabel = std::string(getSortModeName(m_localSortMode));
     drawButton(124.0f, 7.0f, 84.0f, 20.0f, sortLabel.c_str(), false, CLR_BORDER_OFF);
 
-    std::string modeLabel = std::string(getFilterModeName(m_localFilterMode));
+    std::string modeLabel = getActiveFilterButtonLabel();
     u32 modeColor = (m_localFilterMode == LocalFilterMode::HIDDEN) ? CLR_YELLOW : CLR_ACCENT;
     drawButton(212.0f, 7.0f, 92.0f, 20.0f, modeLabel.c_str(), false, modeColor);
 
@@ -1890,6 +1955,12 @@ void UIManager::renderTopScreen() {
         case UIState::SAVE_PICKER:
             renderSavePickerTop();
             break;
+        case UIState::FILTER_PICKER:
+            renderFilterPickerTop();
+            break;
+        case UIState::SORT_PICKER:
+            renderSortPickerTop();
+            break;
     }
 }
 
@@ -1909,6 +1980,12 @@ void UIManager::renderBottomScreen() {
             break;
         case UIState::SAVE_PICKER:
             renderSavePickerBottom();
+            break;
+        case UIState::FILTER_PICKER:
+            renderFilterPickerBottom();
+            break;
+        case UIState::SORT_PICKER:
+            renderSortPickerBottom();
             break;
     }
 
@@ -2355,6 +2432,214 @@ void UIManager::renderSavePickerBottom() {
     drawButton(84.0f, 206.0f, 82.0f, 26.0f, "[ Keyboard ]", false);
     drawButton(170.0f, 206.0f, 68.0f, 26.0f, "[ Reset ]", false);
     drawButton(242.0f, 206.0f, 70.0f, 26.0f, "[ Back ]", false);
+}
+
+void UIManager::handleFilterPickerInput(u32 kDown, const touchPosition& touch) {
+    size_t total = m_filterOptions.size();
+    if (total > 0) {
+        if (kDown & KEY_UP) {
+            m_selectedFilterPickerIndex = (m_selectedFilterPickerIndex > 0) ? (m_selectedFilterPickerIndex - 1) : (total - 1);
+        } else if (kDown & KEY_DOWN) {
+            m_selectedFilterPickerIndex = (m_selectedFilterPickerIndex + 1 < total) ? (m_selectedFilterPickerIndex + 1) : 0;
+        } else if (kDown & KEY_LEFT) {
+            m_selectedFilterPickerIndex = (m_selectedFilterPickerIndex >= 5) ? (m_selectedFilterPickerIndex - 5) : 0;
+        } else if (kDown & KEY_RIGHT) {
+            m_selectedFilterPickerIndex = (m_selectedFilterPickerIndex + 5 < total) ? (m_selectedFilterPickerIndex + 5) : (total - 1);
+        }
+    }
+
+    auto applySelected = [&]() {
+        if (m_selectedFilterPickerIndex < total) {
+            const auto& opt = m_filterOptions[m_selectedFilterPickerIndex];
+            m_localFilterMode = opt.mode;
+            m_localFilterConsole = opt.console;
+            updateLocalFilteredList();
+        }
+        m_state = UIState::MAIN_MENU;
+    };
+
+    if (kDown & KEY_A) {
+        applySelected();
+    } else if (kDown & KEY_B) {
+        m_state = UIState::MAIN_MENU;
+    }
+
+    if (kDown & KEY_TOUCH) {
+        if (isTouchInside(touch, 16.0f, 194.0f, 138.0f, 30.0f)) {
+            applySelected();
+        } else if (isTouchInside(touch, 166.0f, 194.0f, 138.0f, 30.0f)) {
+            m_state = UIState::MAIN_MENU;
+        } else {
+            size_t pageOffset = (m_selectedFilterPickerIndex / 5) * 5;
+            for (size_t i = 0; i < 5 && (pageOffset + i) < total; ++i) {
+                float rowY = 36.0f + static_cast<float>(i * 30.0f);
+                if (isTouchInside(touch, 16.0f, rowY, 288.0f, 26.0f)) {
+                    m_selectedFilterPickerIndex = pageOffset + i;
+                    applySelected();
+                    break;
+                }
+            }
+        }
+    }
+}
+
+void UIManager::handleSortPickerInput(u32 kDown, const touchPosition& touch) {
+    size_t total = m_sortOptions.size();
+    if (total > 0) {
+        if (kDown & KEY_UP) {
+            m_selectedSortPickerIndex = (m_selectedSortPickerIndex > 0) ? (m_selectedSortPickerIndex - 1) : (total - 1);
+        } else if (kDown & KEY_DOWN) {
+            m_selectedSortPickerIndex = (m_selectedSortPickerIndex + 1 < total) ? (m_selectedSortPickerIndex + 1) : 0;
+        }
+    }
+
+    auto applySelected = [&]() {
+        if (m_selectedSortPickerIndex < total) {
+            m_localSortMode = m_sortOptions[m_selectedSortPickerIndex].mode;
+            updateLocalFilteredList();
+        }
+        m_state = UIState::MAIN_MENU;
+    };
+
+    if (kDown & KEY_A) {
+        applySelected();
+    } else if (kDown & KEY_B) {
+        m_state = UIState::MAIN_MENU;
+    }
+
+    if (kDown & KEY_TOUCH) {
+        if (isTouchInside(touch, 16.0f, 194.0f, 138.0f, 30.0f)) {
+            applySelected();
+        } else if (isTouchInside(touch, 166.0f, 194.0f, 138.0f, 30.0f)) {
+            m_state = UIState::MAIN_MENU;
+        } else {
+            size_t pageOffset = (m_selectedSortPickerIndex / 5) * 5;
+            for (size_t i = 0; i < 5 && (pageOffset + i) < total; ++i) {
+                float rowY = 36.0f + static_cast<float>(i * 30.0f);
+                if (isTouchInside(touch, 16.0f, rowY, 288.0f, 26.0f)) {
+                    m_selectedSortPickerIndex = pageOffset + i;
+                    applySelected();
+                    break;
+                }
+            }
+        }
+    }
+}
+
+void UIManager::renderFilterPickerTop() {
+    C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 42.0f, CLR_HEADER);
+    C2D_DrawRectSolid(0.0f, 40.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f, CLR_ACCENT);
+
+    C2D_Text headerText;
+    C2D_TextParse(&headerText, m_textBuf, "romm3ds - Filter Local Library");
+    C2D_TextOptimize(&headerText);
+    C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 10.0f, 0.5f, 0.72f, 0.72f, CLR_TEXT_WHITE);
+
+    std::string guide = "Active Filter: " + getActiveFilterDescription() + "\n\n"
+                        "Select a filter option on the bottom screen:\n"
+                        "  (A) / Tap Option: Apply Selected Filter\n"
+                        "  (B) / Back: Cancel & Return to Library\n"
+                        "  D-Pad Up/Down to navigate, Left/Right for page jumps";
+    C2D_Text guideText;
+    C2D_TextParse(&guideText, m_textBuf, guide.c_str());
+    C2D_TextOptimize(&guideText);
+    C2D_DrawText(&guideText, C2D_WithColor, 16.0f, 56.0f, 0.5f, 0.48f, 0.48f, CLR_TEXT_WHITE);
+}
+
+void UIManager::renderFilterPickerBottom() {
+    C2D_DrawRectSolid(8.0f, 4.0f, 0.5f, RomM3DS::SCREEN_BOTTOM_WIDTH - 16.0f, RomM3DS::SCREEN_BOTTOM_HEIGHT - 8.0f, CLR_CARD);
+
+    size_t total = m_filterOptions.size();
+    std::string header = "Select Filter (" + std::to_string(total > 0 ? (m_selectedFilterPickerIndex + 1) : 0) +
+                         "/" + std::to_string(total) + ")";
+    C2D_Text titleText;
+    C2D_TextParse(&titleText, m_textBuf, header.c_str());
+    C2D_TextOptimize(&titleText);
+    C2D_DrawText(&titleText, C2D_WithColor, 16.0f, 9.0f, 0.5f, 0.48f, 0.48f, CLR_TEXT_WHITE);
+
+    size_t pageOffset = (m_selectedFilterPickerIndex / 5) * 5;
+    for (size_t i = 0; i < 5 && (pageOffset + i) < total; ++i) {
+        size_t idx = pageOffset + i;
+        const auto& opt = m_filterOptions[idx];
+        bool selected = (idx == m_selectedFilterPickerIndex);
+        bool active = (opt.mode == m_localFilterMode &&
+                       (opt.mode != LocalFilterMode::CONSOLE || strcasecmp(opt.console.c_str(), m_localFilterConsole.c_str()) == 0));
+
+        float y = 36.0f + static_cast<float>(i * 30.0f);
+        u32 rowBg = selected ? CLR_HEADER : CLR_INPUT_BG;
+        u32 borderColor = selected ? CLR_ACCENT : CLR_BORDER_OFF;
+
+        C2D_DrawRectSolid(16.0f, y, 0.5f, 288.0f, 26.0f, borderColor);
+        C2D_DrawRectSolid(17.5f, y + 1.5f, 0.5f, 285.0f, 23.0f, rowBg);
+
+        u32 dotColor = active ? CLR_GREEN : (selected ? CLR_YELLOW : CLR_BORDER_OFF);
+        C2D_DrawRectSolid(24.0f, y + 8.0f, 0.5f, 8.0f, 8.0f, dotColor);
+
+        C2D_Text rowText;
+        C2D_TextParse(&rowText, m_textBuf, opt.label.c_str());
+        C2D_TextOptimize(&rowText);
+        C2D_DrawText(&rowText, C2D_WithColor, 38.0f, y + 5.0f, 0.5f, 0.44f, 0.44f, CLR_TEXT_WHITE);
+    }
+
+    drawButton(16.0f, 194.0f, 138.0f, 30.0f, "[ Apply (A) ]", false);
+    drawButton(166.0f, 194.0f, 138.0f, 30.0f, "[ Back (B) ]", false);
+}
+
+void UIManager::renderSortPickerTop() {
+    C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 42.0f, CLR_HEADER);
+    C2D_DrawRectSolid(0.0f, 40.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f, CLR_ACCENT);
+
+    C2D_Text headerText;
+    C2D_TextParse(&headerText, m_textBuf, "romm3ds - Sort Local Library");
+    C2D_TextOptimize(&headerText);
+    C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 10.0f, 0.5f, 0.72f, 0.72f, CLR_TEXT_WHITE);
+
+    std::string guide = "Active Sort: " + std::string(getSortModeName(m_localSortMode)) + "\n\n"
+                        "Select a sort option on the bottom screen:\n"
+                        "  (A) / Tap Option: Apply Selected Sort\n"
+                        "  (B) / Back: Cancel & Return to Library";
+    C2D_Text guideText;
+    C2D_TextParse(&guideText, m_textBuf, guide.c_str());
+    C2D_TextOptimize(&guideText);
+    C2D_DrawText(&guideText, C2D_WithColor, 16.0f, 56.0f, 0.5f, 0.48f, 0.48f, CLR_TEXT_WHITE);
+}
+
+void UIManager::renderSortPickerBottom() {
+    C2D_DrawRectSolid(8.0f, 4.0f, 0.5f, RomM3DS::SCREEN_BOTTOM_WIDTH - 16.0f, RomM3DS::SCREEN_BOTTOM_HEIGHT - 8.0f, CLR_CARD);
+
+    size_t total = m_sortOptions.size();
+    std::string header = "Select Sort (" + std::to_string(total > 0 ? (m_selectedSortPickerIndex + 1) : 0) +
+                         "/" + std::to_string(total) + ")";
+    C2D_Text titleText;
+    C2D_TextParse(&titleText, m_textBuf, header.c_str());
+    C2D_TextOptimize(&titleText);
+    C2D_DrawText(&titleText, C2D_WithColor, 16.0f, 9.0f, 0.5f, 0.48f, 0.48f, CLR_TEXT_WHITE);
+
+    size_t pageOffset = (m_selectedSortPickerIndex / 5) * 5;
+    for (size_t i = 0; i < 5 && (pageOffset + i) < total; ++i) {
+        size_t idx = pageOffset + i;
+        const auto& opt = m_sortOptions[idx];
+        bool selected = (idx == m_selectedSortPickerIndex);
+        bool active = (opt.mode == m_localSortMode);
+
+        float y = 36.0f + static_cast<float>(i * 30.0f);
+        u32 rowBg = selected ? CLR_HEADER : CLR_INPUT_BG;
+        u32 borderColor = selected ? CLR_ACCENT : CLR_BORDER_OFF;
+
+        C2D_DrawRectSolid(16.0f, y, 0.5f, 288.0f, 26.0f, borderColor);
+        C2D_DrawRectSolid(17.5f, y + 1.5f, 0.5f, 285.0f, 23.0f, rowBg);
+
+        u32 dotColor = active ? CLR_GREEN : (selected ? CLR_YELLOW : CLR_BORDER_OFF);
+        C2D_DrawRectSolid(24.0f, y + 8.0f, 0.5f, 8.0f, 8.0f, dotColor);
+
+        C2D_Text rowText;
+        C2D_TextParse(&rowText, m_textBuf, opt.label.c_str());
+        C2D_TextOptimize(&rowText);
+        C2D_DrawText(&rowText, C2D_WithColor, 38.0f, y + 5.0f, 0.5f, 0.44f, 0.44f, CLR_TEXT_WHITE);
+    }
+
+    drawButton(16.0f, 194.0f, 138.0f, 30.0f, "[ Apply (A) ]", false);
+    drawButton(166.0f, 194.0f, 138.0f, 30.0f, "[ Back (B) ]", false);
 }
 
 void UIManager::freeGameLogo() {

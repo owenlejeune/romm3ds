@@ -19,7 +19,9 @@ enum class UIState {
     MAIN_MENU,
     MATCHING,
     CONFLICT_PROMPT,
-    SAVE_PICKER
+    SAVE_PICKER,
+    FILTER_PICKER,
+    SORT_PICKER
 };
 
 enum class MatchingSubState {
@@ -32,12 +34,14 @@ enum class LocalFilterMode {
     MATCHED,
     UNMATCHED,
     WITH_SAVES,
-    HIDDEN
+    OUTDATED,
+    UPDATED,
+    HIDDEN,
+    CONSOLE
 };
 
 enum class LocalSortMode {
     TITLE,
-    CONSOLE,
     SAVE_STATUS
 };
 
@@ -99,6 +103,18 @@ private:
     void openSavePicker();
     void loadBrowserDirectory(const std::string& dir);
     void applyCustomSavePath(const std::string& path);
+
+    void openFilterPicker();
+    void openSortPicker();
+    void renderFilterPickerTop();
+    void renderFilterPickerBottom();
+    void renderSortPickerTop();
+    void renderSortPickerBottom();
+    void handleFilterPickerInput(u32 kDown, const touchPosition& touch);
+    void handleSortPickerInput(u32 kDown, const touchPosition& touch);
+    std::string getActiveFilterButtonLabel() const;
+    std::string getActiveFilterDescription() const;
+
     void updateGameLogo(const InstalledTitle& title);
     void freeGameLogo();
 
@@ -163,9 +179,25 @@ private:
     void processBatchSync();
 
     LocalFilterMode m_localFilterMode = LocalFilterMode::ALL;
+    std::string m_localFilterConsole;
     LocalSortMode m_localSortMode = LocalSortMode::TITLE;
     std::string m_localFilterText;
     std::vector<size_t> m_filteredLocalIndices;
+
+    struct FilterOption {
+        LocalFilterMode mode = LocalFilterMode::ALL;
+        std::string console;
+        std::string label;
+    };
+    std::vector<FilterOption> m_filterOptions;
+    size_t m_selectedFilterPickerIndex = 0;
+
+    struct SortOption {
+        LocalSortMode mode = LocalSortMode::TITLE;
+        std::string label;
+    };
+    std::vector<SortOption> m_sortOptions;
+    size_t m_selectedSortPickerIndex = 0;
 
     std::string m_remoteFilterText;
     std::vector<size_t> m_filteredRemoteIndices;
