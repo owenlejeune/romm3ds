@@ -113,7 +113,11 @@ std::string extractTitleString(const smdh_title_s& titleEntry) {
 
 } // namespace
 
-static std::map<std::string, time_t> s_timestampCache;
+struct TimestampCacheEntry {
+    time_t saveTime = 0;
+    time_t fsMtime = 0;
+};
+static std::map<std::string, TimestampCacheEntry> s_timestampCache;
 static bool s_timestampCacheLoaded = false;
 static const std::string s_timestampCachePath = "sdmc:/3ds/romm3ds/timestamp_cache.json";
 
@@ -130,32 +134,33 @@ void SaveManager::loadTimestampCache(const std::string& path) {
     s_timestampCache.clear();
     s_timestampCacheLoaded = true;
 
+    auto parseJson = [](std::ifstream& stream) {
+        nlohmann::json j = nlohmann::json::parse(stream, nullptr, false);
+        if (j.is_object()) {
+            for (auto it = j.begin(); it != j.end(); ++it) {
+                if (it.value().is_number()) {
+                    s_timestampCache[it.key()] = { it.value().get<time_t>(), 0 };
+                } else if (it.value().is_object()) {
+                    time_t st = it.value().value("save_time", (time_t)0);
+                    time_t fm = it.value().value("fs_mtime", (time_t)0);
+                    s_timestampCache[it.key()] = { st, fm };
+                }
+            }
+        }
+    };
+
     std::ifstream f(filePath);
     if (!f.is_open()) {
         if (filePath == s_timestampCachePath) {
             std::ifstream fLocal("./timestamp_cache.json");
             if (fLocal.is_open()) {
-                nlohmann::json j = nlohmann::json::parse(fLocal, nullptr, false);
-                if (j.is_object()) {
-                    for (auto it = j.begin(); it != j.end(); ++it) {
-                        if (it.value().is_number()) {
-                            s_timestampCache[it.key()] = it.value().get<time_t>();
-                        }
-                    }
-                }
+                parseJson(fLocal);
             }
         }
         return;
     }
 
-    nlohmann::json j = nlohmann::json::parse(f, nullptr, false);
-    if (j.is_object()) {
-        for (auto it = j.begin(); it != j.end(); ++it) {
-            if (it.value().is_number()) {
-                s_timestampCache[it.key()] = it.value().get<time_t>();
-            }
-        }
-    }
+    parseJson(f);
 }
 
 void SaveManager::saveTimestampCache(const std::string& path) {
@@ -165,19 +170,25 @@ void SaveManager::saveTimestampCache(const std::string& path) {
     std::string filePath = path.empty() ? s_timestampCachePath : path;
     ConfigManager::ensureDirectories(filePath);
 
+    nlohmann::json j = nlohmann::json::object();
+    for (const auto& pair : s_timestampCache) {
+        j[pair.first] = {
+            {"save_time", pair.second.saveTime},
+            {"fs_mtime", pair.second.fsMtime}
+        };
+    }
+
     std::ofstream f(filePath);
     if (!f.is_open()) {
         if (filePath == s_timestampCachePath) {
             std::ofstream fLocal("./timestamp_cache.json");
             if (fLocal.is_open()) {
-                nlohmann::json j = s_timestampCache;
                 fLocal << j.dump(4);
             }
         }
         return;
     }
 
-    nlohmann::json j = s_timestampCache;
     f << j.dump(4);
 }
 
@@ -188,17 +199,17 @@ time_t SaveManager::getCachedSaveTime(const std::string& titleIdHex) {
     }
     auto it = s_timestampCache.find(titleIdHex);
     if (it != s_timestampCache.end()) {
-        return it->second;
+        return it->second.saveTime;
     }
     return 0;
 }
 
-void SaveManager::setCachedSaveTime(const std::string& titleIdHex, time_t t) {
+void SaveManager::setCachedSaveTime(const std::string& titleIdHex, time_t t, time_t fsMtime) {
     if (titleIdHex.empty() || t <= 0) return;
     if (!s_timestampCacheLoaded) {
         loadTimestampCache();
     }
-    s_timestampCache[titleIdHex] = t;
+    s_timestampCache[titleIdHex] = { t, fsMtime };
 }
 
 std::string SaveManager::formatTitleId(uint64_t titleId) {
@@ -2136,52 +2147,19 @@ bool SaveManager::checkSaveExists(const InstalledTitle& title) {
     return !found.empty();
 }
 
-time_t SaveManager::getSaveTime(const InstalledTitle& title) {
-    std::string savePath = title.savePath;
-    if (savePath.empty()) {
-        if (title.isFileRom) {
+time_t SaveManager::getRawSaveMtime(const InstalledTitle& title) {
+    if (title.isFileRom || !title.savePath.empty()) {
+        std::string savePath = title.savePath;
+        if (savePath.empty() && title.isFileRom) {
             savePath = findSaveFileForRom(title.romPath, title.console);
-        } else if (!checkSaveExists(title.titleId, title.mediaType)) {
-            savePath = findSaveForInstalledTitle(title);
         }
-    }
-    if (!savePath.empty()) {
-        struct stat st;
-        if (stat(savePath.c_str(), &st) == 0 && st.st_size > 0) {
-            if (st.st_mtime > 0) {
-                setCachedSaveTime(title.titleIdHex, st.st_mtime);
+        if (!savePath.empty()) {
+            struct stat st;
+            if (stat(savePath.c_str(), &st) == 0 && st.st_size > 0) {
                 return st.st_mtime;
             }
-            if (st.st_ctime > 0) {
-                setCachedSaveTime(title.titleIdHex, st.st_ctime);
-                return st.st_ctime;
-            }
         }
-    }
-
-    if (title.isFileRom) {
-        return getCachedSaveTime(title.titleIdHex);
-    }
-
-    std::string stagedDir = "sdmc:/3ds/romm3ds/saves/" + formatTitleId(title.titleId);
-    DIR* d = opendir(stagedDir.c_str());
-    if (d) {
-        struct dirent* ent = nullptr;
-        time_t newest = 0;
-        while ((ent = readdir(d)) != nullptr) {
-            if (std::strcmp(ent->d_name, ".") != 0 && std::strcmp(ent->d_name, "..") != 0 && ent->d_name[0] != '.') {
-                std::string full = stagedDir + "/" + ent->d_name;
-                struct stat st;
-                if (stat(full.c_str(), &st) == 0 && st.st_mtime > newest) {
-                    newest = st.st_mtime;
-                }
-            }
-        }
-        closedir(d);
-        if (newest > 0) {
-            setCachedSaveTime(title.titleIdHex, newest);
-            return newest;
-        }
+        return 0;
     }
 
     char highHex[16];
@@ -2192,6 +2170,7 @@ time_t SaveManager::getSaveTime(const InstalledTitle& title) {
     DIR* root = opendir("sdmc:/Nintendo 3DS");
     if (root) {
         struct dirent* e0 = nullptr;
+        time_t newestData = 0;
         while ((e0 = readdir(root)) != nullptr) {
             if (e0->d_name[0] == '.') continue;
             std::string p0 = std::string("sdmc:/Nintendo 3DS/") + e0->d_name;
@@ -2204,7 +2183,6 @@ time_t SaveManager::getSaveTime(const InstalledTitle& title) {
                 DIR* dd = opendir(dataDir.c_str());
                 if (dd) {
                     struct dirent* de = nullptr;
-                    time_t newestData = 0;
                     while ((de = readdir(dd)) != nullptr) {
                         if (de->d_name[0] == '.') continue;
                         std::string df = dataDir + "/" + de->d_name;
@@ -2214,20 +2192,38 @@ time_t SaveManager::getSaveTime(const InstalledTitle& title) {
                         }
                     }
                     closedir(dd);
-                    if (newestData > 0) {
-                        closedir(d0);
-                        closedir(root);
-                        setCachedSaveTime(title.titleIdHex, newestData);
-                        return newestData;
-                    }
                 }
             }
             closedir(d0);
         }
         closedir(root);
+        return newestData;
+    }
+    return 0;
+}
+
+time_t SaveManager::getSaveTime(const InstalledTitle& title) {
+    time_t rawMtime = getRawSaveMtime(title);
+
+    if (!s_timestampCacheLoaded) {
+        loadTimestampCache();
+    }
+    auto it = s_timestampCache.find(title.titleIdHex);
+    if (it != s_timestampCache.end() && it->second.saveTime > 0) {
+        // If the save file on disk was modified by user playing and saving after our last sync
+        if (rawMtime > 0 && it->second.fsMtime > 0 && rawMtime > it->second.fsMtime + 2) {
+            it->second = { rawMtime, rawMtime };
+            return rawMtime;
+        }
+        return it->second.saveTime;
     }
 
-    return getCachedSaveTime(title.titleIdHex);
+    if (rawMtime > 0) {
+        setCachedSaveTime(title.titleIdHex, rawMtime, rawMtime);
+        return rawMtime;
+    }
+
+    return 0;
 }
 
 static std::string detectGbaSaveType(const std::string& romPath) {

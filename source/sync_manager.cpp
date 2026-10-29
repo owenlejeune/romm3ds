@@ -1029,15 +1029,34 @@ bool SyncManager::forceUpload(SyncItem& item, LogCallback log) {
     emit("Target remote file: " + remoteFileName);
     emit("Uploading to RomM (Game ID: " + std::to_string(item.remoteGameId) + ")...");
     NetworkResult res = m_netMgr->uploadSave(item.remoteGameId, targetFile, remoteFileName);
+    clearDirectory(stagingDir);
+
     if (res.success) {
         time_t now = time(nullptr);
-        item.remoteHasSave = true;
-        item.remoteSaveTime = now;
-        item.remoteSaveUpdatedAt = formatTimestamp(now);
+        std::vector<RommSave> updatedSaves;
+        if (m_netMgr->fetchSaves(updatedSaves, item.remoteGameId).success && !updatedSaves.empty()) {
+            std::sort(updatedSaves.begin(), updatedSaves.end(), [](const RommSave& a, const RommSave& b) {
+                time_t ta = SyncManager::parseIsoTimestamp(a.updatedAt);
+                time_t tb = SyncManager::parseIsoTimestamp(b.updatedAt);
+                if (ta != tb) return ta > tb;
+                if (a.updatedAt != b.updatedAt) return a.updatedAt > b.updatedAt;
+                return a.id > b.id;
+            });
+            item.remoteHasSave = true;
+            item.remoteSaveUpdatedAt = updatedSaves[0].updatedAt;
+            item.remoteSaveTime = parseIsoTimestamp(updatedSaves[0].updatedAt);
+            now = item.remoteSaveTime;
+        } else {
+            item.remoteHasSave = true;
+            item.remoteSaveTime = now;
+            item.remoteSaveUpdatedAt = formatTimestamp(now);
+        }
+
         item.localTitle.hasSave = true;
         item.localTitle.saveTime = now;
         if (m_saveMgr) {
-            m_saveMgr->setCachedSaveTime(item.localTitle.titleIdHex, now);
+            time_t rawFsMtime = m_saveMgr->getRawSaveMtime(item.localTitle);
+            m_saveMgr->setCachedSaveTime(item.localTitle.titleIdHex, now, rawFsMtime);
             m_saveMgr->saveTimestampCache();
         }
         emit("[SUCCESS] Successfully uploaded save to RomM!");
@@ -1169,6 +1188,8 @@ bool SyncManager::forceDownload(SyncItem& item, LogCallback log) {
         return false;
     }
 
+    clearDirectory(stagingDir);
+
     item.localTitle.hasSave = true;
     if (item.localTitle.isFileRom || !item.localTitle.savePath.empty()) {
         if (item.localTitle.savePath.empty() && item.localTitle.isFileRom) {
@@ -1176,11 +1197,17 @@ bool SyncManager::forceDownload(SyncItem& item, LogCallback log) {
         }
         emit("Active local save path: " + item.localTitle.savePath);
     }
-    time_t rawSaveTime = m_saveMgr->getSaveTime(item.localTitle);
-    time_t syncedTime = (rawSaveTime > 0) ? rawSaveTime : ((item.remoteSaveTime > 0) ? item.remoteSaveTime : time(nullptr));
-    item.localTitle.saveTime = syncedTime;
+
+    time_t remoteTime = parseIsoTimestamp(saves[0].updatedAt);
+    time_t targetTime = (remoteTime > 0) ? remoteTime : ((item.remoteSaveTime > 0) ? item.remoteSaveTime : time(nullptr));
+
+    item.localTitle.saveTime = targetTime;
+    item.remoteSaveTime = targetTime;
+    item.remoteSaveUpdatedAt = saves[0].updatedAt;
+
     if (m_saveMgr) {
-        m_saveMgr->setCachedSaveTime(item.localTitle.titleIdHex, syncedTime);
+        time_t rawFsMtime = m_saveMgr->getRawSaveMtime(item.localTitle);
+        m_saveMgr->setCachedSaveTime(item.localTitle.titleIdHex, targetTime, rawFsMtime);
         m_saveMgr->saveTimestampCache();
     }
     emit("Local save time updated to: " + formatTimestamp(item.localTitle.saveTime));

@@ -1441,9 +1441,9 @@ void UIManager::renderMainMenuBottom() {
         if (item.localTitle.hasSave && item.remoteHasSave) {
             time_t lt = item.localTitle.saveTime;
             time_t rt = item.remoteSaveTime != 0 ? item.remoteSaveTime : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
-            if (rt > lt && lt > 0) {
+            if (rt > lt + 5 && lt > 0) {
                 tag += " [v]";
-            } else if (lt > rt && rt > 0) {
+            } else if (lt > rt + 5 && rt > 0) {
                 tag += " [^]";
             }
         }
