@@ -1295,9 +1295,7 @@ void UIManager::renderMainMenuTop() {
         C2D_DrawText(&matchText, C2D_WithColor, textX, 70.0f, 0.5f, matchScale, matchScale, matchColor);
 
         std::string romOrTid = item.localTitle.isFileRom
-                                   ? ("ROM: " + (item.localTitle.romPath.find_last_of("/\\") != std::string::npos
-                                                     ? item.localTitle.romPath.substr(item.localTitle.romPath.find_last_of("/\\") + 1)
-                                                     : item.localTitle.romPath))
+                                   ? ("ROM: " + item.localTitle.romPath)
                                    : ("Title ID: " + item.localTitle.titleIdHex);
 
         std::string detailLine1 = "Console: " + item.localTitle.console +
@@ -1306,13 +1304,13 @@ void UIManager::renderMainMenuTop() {
         C2D_Text detailText1;
         C2D_TextParse(&detailText1, m_textBuf, detailLine1.c_str());
         C2D_TextOptimize(&detailText1);
-        float d1Scale = 0.42f;
+        float d1Scale = 0.40f;
         float d1W = 0.0f, d1H = 0.0f;
         C2D_TextGetDimensions(&detailText1, d1Scale, d1Scale, &d1W, &d1H);
-        if (d1W > maxTextW && d1W > 0.0f) {
-            d1Scale *= (maxTextW / d1W);
+        if (d1W > 368.0f && d1W > 0.0f) {
+            d1Scale *= (368.0f / d1W);
         }
-        C2D_DrawText(&detailText1, C2D_WithColor, textX, 92.0f, 0.5f, d1Scale, d1Scale, CLR_TEXT_MUTED);
+        C2D_DrawText(&detailText1, C2D_WithColor, 16.0f, 102.0f, 0.5f, d1Scale, d1Scale, CLR_TEXT_MUTED);
 
         time_t localTime = item.localTitle.saveTime;
         time_t remoteTime = item.remoteSaveTime != 0 ? item.remoteSaveTime : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
@@ -1344,7 +1342,7 @@ void UIManager::renderMainMenuTop() {
             d2Scale *= (368.0f / d2W);
         }
         u32 saveColor = remoteIsNewer ? CLR_GREEN : (localIsNewer ? CLR_YELLOW : ((item.localTitle.hasSave || item.remoteHasSave) ? CLR_TEXT_WHITE : CLR_TEXT_MUTED));
-        C2D_DrawText(&detailText2, C2D_WithColor, 16.0f, 108.0f, 0.5f, d2Scale, d2Scale, saveColor);
+        C2D_DrawText(&detailText2, C2D_WithColor, 16.0f, 118.0f, 0.5f, d2Scale, d2Scale, saveColor);
 
         std::string detailLine3;
         if (!item.localTitle.savePath.empty()) {
@@ -1358,10 +1356,10 @@ void UIManager::renderMainMenuTop() {
             if (d3W > 368.0f && d3W > 0.0f) {
                 d3Scale *= (368.0f / d3W);
             }
-            C2D_DrawText(&detailText3, C2D_WithColor, 16.0f, 124.0f, 0.5f, d3Scale, d3Scale, CLR_TEXT_MUTED);
+            C2D_DrawText(&detailText3, C2D_WithColor, 16.0f, 134.0f, 0.5f, d3Scale, d3Scale, CLR_TEXT_MUTED);
         }
 
-        float ctrlY = detailLine3.empty() ? 128.0f : 140.0f;
+        float ctrlY = detailLine3.empty() ? 138.0f : 150.0f;
         std::string controls = "Controls:\n"
                                "  (A) Sync Selected       (X) Batch Sync All\n"
                                "  (L) Force Upload Save   (R) Force Download Save\n"
