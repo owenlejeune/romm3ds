@@ -625,7 +625,7 @@ void UIManager::resolveConflict(int choice) {
         if (cChoice == ConflictChoice::SKIP) {
             addOperationLog("[WARN] Skipped conflict for: " + item.localTitle.name);
         } else {
-            std::string actionName = (choice == 0) ? "Overwrite Local" : "Overwrite Remote";
+            std::string actionName = (choice == 0) ? "Download Save (Overwrite Local)" : "Upload Save (Use Local Save)";
             addOperationLog("[Sync] Resolving conflict for " + item.localTitle.name + " (" + actionName + ")...");
             if (m_syncMgr->syncItem(item, cChoice, logger)) {
                 m_batchSyncSuccessCount++;
@@ -643,7 +643,7 @@ void UIManager::resolveConflict(int choice) {
         return;
     }
 
-    std::string opTitle = (choice == 0) ? "Overwrite Local: " : "Overwrite Remote: ";
+    std::string opTitle = (choice == 0) ? "Download Save: " : "Upload Save: ";
     opTitle += item.localTitle.name;
     openOperationLog(opTitle);
 
@@ -1820,10 +1820,10 @@ void UIManager::renderConflictTop() {
     std::string summary;
     u32 summaryColor = CLR_TEXT_WHITE;
     if (remoteIsNewer) {
-        summary = "-> Recommendation: Overwrite Local (Remote is newer)";
+        summary = "-> Recommendation: Download Save (Remote is newer)";
         summaryColor = CLR_GREEN;
     } else if (localIsNewer) {
-        summary = "-> Recommendation: Overwrite Remote (Local 3DS is newer)";
+        summary = "-> Recommendation: Upload Save (Local 3DS is newer)";
         summaryColor = CLR_GREEN;
     } else {
         summary = "Saves have identical timestamps.";
@@ -1860,8 +1860,8 @@ void UIManager::renderConflictBottom() {
         localIsNewer = (localTime > 0 && (remoteTime == 0 || localTime > remoteTime));
     }
 
-    std::string btnLocal = remoteIsNewer ? "[ Overwrite Local (Remote is Newer) * ]" : "[ Overwrite Local (Use Remote Save) ]";
-    std::string btnRemote = localIsNewer ? "[ Overwrite Remote (Local is Newer) * ]" : "[ Overwrite Remote (Use Local Save) ]";
+    std::string btnLocal = remoteIsNewer ? "[ Download Save (Overwrite Local) * ]" : "[ Download Save (Overwrite Local) ]";
+    std::string btnRemote = localIsNewer ? "[ Upload Save (Use Local Save) * ]" : "[ Upload Save (Use Local Save) ]";
     std::string btnSkip = m_batchSyncActive ? "[ Skip & Continue Batch Sync ]" : "[ Skip This Game ]";
 
     drawButton(16.0f, 44.0f, 288.0f, 32.0f, btnLocal.c_str(), m_conflictChoiceIndex == 0);

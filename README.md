@@ -67,8 +67,8 @@ Highlight a game and press **(A)** or tap **`[ Sync Selected ]`**.
 If a save exists both locally and remotely with conflicting or unverified timestamps:
 1. A dialog displays the **Local Save Date** and **Remote Save Date** side by side.
 2. Select your choice:
-   - **`[ Overwrite Remote (Use Local) ]`**: Uploads your 3DS save to the server.
-   - **`[ Overwrite Local (Use Remote) ]`**: Downloads the server save to your 3DS.
+   - **`[ Upload Save (Use Local Save) ]`**: Uploads your 3DS save to the server.
+   - **`[ Download Save (Overwrite Local) ]`**: Downloads the server save to your 3DS.
    - **`[ Skip ]`**: Skips synchronization for this game.
 
 #### Custom Save Path Overrides
@@ -255,7 +255,7 @@ When you play Nintendo DS games on your 3DS and save in-game, you may notice tha
 - **UTC vs. Local Timezone:** RomM reports save timestamps in UTC (`Z`), whereas the 3DS system clock and FAT32 SD card filesystem store times in local wall-clock time.
 - **How to sync progress back to RomM:** When you have made progress in a DS game on your 3DS and open `romm3ds` to sync:
   1. Trigger the sync as usual.
-  2. In the **Save Conflict Resolution** screen, select **`[ Overwrite Remote (Use Local Save) ]`**.
+  2. In the **Save Conflict Resolution** screen, select **`[ Upload Save (Use Local Save) ]`**.
   3. `romm3ds` will read the raw save from your SD card (which contains your newest in-game progress) and upload it to your RomM server.
 
 ---
