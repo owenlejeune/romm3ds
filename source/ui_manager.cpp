@@ -475,16 +475,17 @@ void UIManager::syncSelectedGame() {
 }
 
 void UIManager::syncAllGames() {
-    if (!m_syncMgr || m_syncMgr->getItems().empty()) {
-        m_statusMessage = "No installed titles found.";
+    if (!m_syncMgr || m_filteredLocalIndices.empty()) {
+        m_statusMessage = "No installed titles match current filter.";
         return;
     }
 
+    m_batchSyncTargetIndices = m_filteredLocalIndices;
     m_batchSyncActive = true;
     m_batchSyncIndex = 0;
     m_batchSyncSuccessCount = 0;
 
-    openOperationLog("Batch Sync");
+    openOperationLog("Batch Sync (" + std::to_string(m_batchSyncTargetIndices.size()) + " filtered titles)");
     processBatchSync();
 }
 
@@ -497,8 +498,14 @@ void UIManager::processBatchSync() {
         addOperationLog(msg);
     };
 
-    while (m_batchSyncIndex < m_syncMgr->getItems().size()) {
-        SyncItem& item = m_syncMgr->getItems()[m_batchSyncIndex];
+    while (m_batchSyncIndex < m_batchSyncTargetIndices.size()) {
+        size_t actualIdx = m_batchSyncTargetIndices[m_batchSyncIndex];
+        if (actualIdx >= m_syncMgr->getItems().size()) {
+            m_batchSyncIndex++;
+            continue;
+        }
+
+        SyncItem& item = m_syncMgr->getItems()[actualIdx];
         if (item.isIgnored || !item.isMatched) {
             m_batchSyncIndex++;
             continue;
@@ -513,7 +520,7 @@ void UIManager::processBatchSync() {
 
         if (act == SyncAction::CONFLICT) {
             // Show conflict resolution UI before sync continues
-            m_conflictGameIndex = m_batchSyncIndex;
+            m_conflictGameIndex = actualIdx;
             time_t localTime = item.localTitle.saveTime;
             time_t remoteTime = item.remoteSaveTime != 0 ? item.remoteSaveTime : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
             if (remoteTime > localTime + 5) {
@@ -537,6 +544,7 @@ void UIManager::processBatchSync() {
     }
 
     m_batchSyncActive = false;
+    m_batchSyncTargetIndices.clear();
     logger("Batch sync finished (" + std::to_string(m_batchSyncSuccessCount) + " games synced).");
     m_statusMessage = "Batch sync complete (" + std::to_string(m_batchSyncSuccessCount) + " games synced).";
     finishOperationLog();

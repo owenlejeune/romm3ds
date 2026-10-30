@@ -175,6 +175,7 @@ private:
     bool m_batchSyncActive = false;
     size_t m_batchSyncIndex = 0;
     size_t m_batchSyncSuccessCount = 0;
+    std::vector<size_t> m_batchSyncTargetIndices;
 
     void processBatchSync();
 
