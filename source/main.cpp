@@ -12,6 +12,10 @@
 #include <sys/stat.h>
 #include <vector>
 
+extern "C" {
+u32 __stacksize__ = 512 * 1024;
+}
+
 namespace {
 
 void consolidateExecutable() {
