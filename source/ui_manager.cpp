@@ -147,7 +147,7 @@ void UIManager::runConnectionTest() {
     }
 }
 
-void UIManager::runLibraryRefresh() {
+void UIManager::runLibraryRefresh(bool forceFullRemoteRefresh) {
     if (!m_syncMgr) {
         return;
     }
@@ -157,7 +157,7 @@ void UIManager::runLibraryRefresh() {
     render();
     render();
 
-    m_syncMgr->refresh();
+    m_syncMgr->refresh(forceFullRemoteRefresh);
     m_loadingMessage.clear();
     updateLocalFilteredList();
     updateRemoteFilteredList();
@@ -418,7 +418,7 @@ void UIManager::executeSaveAction() {
         if (m_configMgr->saveConfig()) {
             m_statusMessage = "Connected & Saved successfully!";
             m_state = UIState::MAIN_MENU;
-            runLibraryRefresh();
+            runLibraryRefresh(true);
         } else {
             m_statusMessage = "Error: Failed to write config to SD.";
         }
@@ -890,7 +890,7 @@ void UIManager::handleInput(u32 kDown, const touchPosition& touch) {
             } else if (kDown & KEY_B) {
                 m_state = UIState::MAIN_MENU;
             } else if (kDown & KEY_X) {
-                runLibraryRefresh();
+                runLibraryRefresh(true);
                 m_availableConsoles = m_syncMgr ? m_syncMgr->getPlatforms() : std::vector<RommPlatform>();
             }
 

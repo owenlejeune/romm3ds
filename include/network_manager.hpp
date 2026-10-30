@@ -62,8 +62,10 @@ private:
     std::string buildUrl(const std::string& endpointPath) const;
     std::string getBaseEndpoint() const;
     std::string getApiKey() const;
+    void* acquireCurlHandle();
 
     ConfigManager* m_configMgr = nullptr;
+    void* m_curlHandle = nullptr;
 };
 
 } // namespace RomM3DS

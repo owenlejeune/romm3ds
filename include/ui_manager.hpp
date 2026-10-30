@@ -64,7 +64,7 @@ public:
     void setStatusMessage(const std::string& msg) { m_statusMessage = msg; }
 
     void runConnectionTest();
-    void runLibraryRefresh();
+    void runLibraryRefresh(bool forceFullRemoteRefresh = false);
     void syncSelectedGame();
     void syncAllGames();
     void forceUploadSelected();

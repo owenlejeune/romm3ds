@@ -146,7 +146,26 @@ NetworkManager::NetworkManager(ConfigManager* configMgr)
     : m_configMgr(configMgr) {
 }
 
-NetworkManager::~NetworkManager() = default;
+NetworkManager::~NetworkManager() {
+    if (m_curlHandle && s_networkInitialized) {
+        curl_easy_cleanup(static_cast<CURL*>(m_curlHandle));
+    }
+    m_curlHandle = nullptr;
+}
+
+void* NetworkManager::acquireCurlHandle() {
+    if (!s_networkInitialized) {
+        return nullptr;
+    }
+    CURL* curl = static_cast<CURL*>(m_curlHandle);
+    if (!curl) {
+        curl = curl_easy_init();
+        m_curlHandle = curl;
+    } else {
+        curl_easy_reset(curl);
+    }
+    return curl;
+}
 
 std::string NetworkManager::getBaseEndpoint() const {
     if (m_configMgr) {
@@ -187,7 +206,7 @@ NetworkResult NetworkManager::testConnection() {
         return result;
     }
 
-    CURL* curl = curl_easy_init();
+    CURL* curl = static_cast<CURL*>(acquireCurlHandle());
     if (!curl) {
         result.errorMessage = "Failed to initialize curl session.";
         return result;
@@ -234,7 +253,6 @@ NetworkResult NetworkManager::testConnection() {
     }
 
     curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);
     return result;
 }
 
@@ -246,7 +264,7 @@ NetworkResult NetworkManager::fetchPlatforms(std::vector<RommPlatform>& outPlatf
         return result;
     }
 
-    CURL* curl = curl_easy_init();
+    CURL* curl = static_cast<CURL*>(acquireCurlHandle());
     if (!curl) {
         result.errorMessage = "Failed to initialize curl.";
         return result;
@@ -280,11 +298,11 @@ NetworkResult NetworkManager::fetchPlatforms(std::vector<RommPlatform>& outPlatf
     CURLcode res = curl_easy_perform(curl);
     if (res == CURLE_OK) {
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &result.httpCode);
-        result.responseBody = responseData;
         if (result.httpCode >= 200 && result.httpCode < 300) {
             result.success = true;
 
             json parsed = json::parse(responseData, nullptr, false);
+            std::string().swap(responseData);
             if (!parsed.is_discarded()) {
                 json items = parsed.is_array() ? parsed :
                              (parsed.contains("items") ? parsed["items"] :
@@ -312,7 +330,6 @@ NetworkResult NetworkManager::fetchPlatforms(std::vector<RommPlatform>& outPlatf
     }
 
     curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);
     return result;
 }
 
@@ -337,8 +354,28 @@ NetworkResult NetworkManager::fetchLibrary(std::vector<RommGame>& outGames, uint
 
     std::string apiKey = getApiKey();
 
+    auto romFilterCallback = [](int depth, json::parse_event_t event, json& parsed) -> bool {
+        if (event == json::parse_event_t::key) {
+            if (!parsed.is_string()) return false;
+            const std::string& k = parsed.get_ref<const std::string&>();
+            if (depth == 1) {
+                return (k == "items" || k == "total" ||
+                        k == "id" || k == "platform_id" || k == "name" || k == "title" ||
+                        k == "platform_slug" || k == "platform" || k == "fs_name" ||
+                        k == "rom_path" || k == "save_path" || k == "updated_at" || k == "updatedAt");
+            }
+            if (depth == 2) {
+                return (k == "id" || k == "platform_id" || k == "name" || k == "title" ||
+                        k == "platform_slug" || k == "platform" || k == "fs_name" ||
+                        k == "rom_path" || k == "save_path" || k == "updated_at" || k == "updatedAt");
+            }
+            return false;
+        }
+        return true;
+    };
+
     while (true) {
-        CURL* curl = curl_easy_init();
+        CURL* curl = static_cast<CURL*>(acquireCurlHandle());
         if (!curl) {
             result.errorMessage = "Failed to initialize curl.";
             return result;
@@ -376,14 +413,11 @@ NetworkResult NetworkManager::fetchLibrary(std::vector<RommGame>& outGames, uint
         if (res != CURLE_OK) {
             result.errorMessage = curl_easy_strerror(res);
             curl_slist_free_all(headers);
-            curl_easy_cleanup(curl);
             break;
         }
 
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &result.httpCode);
-        result.responseBody = responseData;
         curl_slist_free_all(headers);
-        curl_easy_cleanup(curl);
 
         if (result.httpCode < 200 || result.httpCode >= 300) {
             result.errorMessage = "HTTP Error " + std::to_string(result.httpCode);
@@ -392,7 +426,8 @@ NetworkResult NetworkManager::fetchLibrary(std::vector<RommGame>& outGames, uint
 
         result.success = true;
 
-        json parsed = json::parse(responseData, nullptr, false);
+        json parsed = json::parse(responseData, romFilterCallback, false);
+        std::string().swap(responseData);
         if (parsed.is_discarded()) {
             break;
         }
@@ -440,7 +475,7 @@ NetworkResult NetworkManager::fetchSaves(std::vector<RommSave>& outSaves, uint64
         return result;
     }
 
-    CURL* curl = curl_easy_init();
+    CURL* curl = static_cast<CURL*>(acquireCurlHandle());
     if (!curl) {
         result.errorMessage = "Failed to initialize curl.";
         return result;
@@ -478,11 +513,26 @@ NetworkResult NetworkManager::fetchSaves(std::vector<RommSave>& outSaves, uint64
     CURLcode res = curl_easy_perform(curl);
     if (res == CURLE_OK) {
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &result.httpCode);
-        result.responseBody = responseData;
         result.success = (result.httpCode >= 200 && result.httpCode < 300);
 
         if (result.success && !responseData.empty()) {
-            json parsed = json::parse(responseData, nullptr, false);
+            auto saveFilterCallback = [](int depth, json::parse_event_t event, json& parsed) -> bool {
+                if (event == json::parse_event_t::key) {
+                    if (!parsed.is_string()) return false;
+                    const std::string& k = parsed.get_ref<const std::string&>();
+                    if (depth == 1 || depth == 2) {
+                        return (k == "items" || k == "id" || k == "rom_id" || k == "romId" ||
+                                k == "file_name" || k == "filename" ||
+                                k == "updated_at" || k == "updatedAt" ||
+                                k == "created_at" || k == "createdAt");
+                    }
+                    return false;
+                }
+                return true;
+            };
+
+            json parsed = json::parse(responseData, saveFilterCallback, false);
+            std::string().swap(responseData);
             if (!parsed.is_discarded()) {
                 json items = parsed.is_array() ? parsed : (parsed.contains("items") ? parsed["items"] : json::array());
                 for (const auto& item : items) {
@@ -508,7 +558,6 @@ NetworkResult NetworkManager::fetchSaves(std::vector<RommSave>& outSaves, uint64
     }
 
     curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);
     return result;
 }
 
@@ -526,7 +575,7 @@ NetworkResult NetworkManager::uploadSave(uint64_t gameId, const std::string& fil
         return result;
     }
 
-    CURL* curl = curl_easy_init();
+    CURL* curl = static_cast<CURL*>(acquireCurlHandle());
     if (!curl) {
         result.errorMessage = "Failed to initialize curl.";
         return result;
@@ -596,9 +645,9 @@ NetworkResult NetworkManager::uploadSave(uint64_t gameId, const std::string& fil
         result.errorMessage = curl_easy_strerror(res);
     }
 
+    curl_easy_setopt(curl, CURLOPT_MIMEPOST, nullptr);
     curl_mime_free(mime);
     curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);
     return result;
 }
 
@@ -630,7 +679,7 @@ NetworkResult NetworkManager::downloadSaveById(uint64_t saveId, const std::strin
         return result;
     }
 
-    CURL* curl = curl_easy_init();
+    CURL* curl = static_cast<CURL*>(acquireCurlHandle());
     if (!curl) {
         fclose(fp);
         result.errorMessage = "Failed to initialize curl.";
@@ -673,7 +722,6 @@ NetworkResult NetworkManager::downloadSaveById(uint64_t saveId, const std::strin
     }
 
     curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);
     return result;
 }
 

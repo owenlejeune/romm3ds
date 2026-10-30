@@ -179,7 +179,6 @@ static int s_manualTimezoneOffsetMinutes = -99999;
 
 SyncManager::SyncManager(ConfigManager* cfg, NetworkManager* net, SaveManager* save)
     : m_configMgr(cfg), m_netMgr(net), m_saveMgr(save) {
-    clearLibraryCache();
     if (m_configMgr) {
         long savedOffset = m_configMgr->getDetectedTimezoneOffsetSeconds();
         if (savedOffset != 0 && !s_hasDetectedUtcOffset) {
@@ -189,9 +188,7 @@ SyncManager::SyncManager(ConfigManager* cfg, NetworkManager* net, SaveManager* s
     }
 }
 
-SyncManager::~SyncManager() {
-    clearLibraryCache();
-}
+SyncManager::~SyncManager() = default;
 
 std::string SyncManager::getStagingDirectory(uint64_t titleId) {
     return "sdmc:/3ds/romm3ds/saves/" + SaveManager::formatTitleId(titleId);
@@ -391,7 +388,7 @@ void SyncManager::consolidatePlatforms() {
         m_platforms.push_back(p);
     }
 
-    if (!m_remoteGames.empty()) {
+    if (m_loadedPlatforms.count("0:") > 0 && !m_remoteGames.empty()) {
         m_platforms.erase(
             std::remove_if(m_platforms.begin(), m_platforms.end(),
                 [](const RommPlatform& p) { return p.romCount <= 0; }),
@@ -406,6 +403,7 @@ void SyncManager::consolidatePlatforms() {
 }
 
 bool SyncManager::isPlatformLoaded(uint64_t platformId, const std::string& platformSlug) const {
+    if (m_loadedPlatforms.count("0:") > 0) return true;
     std::string key = std::to_string(platformId) + ":" + platformSlug;
     if (m_loadedPlatforms.count(key) > 0) return true;
 
@@ -513,7 +511,7 @@ bool SyncManager::saveLibraryCache(const std::string& path) {
         {"loaded_platforms", jLoaded}
     };
 
-    file << root.dump(4);
+    file << root.dump(-1, ' ', false, json::error_handler_t::replace);
     return file.good();
 }
 
@@ -531,11 +529,12 @@ bool SyncManager::loadLibraryCache(const std::string& path) {
 
     if (root.contains("platforms") && root["platforms"].is_array()) {
         for (const auto& item : root["platforms"]) {
+            if (!item.is_object()) continue;
             RommPlatform p;
-            p.id = item.value("id", (uint64_t)0);
-            p.name = item.value("name", "");
-            p.slug = item.value("slug", "");
-            p.romCount = item.value("rom_count", 0);
+            if (item.contains("id") && item["id"].is_number()) p.id = item["id"].get<uint64_t>();
+            if (item.contains("name") && item["name"].is_string()) p.name = item["name"].get<std::string>();
+            if (item.contains("slug") && item["slug"].is_string()) p.slug = item["slug"].get<std::string>();
+            if (item.contains("rom_count") && item["rom_count"].is_number()) p.romCount = item["rom_count"].get<int>();
 
             bool exists = false;
             for (auto& existing : m_platforms) {
@@ -553,25 +552,20 @@ bool SyncManager::loadLibraryCache(const std::string& path) {
     }
 
     if (root.contains("games") && root["games"].is_array()) {
+        m_remoteGames.reserve(m_remoteGames.size() + root["games"].size());
         for (const auto& item : root["games"]) {
+            if (!item.is_object()) continue;
             RommGame g;
-            g.id = item.value("id", (uint64_t)0);
-            g.platformId = item.value("platform_id", (uint64_t)0);
-            g.title = item.value("title", "");
-            g.platform = item.value("platform", "");
-            g.romPath = item.value("rom_path", "");
-            g.savePath = item.value("save_path", "");
-            g.updatedAt = item.value("updated_at", "");
+            if (item.contains("id") && item["id"].is_number()) g.id = item["id"].get<uint64_t>();
+            if (item.contains("platform_id") && item["platform_id"].is_number()) g.platformId = item["platform_id"].get<uint64_t>();
+            if (item.contains("title") && item["title"].is_string()) g.title = item["title"].get<std::string>();
+            if (item.contains("platform") && item["platform"].is_string()) g.platform = item["platform"].get<std::string>();
+            if (item.contains("rom_path") && item["rom_path"].is_string()) g.romPath = item["rom_path"].get<std::string>();
+            if (item.contains("save_path") && item["save_path"].is_string()) g.savePath = item["save_path"].get<std::string>();
+            if (item.contains("updated_at") && item["updated_at"].is_string()) g.updatedAt = item["updated_at"].get<std::string>();
 
-            bool exists = false;
-            for (auto& existing : m_remoteGames) {
-                if (existing.id == g.id) {
-                    exists = true;
-                    break;
-                }
-            }
-            if (!exists && g.id > 0) {
-                m_remoteGames.push_back(g);
+            if (g.id > 0) {
+                m_remoteGames.push_back(std::move(g));
             }
         }
     }
@@ -584,7 +578,7 @@ bool SyncManager::loadLibraryCache(const std::string& path) {
         }
     }
 
-    return true;
+    return (!m_platforms.empty() || !m_remoteGames.empty());
 }
 
 void SyncManager::clearLibraryCache() {
@@ -592,26 +586,89 @@ void SyncManager::clearLibraryCache() {
     remove(RomM3DS::CACHE_PATH);
 }
 
-bool SyncManager::refresh() {
+bool SyncManager::refresh(bool forceFullRemoteRefresh) {
     m_items.clear();
     m_remoteGames.clear();
     m_platforms.clear();
-    clearLibraryCache();
+    m_loadedPlatforms.clear();
+
+    if (forceFullRemoteRefresh) {
+        clearLibraryCache();
+    }
 
     if (m_configMgr) {
         m_configMgr->loadMappings();
     }
 
+    std::vector<InstalledTitle> localTitles;
+    if (m_saveMgr) {
+        std::vector<std::string> romDirs;
+        if (m_configMgr) {
+            romDirs = m_configMgr->getRomDirectories();
+        }
+        localTitles = m_saveMgr->scanInstalledTitles(romDirs);
+    }
+
+    bool hasUnmatchedLocal = false;
+    std::set<std::string> unmatchedLocalConsoles;
+    for (const auto& local : localTitles) {
+        if (m_configMgr && m_configMgr->isTitleIgnored(local.titleIdHex)) continue;
+        const GameMapping* mapping = m_configMgr ? m_configMgr->findMappingByTitleId(local.titleIdHex) : nullptr;
+        if (!mapping || mapping->remoteGameId == 0) {
+            hasUnmatchedLocal = true;
+            if (!local.console.empty()) {
+                unmatchedLocalConsoles.insert(local.console);
+            }
+        }
+    }
+
+    bool loadedFromCache = false;
+    if (!forceFullRemoteRefresh) {
+        loadedFromCache = loadLibraryCache();
+        if (loadedFromCache) {
+            consolidatePlatforms();
+        }
+    }
+
     std::map<uint64_t, RommSave> remoteSaveMap;
     if (m_netMgr) {
-        NetworkResult pRes = m_netMgr->fetchPlatforms(m_platforms);
-        NetworkResult lRes = m_netMgr->fetchLibrary(m_remoteGames, 0, "");
-        if (pRes.success || lRes.success) {
-            consolidatePlatforms();
+        bool cacheModified = false;
+
+        if (m_platforms.empty() || forceFullRemoteRefresh) {
+            if (m_netMgr->fetchPlatforms(m_platforms).success) {
+                consolidatePlatforms();
+                cacheModified = true;
+            }
+        }
+
+        if (forceFullRemoteRefresh || (!loadedFromCache && hasUnmatchedLocal)) {
+            if (!m_platforms.empty()) {
+                for (const auto& p : m_platforms) {
+                    bool needed = forceFullRemoteRefresh;
+                    if (!needed) {
+                        for (const auto& lc : unmatchedLocalConsoles) {
+                            if (isPlatformCompatible(lc, p.slug)) {
+                                needed = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (needed && (forceFullRemoteRefresh || !isPlatformLoaded(p.id, p.slug))) {
+                        loadGamesForPlatform(p.id, p.slug, forceFullRemoteRefresh);
+                        cacheModified = false; // loadGamesForPlatform already saves cache
+                    }
+                }
+            } else {
+                if (m_netMgr->fetchLibrary(m_remoteGames, 0, "").success) {
+                    m_loadedPlatforms.insert("0:");
+                    consolidatePlatforms();
+                    cacheModified = true;
+                }
+            }
+        }
+
+        if (cacheModified) {
             saveLibraryCache();
-        } else {
-            loadLibraryCache();
-            consolidatePlatforms();
         }
 
         std::vector<RommSave> allSaves;
@@ -628,15 +685,6 @@ bool SyncManager::refresh() {
                 }
             }
         }
-    }
-
-    std::vector<InstalledTitle> localTitles;
-    if (m_saveMgr) {
-        std::vector<std::string> romDirs;
-        if (m_configMgr) {
-            romDirs = m_configMgr->getRomDirectories();
-        }
-        localTitles = m_saveMgr->scanInstalledTitles(romDirs);
     }
 
     for (const auto& local : localTitles) {

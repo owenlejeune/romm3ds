@@ -42,7 +42,7 @@ public:
     SyncManager(ConfigManager* cfg, NetworkManager* net, SaveManager* save);
     ~SyncManager();
 
-    bool refresh();
+    bool refresh(bool forceFullRemoteRefresh = false);
     std::vector<SyncItem>& getItems() { return m_items; }
     const std::vector<SyncItem>& getItems() const { return m_items; }
     const std::vector<RommGame>& getRemoteLibrary() const { return m_remoteGames; }
