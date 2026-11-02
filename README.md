@@ -271,6 +271,7 @@ When you play Nintendo DS games on your 3DS and save in-game, you may notice tha
 - **Consolidated Storage (`config.json` & `cache.bin`)**:
   - `sdmc:/3ds/romm3ds/config.json` holds your server endpoint, encrypted API key, ignored titles, custom ROM directories, and game/save-path mappings.
   - `sdmc:/3ds/romm3ds/cache.bin` is a compact binary CBOR cache storing remote library metadata, local SMDH title metadata, and save timestamps in a single file.
+  - `sdmc:/3ds/romm3ds/backups/<TitleID>/` stores an automatic rollback backup of your previous local save whenever a remote save is downloaded and applied.
 - **TLS / HTTPS Certificates**: Because the Nintendo 3DS system firmware does not include an up-to-date CA certificate bundle for modern authorities (such as Let's Encrypt) or self-signed homelab certificates, `romm3ds` disables strict TLS peer verification (`CURLOPT_SSL_VERIFYPEER = 0L`) so HTTPS reverse-proxy endpoints work out of the box.
 
 ---

@@ -194,6 +194,10 @@ std::string SyncManager::getStagingDirectory(uint64_t titleId) {
     return "sdmc:/3ds/romm3ds/saves/" + SaveManager::formatTitleId(titleId);
 }
 
+std::string SyncManager::getBackupDirectory(uint64_t titleId) {
+    return "sdmc:/3ds/romm3ds/backups/" + SaveManager::formatTitleId(titleId);
+}
+
 void SyncManager::updateServerTimeOffset(time_t serverTime) {
     if (serverTime <= 0) return;
     time_t localRtc = time(nullptr);
@@ -1288,9 +1292,46 @@ bool SyncManager::forceDownload(SyncItem& item, LogCallback log) {
         injectSource = stagingDir;
     }
 
+    // Automatically back up existing local save before overwriting
+    std::string backupDir = getBackupDirectory(item.localTitle.titleId);
+    bool hasRollbackBackup = false;
+    if (item.localTitle.hasSave || m_saveMgr->checkSaveExists(item.localTitle)) {
+        std::string tempBackupDir = backupDir + ".tmp";
+        clearDirectory(tempBackupDir);
+        rmdir(tempBackupDir.c_str());
+        ConfigManager::ensureDirectories(tempBackupDir + "/");
+
+        emit("Creating rollback backup of existing local save...");
+        if (m_saveMgr->backupSave(item.localTitle, tempBackupDir, nullptr)) {
+            clearDirectory(backupDir);
+            rmdir(backupDir.c_str());
+            if (rename(tempBackupDir.c_str(), backupDir.c_str()) != 0) {
+                ConfigManager::ensureDirectories(backupDir + "/");
+                m_saveMgr->backupSave(item.localTitle, backupDir, nullptr);
+                clearDirectory(tempBackupDir);
+                rmdir(tempBackupDir.c_str());
+            }
+            hasRollbackBackup = true;
+            emit("[OK] Backed up previous local save to: " + backupDir);
+        } else {
+            clearDirectory(tempBackupDir);
+            rmdir(tempBackupDir.c_str());
+            emit("[WARN] Could not create rollback backup prior to overwrite.");
+        }
+    }
+
     emit("Injecting save into local storage (" + item.localTitle.name + ")...");
     if (!m_saveMgr->injectSave(item.localTitle, injectSource, log)) {
         emit("[ERROR] Save injection failed for " + item.localTitle.name + " (Title ID: " + item.localTitle.titleIdHex + ").");
+        if (hasRollbackBackup) {
+            emit("Attempting to restore previous local save from backup...");
+            if (m_saveMgr->injectSave(item.localTitle, backupDir, log)) {
+                emit("[OK] Restored previous local save from rollback backup.");
+            } else {
+                emit("[WARN] Rollback restore failed; backup remains at: " + backupDir);
+            }
+        }
+        clearDirectory(stagingDir);
         m_lastMessage = "Save downloaded but injection failed for " + item.localTitle.name;
         return false;
     }

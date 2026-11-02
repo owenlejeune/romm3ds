@@ -66,6 +66,7 @@ public:
     const std::string& getLastMessage() const { return m_lastMessage; }
 
     static std::string getStagingDirectory(uint64_t titleId);
+    static std::string getBackupDirectory(uint64_t titleId);
     static std::string getFriendlyPlatformName(const std::string& slug);
     static bool isPlatformCompatible(const std::string& localConsole, const std::string& remotePlatformSlug);
     static std::string formatTimestamp(time_t t);
