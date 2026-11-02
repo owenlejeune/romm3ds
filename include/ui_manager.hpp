@@ -127,6 +127,7 @@ private:
     void renderOperationLogOverlay();
 
     std::string launchKeyboard(const std::string& hint, const std::string& initial, int maxLen = 256);
+    void openServerSettings();
     void executeSaveAction();
 
     void openManualMatch();

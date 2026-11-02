@@ -1,9 +1,9 @@
 #include "ui_manager.hpp"
+#include "common.hpp"
+#include "config_manager.hpp"
 #include "network_manager.hpp"
 #include "save_manager.hpp"
 #include "sync_manager.hpp"
-#include "config_manager.hpp"
-#include "common.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -16,2685 +16,3165 @@ namespace RomM3DS {
 
 namespace {
 
-constexpr u32 CLR_BG_TOP       = C2D_Color32(0x18, 0x1B, 0x22, 0xFF);
-constexpr u32 CLR_BG_BOTTOM    = C2D_Color32(0x10, 0x12, 0x17, 0xFF);
-constexpr u32 CLR_HEADER       = C2D_Color32(0x21, 0x26, 0x31, 0xFF);
-constexpr u32 CLR_CARD         = C2D_Color32(0x1C, 0x21, 0x2B, 0xFF);
-constexpr u32 CLR_INPUT_BG     = C2D_Color32(0x13, 0x16, 0x1D, 0xFF);
-constexpr u32 CLR_ACCENT       = C2D_Color32(0x3B, 0x82, 0xF6, 0xFF);
-constexpr u32 CLR_BORDER_OFF   = C2D_Color32(0x2F, 0x36, 0x46, 0xFF);
-constexpr u32 CLR_TEXT_WHITE   = C2D_Color32(0xF8, 0xFA, 0xFC, 0xFF);
-constexpr u32 CLR_TEXT_MUTED   = C2D_Color32(0x94, 0xA3, 0xB8, 0xFF);
-constexpr u32 CLR_GREEN        = C2D_Color32(0x22, 0xC5, 0x5E, 0xFF);
-constexpr u32 CLR_YELLOW       = C2D_Color32(0xEA, 0xB3, 0x08, 0xFF);
-constexpr u32 CLR_ERROR        = C2D_Color32(0xEF, 0x44, 0x44, 0xFF);
+constexpr u32 CLR_BG_TOP = C2D_Color32(0x18, 0x1B, 0x22, 0xFF);
+constexpr u32 CLR_BG_BOTTOM = C2D_Color32(0x10, 0x12, 0x17, 0xFF);
+constexpr u32 CLR_HEADER = C2D_Color32(0x21, 0x26, 0x31, 0xFF);
+constexpr u32 CLR_CARD = C2D_Color32(0x1C, 0x21, 0x2B, 0xFF);
+constexpr u32 CLR_INPUT_BG = C2D_Color32(0x13, 0x16, 0x1D, 0xFF);
+constexpr u32 CLR_ACCENT = C2D_Color32(0x3B, 0x82, 0xF6, 0xFF);
+constexpr u32 CLR_BORDER_OFF = C2D_Color32(0x2F, 0x36, 0x46, 0xFF);
+constexpr u32 CLR_TEXT_WHITE = C2D_Color32(0xF8, 0xFA, 0xFC, 0xFF);
+constexpr u32 CLR_TEXT_MUTED = C2D_Color32(0x94, 0xA3, 0xB8, 0xFF);
+constexpr u32 CLR_GREEN = C2D_Color32(0x22, 0xC5, 0x5E, 0xFF);
+constexpr u32 CLR_YELLOW = C2D_Color32(0xEA, 0xB3, 0x08, 0xFF);
+constexpr u32 CLR_ERROR = C2D_Color32(0xEF, 0x44, 0x44, 0xFF);
 
-bool containsIgnoreCase(const std::string& str, const std::string& sub) {
-    if (sub.empty()) return true;
-    if (str.length() < sub.length()) return false;
-    auto it = std::search(
-        str.begin(), str.end(),
-        sub.begin(), sub.end(),
-        [](char ch1, char ch2) {
-            return std::tolower(static_cast<unsigned char>(ch1)) ==
-                   std::tolower(static_cast<unsigned char>(ch2));
-        }
-    );
-    return (it != str.end());
+bool containsIgnoreCase(const std::string &str, const std::string &sub) {
+  if (sub.empty())
+    return true;
+  if (str.length() < sub.length())
+    return false;
+  auto it = std::search(
+      str.begin(), str.end(), sub.begin(), sub.end(), [](char ch1, char ch2) {
+        return std::tolower(static_cast<unsigned char>(ch1)) ==
+               std::tolower(static_cast<unsigned char>(ch2));
+      });
+  return (it != str.end());
 }
 
-const char* getFilterModeName(LocalFilterMode mode) {
-    switch (mode) {
-        case LocalFilterMode::ALL:        return "All";
-        case LocalFilterMode::MATCHED:    return "Matched";
-        case LocalFilterMode::UNMATCHED:  return "Unmatched";
-        case LocalFilterMode::WITH_SAVES: return "Has Save";
-        case LocalFilterMode::OUTDATED:   return "Outdated";
-        case LocalFilterMode::UPDATED:    return "Updated";
-        case LocalFilterMode::HIDDEN:     return "Hidden";
-        case LocalFilterMode::CONSOLE:    return "Console";
-    }
+const char *getFilterModeName(LocalFilterMode mode) {
+  switch (mode) {
+  case LocalFilterMode::ALL:
     return "All";
+  case LocalFilterMode::MATCHED:
+    return "Matched";
+  case LocalFilterMode::UNMATCHED:
+    return "Unmatched";
+  case LocalFilterMode::WITH_SAVES:
+    return "Has Save";
+  case LocalFilterMode::OUTDATED:
+    return "Outdated";
+  case LocalFilterMode::UPDATED:
+    return "Updated";
+  case LocalFilterMode::HIDDEN:
+    return "Hidden";
+  case LocalFilterMode::CONSOLE:
+    return "Console";
+  }
+  return "All";
 }
 
-const char* getSortModeName(LocalSortMode mode) {
-    switch (mode) {
-        case LocalSortMode::TITLE:       return "Title";
-        case LocalSortMode::SAVE_STATUS: return "Save";
-    }
+const char *getSortModeName(LocalSortMode mode) {
+  switch (mode) {
+  case LocalSortMode::TITLE:
     return "Title";
+  case LocalSortMode::SAVE_STATUS:
+    return "Save";
+  }
+  return "Title";
 }
 
 } // namespace
 
 UIManager::UIManager() = default;
 
-UIManager::~UIManager() {
-    cleanup();
-}
+UIManager::~UIManager() { cleanup(); }
 
-void UIManager::init(C3D_RenderTarget* topTarget, C3D_RenderTarget* bottomTarget,
-                     ConfigManager* configMgr, NetworkManager* netMgr,
-                     SaveManager* saveMgr, SyncManager* syncMgr) {
-    m_topTarget = topTarget;
-    m_bottomTarget = bottomTarget;
-    m_configMgr = configMgr;
-    m_netMgr = netMgr;
-    m_saveMgr = saveMgr;
-    m_syncMgr = syncMgr;
+void UIManager::init(C3D_RenderTarget *topTarget,
+                     C3D_RenderTarget *bottomTarget, ConfigManager *configMgr,
+                     NetworkManager *netMgr, SaveManager *saveMgr,
+                     SyncManager *syncMgr) {
+  m_topTarget = topTarget;
+  m_bottomTarget = bottomTarget;
+  m_configMgr = configMgr;
+  m_netMgr = netMgr;
+  m_saveMgr = saveMgr;
+  m_syncMgr = syncMgr;
 
-    m_textBuf = C2D_TextBufNew(8192);
+  m_textBuf = C2D_TextBufNew(8192);
 
-    if (m_configMgr && m_configMgr->hasValidConfig()) {
-        const auto& cfg = m_configMgr->getConfig();
-        m_enteredEndpoint = cfg.serverEndpoint;
-        m_enteredApiKey = cfg.apiKey;
-        m_state = UIState::MAIN_MENU;
-        m_statusMessage = "Configuration loaded.";
-        runLibraryRefresh();
-    } else {
-        m_enteredEndpoint = "http://";
-        m_enteredApiKey = "";
-        m_state = UIState::FIRST_LAUNCH;
-        m_statusMessage = "Welcome! Please enter your RomM credentials.";
-    }
+  if (m_configMgr && m_configMgr->hasValidConfig()) {
+    const auto &cfg = m_configMgr->getConfig();
+    m_enteredEndpoint = cfg.serverEndpoint;
+    m_enteredApiKey = cfg.apiKey;
+    m_state = UIState::MAIN_MENU;
+    m_statusMessage = "Configuration loaded.";
+    runLibraryRefresh();
+  } else {
+    m_enteredEndpoint = "http://";
+    m_enteredApiKey = "";
+    m_state = UIState::FIRST_LAUNCH;
+    m_statusMessage = "Welcome! Please enter your RomM credentials.";
+  }
 }
 
 void UIManager::cleanup() {
-    freeGameLogo();
-    if (m_textBuf) {
-        C2D_TextBufDelete(m_textBuf);
-        m_textBuf = nullptr;
-    }
+  freeGameLogo();
+  if (m_textBuf) {
+    C2D_TextBufDelete(m_textBuf);
+    m_textBuf = nullptr;
+  }
 }
 
-bool UIManager::isTouchInside(const touchPosition& touch, float x, float y, float w, float h) {
-    return (touch.px >= x && touch.px <= x + w && touch.py >= y && touch.py <= y + h);
+bool UIManager::isTouchInside(const touchPosition &touch, float x, float y,
+                              float w, float h) {
+  return (touch.px >= x && touch.px <= x + w && touch.py >= y &&
+          touch.py <= y + h);
 }
 
-std::string UIManager::launchKeyboard(const std::string& hint, const std::string& initial, int maxLen) {
-    SwkbdState swkbd;
-    char buffer[512] = {0};
+std::string UIManager::launchKeyboard(const std::string &hint,
+                                      const std::string &initial, int maxLen) {
+  SwkbdState swkbd;
+  char buffer[512] = {0};
 
-    swkbdInit(&swkbd, SWKBD_TYPE_NORMAL, 2, maxLen > 0 ? maxLen : 256);
-    swkbdSetValidation(&swkbd, SWKBD_ANYTHING, 0, 0);
-    swkbdSetHintText(&swkbd, hint.c_str());
-    if (!initial.empty()) {
-        swkbdSetInitialText(&swkbd, initial.c_str());
-    }
+  swkbdInit(&swkbd, SWKBD_TYPE_NORMAL, 2, maxLen > 0 ? maxLen : 256);
+  swkbdSetValidation(&swkbd, SWKBD_ANYTHING, 0, 0);
+  swkbdSetHintText(&swkbd, hint.c_str());
+  if (!initial.empty()) {
+    swkbdSetInitialText(&swkbd, initial.c_str());
+  }
 
-    SwkbdButton button = swkbdInputText(&swkbd, buffer, sizeof(buffer));
-    if (button == SWKBD_BUTTON_CONFIRM || button == SWKBD_BUTTON_RIGHT) {
-        return std::string(buffer);
-    }
-    return initial;
+  SwkbdButton button = swkbdInputText(&swkbd, buffer, sizeof(buffer));
+  if (button == SWKBD_BUTTON_CONFIRM || button == SWKBD_BUTTON_RIGHT) {
+    return std::string(buffer);
+  }
+  return initial;
 }
 
 void UIManager::runConnectionTest() {
-    if (!m_netMgr) {
-        m_statusMessage = "Network subsystem not available.";
-        return;
-    }
+  if (!m_netMgr) {
+    m_statusMessage = "Network subsystem not available.";
+    return;
+  }
 
-    m_statusMessage = "Testing connection to RomM...";
-    render();
+  m_statusMessage = "Testing connection to RomM...";
+  render();
 
-    NetworkResult res = m_netMgr->testConnection();
-    if (res.success) {
-        m_statusMessage = "Connection OK! RomM reachable.";
-    } else {
-        m_statusMessage = "Conn Failed: " + res.errorMessage;
-    }
+  NetworkResult res = m_netMgr->testConnection();
+  if (res.success) {
+    m_statusMessage = "Connection OK! RomM reachable.";
+  } else {
+    m_statusMessage = "Conn Failed: " + res.errorMessage;
+  }
 }
 
 void UIManager::runLibraryRefresh(bool forceFullRemoteRefresh) {
-    if (!m_syncMgr) {
-        return;
-    }
+  if (!m_syncMgr) {
+    return;
+  }
 
-    m_statusMessage = "Scanning titles & querying RomM...";
-    m_loadingMessage = "Scanning titles & querying RomM...";
-    render();
-    render();
+  m_statusMessage = "Scanning titles & querying RomM...";
+  m_loadingMessage = "Scanning titles & querying RomM...";
+  render();
+  render();
 
-    m_syncMgr->refresh(forceFullRemoteRefresh);
-    m_loadingMessage.clear();
-    updateLocalFilteredList();
-    updateRemoteFilteredList();
-    m_selectedGameIndex = 0;
-    m_statusMessage = m_syncMgr->getLastMessage();
+  m_syncMgr->refresh(forceFullRemoteRefresh);
+  m_loadingMessage.clear();
+  updateLocalFilteredList();
+  updateRemoteFilteredList();
+  m_selectedGameIndex = 0;
+  m_statusMessage = m_syncMgr->getLastMessage();
 }
 
 void UIManager::updateLocalFilteredList() {
-    m_filteredLocalIndices.clear();
-    if (!m_syncMgr) return;
+  m_filteredLocalIndices.clear();
+  if (!m_syncMgr)
+    return;
 
-    const auto& items = m_syncMgr->getItems();
-    for (size_t i = 0; i < items.size(); ++i) {
-        const auto& item = items[i];
+  const auto &items = m_syncMgr->getItems();
+  for (size_t i = 0; i < items.size(); ++i) {
+    const auto &item = items[i];
 
-        if (m_localFilterMode == LocalFilterMode::HIDDEN) {
-            if (!item.isIgnored) continue;
-        } else {
-            if (item.isIgnored) continue;
-        }
-
-        if (m_localFilterMode == LocalFilterMode::MATCHED && !item.isMatched) {
-            continue;
-        } else if (m_localFilterMode == LocalFilterMode::UNMATCHED && item.isMatched) {
-            continue;
-        } else if (m_localFilterMode == LocalFilterMode::WITH_SAVES && !item.localTitle.hasSave) {
-            continue;
-        } else if (m_localFilterMode == LocalFilterMode::OUTDATED) {
-            if (!item.isMatched || !item.remoteHasSave) continue;
-            time_t localTime = item.localTitle.saveTime;
-            time_t remoteTime = item.remoteSaveTime != 0 ? item.remoteSaveTime : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
-            bool remoteIsNewer = !item.localTitle.hasSave || (remoteTime > 0 && (localTime == 0 || remoteTime > localTime + 5));
-            if (!remoteIsNewer) continue;
-        } else if (m_localFilterMode == LocalFilterMode::UPDATED) {
-            if (!item.isMatched || !item.localTitle.hasSave) continue;
-            time_t localTime = item.localTitle.saveTime;
-            time_t remoteTime = item.remoteSaveTime != 0 ? item.remoteSaveTime : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
-            bool localIsNewer = !item.remoteHasSave || (localTime > 0 && (remoteTime == 0 || localTime > remoteTime + 5));
-            if (!localIsNewer) continue;
-        } else if (m_localFilterMode == LocalFilterMode::CONSOLE) {
-            if (strcasecmp(item.localTitle.console.c_str(), m_localFilterConsole.c_str()) != 0) {
-                continue;
-            }
-        }
-
-        if (!m_localFilterText.empty()) {
-            if (!containsIgnoreCase(item.localTitle.name, m_localFilterText) &&
-                !containsIgnoreCase(item.localTitle.titleIdHex, m_localFilterText) &&
-                !containsIgnoreCase(item.localTitle.productCode, m_localFilterText) &&
-                !containsIgnoreCase(item.localTitle.console, m_localFilterText) &&
-                (!item.localTitle.isFileRom || !containsIgnoreCase(item.localTitle.romPath, m_localFilterText))) {
-                continue;
-            }
-        }
-
-        m_filteredLocalIndices.push_back(i);
+    if (m_localFilterMode == LocalFilterMode::HIDDEN) {
+      if (!item.isIgnored)
+        continue;
+    } else {
+      if (item.isIgnored)
+        continue;
     }
 
-    std::sort(m_filteredLocalIndices.begin(), m_filteredLocalIndices.end(), [&](size_t a, size_t b) {
-        const auto& itemA = items[a];
-        const auto& itemB = items[b];
+    if (m_localFilterMode == LocalFilterMode::MATCHED && !item.isMatched) {
+      continue;
+    } else if (m_localFilterMode == LocalFilterMode::UNMATCHED &&
+               item.isMatched) {
+      continue;
+    } else if (m_localFilterMode == LocalFilterMode::WITH_SAVES &&
+               !item.localTitle.hasSave) {
+      continue;
+    } else if (m_localFilterMode == LocalFilterMode::OUTDATED) {
+      if (!item.isMatched || !item.remoteHasSave)
+        continue;
+      time_t localTime = item.localTitle.saveTime;
+      time_t remoteTime =
+          item.remoteSaveTime != 0
+              ? item.remoteSaveTime
+              : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
+      bool remoteIsNewer =
+          !item.localTitle.hasSave ||
+          (remoteTime > 0 && (localTime == 0 || remoteTime > localTime + 5));
+      if (!remoteIsNewer)
+        continue;
+    } else if (m_localFilterMode == LocalFilterMode::UPDATED) {
+      if (!item.isMatched || !item.localTitle.hasSave)
+        continue;
+      time_t localTime = item.localTitle.saveTime;
+      time_t remoteTime =
+          item.remoteSaveTime != 0
+              ? item.remoteSaveTime
+              : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
+      bool localIsNewer =
+          !item.remoteHasSave ||
+          (localTime > 0 && (remoteTime == 0 || localTime > remoteTime + 5));
+      if (!localIsNewer)
+        continue;
+    } else if (m_localFilterMode == LocalFilterMode::CONSOLE) {
+      if (strcasecmp(item.localTitle.console.c_str(),
+                     m_localFilterConsole.c_str()) != 0) {
+        continue;
+      }
+    }
+
+    if (!m_localFilterText.empty()) {
+      if (!containsIgnoreCase(item.localTitle.name, m_localFilterText) &&
+          !containsIgnoreCase(item.localTitle.titleIdHex, m_localFilterText) &&
+          !containsIgnoreCase(item.localTitle.productCode, m_localFilterText) &&
+          !containsIgnoreCase(item.localTitle.console, m_localFilterText) &&
+          (!item.localTitle.isFileRom ||
+           !containsIgnoreCase(item.localTitle.romPath, m_localFilterText))) {
+        continue;
+      }
+    }
+
+    m_filteredLocalIndices.push_back(i);
+  }
+
+  std::sort(
+      m_filteredLocalIndices.begin(), m_filteredLocalIndices.end(),
+      [&](size_t a, size_t b) {
+        const auto &itemA = items[a];
+        const auto &itemB = items[b];
 
         if (m_localSortMode == LocalSortMode::SAVE_STATUS) {
-            bool aHas = itemA.localTitle.hasSave || itemA.remoteHasSave;
-            bool bHas = itemB.localTitle.hasSave || itemB.remoteHasSave;
-            if (aHas != bHas) return aHas > bHas;
-            time_t aTime = std::max(itemA.localTitle.saveTime, itemA.remoteSaveTime);
-            time_t bTime = std::max(itemB.localTitle.saveTime, itemB.remoteSaveTime);
-            if (aTime != bTime) return aTime > bTime;
-            int nCmp = strcasecmp(itemA.localTitle.name.c_str(), itemB.localTitle.name.c_str());
-            if (nCmp != 0) return nCmp < 0;
-            return itemA.localTitle.titleIdHex < itemB.localTitle.titleIdHex;
+          bool aHas = itemA.localTitle.hasSave || itemA.remoteHasSave;
+          bool bHas = itemB.localTitle.hasSave || itemB.remoteHasSave;
+          if (aHas != bHas)
+            return aHas > bHas;
+          time_t aTime =
+              std::max(itemA.localTitle.saveTime, itemA.remoteSaveTime);
+          time_t bTime =
+              std::max(itemB.localTitle.saveTime, itemB.remoteSaveTime);
+          if (aTime != bTime)
+            return aTime > bTime;
+          int nCmp = strcasecmp(itemA.localTitle.name.c_str(),
+                                itemB.localTitle.name.c_str());
+          if (nCmp != 0)
+            return nCmp < 0;
+          return itemA.localTitle.titleIdHex < itemB.localTitle.titleIdHex;
         } else { // LocalSortMode::TITLE (default)
-            int cmp = strcasecmp(itemA.localTitle.name.c_str(), itemB.localTitle.name.c_str());
-            if (cmp != 0) return cmp < 0;
-            return itemA.localTitle.titleIdHex < itemB.localTitle.titleIdHex;
+          int cmp = strcasecmp(itemA.localTitle.name.c_str(),
+                               itemB.localTitle.name.c_str());
+          if (cmp != 0)
+            return cmp < 0;
+          return itemA.localTitle.titleIdHex < itemB.localTitle.titleIdHex;
         }
-    });
+      });
 
-    if (m_selectedGameIndex >= m_filteredLocalIndices.size()) {
-        m_selectedGameIndex = m_filteredLocalIndices.empty() ? 0 : m_filteredLocalIndices.size() - 1;
-    }
+  if (m_selectedGameIndex >= m_filteredLocalIndices.size()) {
+    m_selectedGameIndex =
+        m_filteredLocalIndices.empty() ? 0 : m_filteredLocalIndices.size() - 1;
+  }
 }
 
 void UIManager::updateRemoteFilteredList() {
-    m_filteredRemoteIndices.clear();
-    if (!m_syncMgr) return;
+  m_filteredRemoteIndices.clear();
+  if (!m_syncMgr)
+    return;
 
-    const auto& remote = m_syncMgr->getRemoteLibrary();
-    for (size_t i = 0; i < remote.size(); ++i) {
-        if (m_selectedConsoleId > 0 && remote[i].platformId > 0) {
-            if (remote[i].platformId != m_selectedConsoleId) {
-                continue;
-            }
-        } else if (!m_selectedConsoleSlug.empty()) {
-            if (m_selectedConsoleSlug == "other") {
-                if (!remote[i].platform.empty()) continue;
-            } else {
-                if (strcasecmp(remote[i].platform.c_str(), m_selectedConsoleSlug.c_str()) != 0) {
-                    continue;
-                }
-            }
+  const auto &remote = m_syncMgr->getRemoteLibrary();
+  for (size_t i = 0; i < remote.size(); ++i) {
+    if (m_selectedConsoleId > 0 && remote[i].platformId > 0) {
+      if (remote[i].platformId != m_selectedConsoleId) {
+        continue;
+      }
+    } else if (!m_selectedConsoleSlug.empty()) {
+      if (m_selectedConsoleSlug == "other") {
+        if (!remote[i].platform.empty())
+          continue;
+      } else {
+        if (strcasecmp(remote[i].platform.c_str(),
+                       m_selectedConsoleSlug.c_str()) != 0) {
+          continue;
         }
-
-        if (!m_remoteFilterText.empty()) {
-            if (!containsIgnoreCase(remote[i].title, m_remoteFilterText)) {
-                continue;
-            }
-        }
-        m_filteredRemoteIndices.push_back(i);
+      }
     }
 
-    std::sort(m_filteredRemoteIndices.begin(), m_filteredRemoteIndices.end(), [&](size_t a, size_t b) {
-        int cmp = strcasecmp(remote[a].title.c_str(), remote[b].title.c_str());
-        if (cmp != 0) return cmp < 0;
-        return remote[a].id < remote[b].id;
-    });
-
-    if (m_selectedRemoteIndex >= m_filteredRemoteIndices.size()) {
-        m_selectedRemoteIndex = m_filteredRemoteIndices.empty() ? 0 : m_filteredRemoteIndices.size() - 1;
+    if (!m_remoteFilterText.empty()) {
+      if (!containsIgnoreCase(remote[i].title, m_remoteFilterText)) {
+        continue;
+      }
     }
+    m_filteredRemoteIndices.push_back(i);
+  }
+
+  std::sort(m_filteredRemoteIndices.begin(), m_filteredRemoteIndices.end(),
+            [&](size_t a, size_t b) {
+              int cmp =
+                  strcasecmp(remote[a].title.c_str(), remote[b].title.c_str());
+              if (cmp != 0)
+                return cmp < 0;
+              return remote[a].id < remote[b].id;
+            });
+
+  if (m_selectedRemoteIndex >= m_filteredRemoteIndices.size()) {
+    m_selectedRemoteIndex = m_filteredRemoteIndices.empty()
+                                ? 0
+                                : m_filteredRemoteIndices.size() - 1;
+  }
 }
 
 std::string UIManager::getActiveFilterButtonLabel() const {
-    if (m_localFilterMode == LocalFilterMode::CONSOLE && !m_localFilterConsole.empty()) {
-        return m_localFilterConsole;
-    }
-    return getFilterModeName(m_localFilterMode);
+  if (m_localFilterMode == LocalFilterMode::CONSOLE &&
+      !m_localFilterConsole.empty()) {
+    return m_localFilterConsole;
+  }
+  return getFilterModeName(m_localFilterMode);
 }
 
 std::string UIManager::getActiveFilterDescription() const {
-    switch (m_localFilterMode) {
-        case LocalFilterMode::ALL:        return "All";
-        case LocalFilterMode::MATCHED:    return "Matched";
-        case LocalFilterMode::UNMATCHED:  return "Unmatched";
-        case LocalFilterMode::WITH_SAVES: return "Has Save";
-        case LocalFilterMode::OUTDATED:   return "Outdated (Remote Newer)";
-        case LocalFilterMode::UPDATED:    return "Updated (Local Newer)";
-        case LocalFilterMode::HIDDEN:     return "Hidden";
-        case LocalFilterMode::CONSOLE:    return "Console: " + m_localFilterConsole;
-    }
+  switch (m_localFilterMode) {
+  case LocalFilterMode::ALL:
     return "All";
+  case LocalFilterMode::MATCHED:
+    return "Matched";
+  case LocalFilterMode::UNMATCHED:
+    return "Unmatched";
+  case LocalFilterMode::WITH_SAVES:
+    return "Has Save";
+  case LocalFilterMode::OUTDATED:
+    return "Outdated (Remote Newer)";
+  case LocalFilterMode::UPDATED:
+    return "Updated (Local Newer)";
+  case LocalFilterMode::HIDDEN:
+    return "Hidden";
+  case LocalFilterMode::CONSOLE:
+    return "Console: " + m_localFilterConsole;
+  }
+  return "All";
 }
 
 void UIManager::openFilterPicker() {
-    m_filterOptions.clear();
-    m_filterOptions.push_back({LocalFilterMode::ALL, "", "All"});
-    m_filterOptions.push_back({LocalFilterMode::MATCHED, "", "Matched"});
-    m_filterOptions.push_back({LocalFilterMode::UNMATCHED, "", "Unmatched"});
-    m_filterOptions.push_back({LocalFilterMode::WITH_SAVES, "", "Has Save"});
-    m_filterOptions.push_back({LocalFilterMode::OUTDATED, "", "Outdated (Remote Newer)"});
-    m_filterOptions.push_back({LocalFilterMode::UPDATED, "", "Updated (Local Newer)"});
-    m_filterOptions.push_back({LocalFilterMode::HIDDEN, "", "Hidden"});
+  m_filterOptions.clear();
+  m_filterOptions.push_back({LocalFilterMode::ALL, "", "All"});
+  m_filterOptions.push_back({LocalFilterMode::MATCHED, "", "Matched"});
+  m_filterOptions.push_back({LocalFilterMode::UNMATCHED, "", "Unmatched"});
+  m_filterOptions.push_back({LocalFilterMode::WITH_SAVES, "", "Has Save"});
+  m_filterOptions.push_back(
+      {LocalFilterMode::OUTDATED, "", "Outdated (Remote Newer)"});
+  m_filterOptions.push_back(
+      {LocalFilterMode::UPDATED, "", "Updated (Local Newer)"});
+  m_filterOptions.push_back({LocalFilterMode::HIDDEN, "", "Hidden"});
 
-    if (m_syncMgr) {
-        std::vector<std::string> consoles;
-        for (const auto& item : m_syncMgr->getItems()) {
-            if (item.localTitle.console.empty()) continue;
-            std::string cUpper = item.localTitle.console;
-            for (char& ch : cUpper) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
-            if (std::find(consoles.begin(), consoles.end(), cUpper) == consoles.end()) {
-                consoles.push_back(cUpper);
-            }
-        }
-        std::sort(consoles.begin(), consoles.end());
-        for (const auto& c : consoles) {
-            m_filterOptions.push_back({LocalFilterMode::CONSOLE, c, "Console: " + c});
-        }
+  if (m_syncMgr) {
+    std::vector<std::string> consoles;
+    for (const auto &item : m_syncMgr->getItems()) {
+      if (item.localTitle.console.empty())
+        continue;
+      std::string cUpper = item.localTitle.console;
+      for (char &ch : cUpper)
+        ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+      if (std::find(consoles.begin(), consoles.end(), cUpper) ==
+          consoles.end()) {
+        consoles.push_back(cUpper);
+      }
     }
-
-    m_selectedFilterPickerIndex = 0;
-    for (size_t i = 0; i < m_filterOptions.size(); ++i) {
-        if (m_filterOptions[i].mode == m_localFilterMode) {
-            if (m_localFilterMode != LocalFilterMode::CONSOLE ||
-                strcasecmp(m_filterOptions[i].console.c_str(), m_localFilterConsole.c_str()) == 0) {
-                m_selectedFilterPickerIndex = i;
-                break;
-            }
-        }
+    std::sort(consoles.begin(), consoles.end());
+    for (const auto &c : consoles) {
+      m_filterOptions.push_back({LocalFilterMode::CONSOLE, c, "Console: " + c});
     }
+  }
 
-    m_state = UIState::FILTER_PICKER;
+  m_selectedFilterPickerIndex = 0;
+  for (size_t i = 0; i < m_filterOptions.size(); ++i) {
+    if (m_filterOptions[i].mode == m_localFilterMode) {
+      if (m_localFilterMode != LocalFilterMode::CONSOLE ||
+          strcasecmp(m_filterOptions[i].console.c_str(),
+                     m_localFilterConsole.c_str()) == 0) {
+        m_selectedFilterPickerIndex = i;
+        break;
+      }
+    }
+  }
+
+  m_state = UIState::FILTER_PICKER;
 }
 
 void UIManager::openSortPicker() {
-    m_sortOptions.clear();
-    m_sortOptions.push_back({LocalSortMode::TITLE, "Title (A-Z)"});
-    m_sortOptions.push_back({LocalSortMode::SAVE_STATUS, "Save (Newest First)"});
+  m_sortOptions.clear();
+  m_sortOptions.push_back({LocalSortMode::TITLE, "Title (A-Z)"});
+  m_sortOptions.push_back({LocalSortMode::SAVE_STATUS, "Save (Newest First)"});
 
-    m_selectedSortPickerIndex = 0;
-    for (size_t i = 0; i < m_sortOptions.size(); ++i) {
-        if (m_sortOptions[i].mode == m_localSortMode) {
-            m_selectedSortPickerIndex = i;
-            break;
-        }
+  m_selectedSortPickerIndex = 0;
+  for (size_t i = 0; i < m_sortOptions.size(); ++i) {
+    if (m_sortOptions[i].mode == m_localSortMode) {
+      m_selectedSortPickerIndex = i;
+      break;
     }
+  }
 
-    m_state = UIState::SORT_PICKER;
+  m_state = UIState::SORT_PICKER;
 }
 
-void UIManager::cycleLocalFilterMode() {
-    openFilterPicker();
-}
+void UIManager::cycleLocalFilterMode() { openFilterPicker(); }
 
-void UIManager::cycleLocalSortMode() {
-    openSortPicker();
-}
+void UIManager::cycleLocalSortMode() { openSortPicker(); }
 
 void UIManager::toggleIgnoreSelected() {
-    if (!m_syncMgr || m_filteredLocalIndices.empty()) return;
-    if (m_selectedGameIndex >= m_filteredLocalIndices.size()) return;
+  if (!m_syncMgr || m_filteredLocalIndices.empty())
+    return;
+  if (m_selectedGameIndex >= m_filteredLocalIndices.size())
+    return;
 
-    size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
-    SyncItem& item = m_syncMgr->getItems()[actualIdx];
+  size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
+  SyncItem &item = m_syncMgr->getItems()[actualIdx];
 
-    bool newIgnored = !item.isIgnored;
-    item.isIgnored = newIgnored;
+  bool newIgnored = !item.isIgnored;
+  item.isIgnored = newIgnored;
 
-    if (m_configMgr) {
-        m_configMgr->setIgnoreTitle(item.localTitle.titleIdHex, newIgnored);
-        m_configMgr->saveConfig();
-    }
+  if (m_configMgr) {
+    m_configMgr->setIgnoreTitle(item.localTitle.titleIdHex, newIgnored);
+    m_configMgr->saveConfig();
+  }
 
-    if (newIgnored) {
-        m_statusMessage = "Hidden " + item.localTitle.name + " from UI.";
-    } else {
-        m_statusMessage = "Unhid " + item.localTitle.name + ".";
-    }
+  if (newIgnored) {
+    m_statusMessage = "Hidden " + item.localTitle.name + " from UI.";
+  } else {
+    m_statusMessage = "Unhid " + item.localTitle.name + ".";
+  }
 
-    updateLocalFilteredList();
+  updateLocalFilteredList();
+}
+
+void UIManager::openServerSettings() {
+  if (m_configMgr) {
+    const auto &cfg = m_configMgr->getConfig();
+    m_enteredEndpoint =
+        cfg.serverEndpoint.empty() ? "http://" : cfg.serverEndpoint;
+    m_enteredApiKey = cfg.apiKey;
+  }
+  m_setupSelectedIndex = 0;
+  m_statusMessage = "Edit RomM server endpoint or API key.";
+  m_state = UIState::FIRST_LAUNCH;
 }
 
 void UIManager::executeSaveAction() {
-    if (m_enteredEndpoint.empty() || m_enteredEndpoint == "http://") {
-        m_statusMessage = "Error: Endpoint cannot be empty!";
+  if (m_enteredEndpoint.empty() || m_enteredEndpoint == "http://") {
+    m_statusMessage = "Error: Endpoint cannot be empty!";
+    return;
+  }
+  if (m_enteredApiKey.empty()) {
+    m_statusMessage = "Error: API Key cannot be empty!";
+    return;
+  }
+
+  if (m_configMgr) {
+    std::string prevEndpoint = m_configMgr->getConfig().serverEndpoint;
+    std::string prevApiKey = m_configMgr->getConfig().apiKey;
+
+    m_configMgr->setEndpoint(m_enteredEndpoint);
+    m_configMgr->setApiKey(m_enteredApiKey);
+
+    if (m_netMgr) {
+      m_statusMessage = "Testing server connection...";
+      render();
+
+      NetworkResult res = m_netMgr->testConnection();
+      if (!res.success) {
+        m_configMgr->setEndpoint(prevEndpoint);
+        m_configMgr->setApiKey(prevApiKey);
+        m_statusMessage = "Conn Failed: " + res.errorMessage;
         return;
-    }
-    if (m_enteredApiKey.empty()) {
-        m_statusMessage = "Error: API Key cannot be empty!";
-        return;
+      }
     }
 
-    if (m_configMgr) {
-        m_configMgr->setEndpoint(m_enteredEndpoint);
-        m_configMgr->setApiKey(m_enteredApiKey);
-
-        if (m_netMgr) {
-            m_statusMessage = "Testing server connection...";
-            render();
-
-            NetworkResult res = m_netMgr->testConnection();
-            if (!res.success) {
-                m_statusMessage = "Conn Failed: " + res.errorMessage;
-                return;
-            }
-        }
-
-        if (m_configMgr->saveConfig()) {
-            m_statusMessage = "Connected & Saved successfully!";
-            m_state = UIState::MAIN_MENU;
-            runLibraryRefresh(true);
-        } else {
-            m_statusMessage = "Error: Failed to write config to SD.";
-        }
+    if (m_configMgr->saveConfig()) {
+      m_statusMessage = "Connected & Saved successfully!";
+      m_state = UIState::MAIN_MENU;
+      runLibraryRefresh(true);
+    } else {
+      m_statusMessage = "Error: Failed to write config to SD.";
     }
+  }
 }
 
 void UIManager::syncSelectedGame() {
-    if (!m_syncMgr || m_filteredLocalIndices.empty()) {
-        m_statusMessage = "No installed titles match current filter.";
-        return;
+  if (!m_syncMgr || m_filteredLocalIndices.empty()) {
+    m_statusMessage = "No installed titles match current filter.";
+    return;
+  }
+  if (m_selectedGameIndex >= m_filteredLocalIndices.size()) {
+    return;
+  }
+
+  size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
+  SyncItem &item = m_syncMgr->getItems()[actualIdx];
+
+  if (item.isIgnored) {
+    m_statusMessage = "Cannot sync ignored game: " + item.localTitle.name;
+    return;
+  }
+
+  if (!item.isMatched) {
+    m_statusMessage = "Cannot sync: Unmatched game. Press (SELECT) to match.";
+    return;
+  }
+
+  SyncAction action = m_syncMgr->evaluateItem(item);
+  if (action == SyncAction::CONFLICT) {
+    m_conflictGameIndex = actualIdx;
+    time_t localTime = item.localTitle.saveTime;
+    time_t remoteTime =
+        item.remoteSaveTime != 0
+            ? item.remoteSaveTime
+            : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
+    if (remoteTime > localTime + 5) {
+      m_conflictChoiceIndex = 0;
+    } else if (localTime > remoteTime + 5) {
+      m_conflictChoiceIndex = 1;
+    } else {
+      m_conflictChoiceIndex = 0;
     }
-    if (m_selectedGameIndex >= m_filteredLocalIndices.size()) {
-        return;
-    }
+    m_state = UIState::CONFLICT_PROMPT;
+    return;
+  }
 
-    size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
-    SyncItem& item = m_syncMgr->getItems()[actualIdx];
+  openOperationLog("Sync: " + item.localTitle.name);
+  auto logger = [this](const std::string &msg) { addOperationLog(msg); };
 
-    if (item.isIgnored) {
-        m_statusMessage = "Cannot sync ignored game: " + item.localTitle.name;
-        return;
-    }
-
-    if (!item.isMatched) {
-        m_statusMessage = "Cannot sync: Unmatched game. Press (SELECT) to match.";
-        return;
-    }
-
-    SyncAction action = m_syncMgr->evaluateItem(item);
-    if (action == SyncAction::CONFLICT) {
-        m_conflictGameIndex = actualIdx;
-        time_t localTime = item.localTitle.saveTime;
-        time_t remoteTime = item.remoteSaveTime != 0 ? item.remoteSaveTime : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
-        if (remoteTime > localTime + 5) {
-            m_conflictChoiceIndex = 0;
-        } else if (localTime > remoteTime + 5) {
-            m_conflictChoiceIndex = 1;
-        } else {
-            m_conflictChoiceIndex = 0;
-        }
-        m_state = UIState::CONFLICT_PROMPT;
-        return;
-    }
-
-    openOperationLog("Sync: " + item.localTitle.name);
-    auto logger = [this](const std::string& msg) {
-        addOperationLog(msg);
-    };
-
-    m_syncMgr->syncItem(item, ConflictChoice::OVERWRITE_LOCAL, logger);
-    m_statusMessage = m_syncMgr->getLastMessage();
-    finishOperationLog();
-    updateLocalFilteredList();
+  m_syncMgr->syncItem(item, ConflictChoice::OVERWRITE_LOCAL, logger);
+  m_statusMessage = m_syncMgr->getLastMessage();
+  finishOperationLog();
+  updateLocalFilteredList();
 }
 
 void UIManager::syncAllGames() {
-    if (!m_syncMgr || m_filteredLocalIndices.empty()) {
-        m_statusMessage = "No installed titles match current filter.";
-        return;
-    }
+  if (!m_syncMgr || m_filteredLocalIndices.empty()) {
+    m_statusMessage = "No installed titles match current filter.";
+    return;
+  }
 
-    m_batchSyncTargetIndices = m_filteredLocalIndices;
-    m_batchSyncActive = true;
-    m_batchSyncIndex = 0;
-    m_batchSyncSuccessCount = 0;
+  m_batchSyncTargetIndices = m_filteredLocalIndices;
+  m_batchSyncActive = true;
+  m_batchSyncIndex = 0;
+  m_batchSyncSuccessCount = 0;
 
-    openOperationLog("Batch Sync (" + std::to_string(m_batchSyncTargetIndices.size()) + " filtered titles)");
-    processBatchSync();
+  openOperationLog("Batch Sync (" +
+                   std::to_string(m_batchSyncTargetIndices.size()) +
+                   " filtered titles)");
+  processBatchSync();
 }
 
 void UIManager::processBatchSync() {
-    if (!m_syncMgr || !m_batchSyncActive) {
-        return;
+  if (!m_syncMgr || !m_batchSyncActive) {
+    return;
+  }
+
+  auto logger = [this](const std::string &msg) { addOperationLog(msg); };
+
+  while (m_batchSyncIndex < m_batchSyncTargetIndices.size()) {
+    size_t actualIdx = m_batchSyncTargetIndices[m_batchSyncIndex];
+    if (actualIdx >= m_syncMgr->getItems().size()) {
+      m_batchSyncIndex++;
+      continue;
     }
 
-    auto logger = [this](const std::string& msg) {
-        addOperationLog(msg);
-    };
-
-    while (m_batchSyncIndex < m_batchSyncTargetIndices.size()) {
-        size_t actualIdx = m_batchSyncTargetIndices[m_batchSyncIndex];
-        if (actualIdx >= m_syncMgr->getItems().size()) {
-            m_batchSyncIndex++;
-            continue;
-        }
-
-        SyncItem& item = m_syncMgr->getItems()[actualIdx];
-        if (item.isIgnored || !item.isMatched) {
-            m_batchSyncIndex++;
-            continue;
-        }
-
-        SyncAction act = m_syncMgr->evaluateItem(item);
-        if (act == SyncAction::NO_SAVES) {
-            // Skip any games with no saves
-            m_batchSyncIndex++;
-            continue;
-        }
-
-        if (act == SyncAction::CONFLICT) {
-            // Show conflict resolution UI before sync continues
-            m_conflictGameIndex = actualIdx;
-            time_t localTime = item.localTitle.saveTime;
-            time_t remoteTime = item.remoteSaveTime != 0 ? item.remoteSaveTime : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
-            if (remoteTime > localTime + 5) {
-                m_conflictChoiceIndex = 0;
-            } else if (localTime > remoteTime + 5) {
-                m_conflictChoiceIndex = 1;
-            } else {
-                m_conflictChoiceIndex = 0;
-            }
-
-            // Hide the log dialog so the conflict UI is visible
-            m_showLogDialog = false;
-            m_state = UIState::CONFLICT_PROMPT;
-            return;
-        }
-
-        if (m_syncMgr->syncItem(item, ConflictChoice::OVERWRITE_LOCAL, logger)) {
-            m_batchSyncSuccessCount++;
-        }
-        m_batchSyncIndex++;
+    SyncItem &item = m_syncMgr->getItems()[actualIdx];
+    if (item.isIgnored || !item.isMatched) {
+      m_batchSyncIndex++;
+      continue;
     }
 
-    m_batchSyncActive = false;
-    m_batchSyncTargetIndices.clear();
-    logger("Batch sync finished (" + std::to_string(m_batchSyncSuccessCount) + " games synced).");
-    m_statusMessage = "Batch sync complete (" + std::to_string(m_batchSyncSuccessCount) + " games synced).";
-    finishOperationLog();
-    updateLocalFilteredList();
+    SyncAction act = m_syncMgr->evaluateItem(item);
+    if (act == SyncAction::NO_SAVES) {
+      // Skip any games with no saves
+      m_batchSyncIndex++;
+      continue;
+    }
+
+    if (act == SyncAction::CONFLICT) {
+      // Show conflict resolution UI before sync continues
+      m_conflictGameIndex = actualIdx;
+      time_t localTime = item.localTitle.saveTime;
+      time_t remoteTime =
+          item.remoteSaveTime != 0
+              ? item.remoteSaveTime
+              : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
+      if (remoteTime > localTime + 5) {
+        m_conflictChoiceIndex = 0;
+      } else if (localTime > remoteTime + 5) {
+        m_conflictChoiceIndex = 1;
+      } else {
+        m_conflictChoiceIndex = 0;
+      }
+
+      // Hide the log dialog so the conflict UI is visible
+      m_showLogDialog = false;
+      m_state = UIState::CONFLICT_PROMPT;
+      return;
+    }
+
+    if (m_syncMgr->syncItem(item, ConflictChoice::OVERWRITE_LOCAL, logger)) {
+      m_batchSyncSuccessCount++;
+    }
+    m_batchSyncIndex++;
+  }
+
+  m_batchSyncActive = false;
+  m_batchSyncTargetIndices.clear();
+  logger("Batch sync finished (" + std::to_string(m_batchSyncSuccessCount) +
+         " games synced).");
+  m_statusMessage = "Batch sync complete (" +
+                    std::to_string(m_batchSyncSuccessCount) + " games synced).";
+  finishOperationLog();
+  updateLocalFilteredList();
 }
 
 void UIManager::forceUploadSelected() {
-    if (!m_syncMgr || m_filteredLocalIndices.empty()) return;
-    if (m_selectedGameIndex >= m_filteredLocalIndices.size()) return;
+  if (!m_syncMgr || m_filteredLocalIndices.empty())
+    return;
+  if (m_selectedGameIndex >= m_filteredLocalIndices.size())
+    return;
 
-    size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
-    SyncItem& item = m_syncMgr->getItems()[actualIdx];
+  size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
+  SyncItem &item = m_syncMgr->getItems()[actualIdx];
 
-    openOperationLog("Upload Save: " + item.localTitle.name);
-    auto logger = [this](const std::string& msg) {
-        addOperationLog(msg);
-    };
+  openOperationLog("Upload Save: " + item.localTitle.name);
+  auto logger = [this](const std::string &msg) { addOperationLog(msg); };
 
-    m_syncMgr->forceUpload(item, logger);
-    m_statusMessage = m_syncMgr->getLastMessage();
-    finishOperationLog();
-    updateLocalFilteredList();
+  m_syncMgr->forceUpload(item, logger);
+  m_statusMessage = m_syncMgr->getLastMessage();
+  finishOperationLog();
+  updateLocalFilteredList();
 }
 
 void UIManager::forceDownloadSelected() {
-    if (!m_syncMgr || m_filteredLocalIndices.empty()) return;
-    if (m_selectedGameIndex >= m_filteredLocalIndices.size()) return;
+  if (!m_syncMgr || m_filteredLocalIndices.empty())
+    return;
+  if (m_selectedGameIndex >= m_filteredLocalIndices.size())
+    return;
 
-    size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
-    SyncItem& item = m_syncMgr->getItems()[actualIdx];
+  size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
+  SyncItem &item = m_syncMgr->getItems()[actualIdx];
 
-    openOperationLog("Download Save: " + item.localTitle.name);
-    auto logger = [this](const std::string& msg) {
-        addOperationLog(msg);
-    };
+  openOperationLog("Download Save: " + item.localTitle.name);
+  auto logger = [this](const std::string &msg) { addOperationLog(msg); };
 
-    m_syncMgr->forceDownload(item, logger);
-    m_statusMessage = m_syncMgr->getLastMessage();
-    finishOperationLog();
-    updateLocalFilteredList();
+  m_syncMgr->forceDownload(item, logger);
+  m_statusMessage = m_syncMgr->getLastMessage();
+  finishOperationLog();
+  updateLocalFilteredList();
 }
 
 void UIManager::openManualMatch() {
-    if (!m_syncMgr || m_filteredLocalIndices.empty()) return;
-    if (m_selectedGameIndex >= m_filteredLocalIndices.size()) return;
+  if (!m_syncMgr || m_filteredLocalIndices.empty())
+    return;
+  if (m_selectedGameIndex >= m_filteredLocalIndices.size())
+    return;
 
-    size_t localActualIdx = m_filteredLocalIndices[m_selectedGameIndex];
-    const auto& localItem = m_syncMgr->getItems()[localActualIdx];
+  size_t localActualIdx = m_filteredLocalIndices[m_selectedGameIndex];
+  const auto &localItem = m_syncMgr->getItems()[localActualIdx];
 
-    m_availableConsoles = m_syncMgr->getPlatforms();
-    if (m_availableConsoles.empty()) {
-        std::map<std::string, int> counts;
-        for (const auto& g : m_syncMgr->getRemoteLibrary()) {
-            if (!g.platform.empty()) counts[g.platform]++;
-            else counts["other"]++;
-        }
-        for (const auto& pair : counts) {
-            RommPlatform p;
-            p.slug = pair.first;
-            p.name = SyncManager::getFriendlyPlatformName(pair.first);
-            p.romCount = pair.second;
-            m_availableConsoles.push_back(p);
-        }
-        std::sort(m_availableConsoles.begin(), m_availableConsoles.end(),
-            [](const RommPlatform& a, const RommPlatform& b) {
+  m_availableConsoles = m_syncMgr->getPlatforms();
+  if (m_availableConsoles.empty()) {
+    std::map<std::string, int> counts;
+    for (const auto &g : m_syncMgr->getRemoteLibrary()) {
+      if (!g.platform.empty())
+        counts[g.platform]++;
+      else
+        counts["other"]++;
+    }
+    for (const auto &pair : counts) {
+      RommPlatform p;
+      p.slug = pair.first;
+      p.name = SyncManager::getFriendlyPlatformName(pair.first);
+      p.romCount = pair.second;
+      m_availableConsoles.push_back(p);
+    }
+    std::sort(m_availableConsoles.begin(), m_availableConsoles.end(),
+              [](const RommPlatform &a, const RommPlatform &b) {
                 return a.name < b.name;
-            });
-    }
+              });
+  }
 
-    // Default console selection based on local game console
-    m_selectedConsoleIndex = 0;
-    for (size_t i = 0; i < m_availableConsoles.size(); ++i) {
-        if (SyncManager::isPlatformCompatible(localItem.localTitle.console, m_availableConsoles[i].slug)) {
-            m_selectedConsoleIndex = i;
-            break;
-        }
+  // Default console selection based on local game console
+  m_selectedConsoleIndex = 0;
+  for (size_t i = 0; i < m_availableConsoles.size(); ++i) {
+    if (SyncManager::isPlatformCompatible(localItem.localTitle.console,
+                                          m_availableConsoles[i].slug)) {
+      m_selectedConsoleIndex = i;
+      break;
     }
+  }
 
-    m_matchingSubState = MatchingSubState::SELECT_CONSOLE;
-    m_state = UIState::MATCHING;
+  m_matchingSubState = MatchingSubState::SELECT_CONSOLE;
+  m_state = UIState::MATCHING;
 }
 
 void UIManager::selectConsole(size_t index) {
-    if (index >= m_availableConsoles.size()) return;
-    m_selectedConsoleIndex = index;
-    m_selectedConsoleId = m_availableConsoles[index].id;
-    m_selectedConsoleSlug = m_availableConsoles[index].slug;
-    m_selectedConsoleName = m_availableConsoles[index].name;
+  if (index >= m_availableConsoles.size())
+    return;
+  m_selectedConsoleIndex = index;
+  m_selectedConsoleId = m_availableConsoles[index].id;
+  m_selectedConsoleSlug = m_availableConsoles[index].slug;
+  m_selectedConsoleName = m_availableConsoles[index].name;
 
-    if (m_syncMgr) {
-        if (!m_syncMgr->isPlatformLoaded(m_selectedConsoleId, m_selectedConsoleSlug)) {
-            m_statusMessage = "Loading " + m_selectedConsoleName + " games...";
-            m_loadingMessage = "Loading " + m_selectedConsoleName + " games...";
-            render();
-            render();
-            m_syncMgr->loadGamesForPlatform(m_selectedConsoleId, m_selectedConsoleSlug);
-            m_loadingMessage.clear();
-        }
+  if (m_syncMgr) {
+    if (!m_syncMgr->isPlatformLoaded(m_selectedConsoleId,
+                                     m_selectedConsoleSlug)) {
+      m_statusMessage = "Loading " + m_selectedConsoleName + " games...";
+      m_loadingMessage = "Loading " + m_selectedConsoleName + " games...";
+      render();
+      render();
+      m_syncMgr->loadGamesForPlatform(m_selectedConsoleId,
+                                      m_selectedConsoleSlug);
+      m_loadingMessage.clear();
     }
+  }
 
-    m_remoteFilterText.clear();
-    updateRemoteFilteredList();
-    m_selectedRemoteIndex = 0;
-    m_matchingSubState = MatchingSubState::SELECT_GAME;
+  m_remoteFilterText.clear();
+  updateRemoteFilteredList();
+  m_selectedRemoteIndex = 0;
+  m_matchingSubState = MatchingSubState::SELECT_GAME;
 }
 
 void UIManager::confirmManualMatch() {
-    if (!m_syncMgr || m_filteredLocalIndices.empty() || m_filteredRemoteIndices.empty()) return;
-    if (m_selectedGameIndex >= m_filteredLocalIndices.size()) return;
-    if (m_selectedRemoteIndex >= m_filteredRemoteIndices.size()) return;
+  if (!m_syncMgr || m_filteredLocalIndices.empty() ||
+      m_filteredRemoteIndices.empty())
+    return;
+  if (m_selectedGameIndex >= m_filteredLocalIndices.size())
+    return;
+  if (m_selectedRemoteIndex >= m_filteredRemoteIndices.size())
+    return;
 
-    size_t localActualIdx = m_filteredLocalIndices[m_selectedGameIndex];
-    size_t remoteActualIdx = m_filteredRemoteIndices[m_selectedRemoteIndex];
+  size_t localActualIdx = m_filteredLocalIndices[m_selectedGameIndex];
+  size_t remoteActualIdx = m_filteredRemoteIndices[m_selectedRemoteIndex];
 
-    const auto& remoteGames = m_syncMgr->getRemoteLibrary();
-    if (remoteActualIdx >= remoteGames.size()) return;
+  const auto &remoteGames = m_syncMgr->getRemoteLibrary();
+  if (remoteActualIdx >= remoteGames.size())
+    return;
 
-    m_syncMgr->manualMatch(localActualIdx, remoteGames[remoteActualIdx]);
-    m_statusMessage = m_syncMgr->getLastMessage();
-    updateLocalFilteredList();
-    m_state = UIState::MAIN_MENU;
+  m_syncMgr->manualMatch(localActualIdx, remoteGames[remoteActualIdx]);
+  m_statusMessage = m_syncMgr->getLastMessage();
+  updateLocalFilteredList();
+  m_state = UIState::MAIN_MENU;
 }
 
 void UIManager::resolveConflict(int choice) {
-    if (!m_syncMgr || m_conflictGameIndex >= m_syncMgr->getItems().size()) {
-        m_state = UIState::MAIN_MENU;
-        m_batchSyncActive = false;
-        return;
-    }
-
-    SyncItem& item = m_syncMgr->getItems()[m_conflictGameIndex];
-    ConflictChoice cChoice = (choice == 0) ? ConflictChoice::OVERWRITE_LOCAL :
-                             (choice == 1) ? ConflictChoice::OVERWRITE_REMOTE :
-                                             ConflictChoice::SKIP;
-
-    if (m_batchSyncActive) {
-        m_state = UIState::MAIN_MENU;
-        m_showLogDialog = true;
-        m_operationInProgress = true;
-        render();
-        render();
-
-        auto logger = [this](const std::string& msg) {
-            addOperationLog(msg);
-        };
-
-        if (cChoice == ConflictChoice::SKIP) {
-            addOperationLog("[WARN] Skipped conflict for: " + item.localTitle.name);
-        } else {
-            std::string actionName = (choice == 0) ? "Download Save (Overwrite Local)" : "Upload Save (Use Local Save)";
-            addOperationLog("[Sync] Resolving conflict for " + item.localTitle.name + " (" + actionName + ")...");
-            if (m_syncMgr->syncItem(item, cChoice, logger)) {
-                m_batchSyncSuccessCount++;
-            }
-        }
-
-        m_batchSyncIndex++;
-        processBatchSync();
-        return;
-    }
-
-    if (cChoice == ConflictChoice::SKIP) {
-        m_statusMessage = "Skipped conflict for " + item.localTitle.name;
-        m_state = UIState::MAIN_MENU;
-        return;
-    }
-
-    std::string opTitle = (choice == 0) ? "Download Save: " : "Upload Save: ";
-    opTitle += item.localTitle.name;
-    openOperationLog(opTitle);
-
-    auto logger = [this](const std::string& msg) {
-        addOperationLog(msg);
-    };
-
-    m_syncMgr->syncItem(item, cChoice, logger);
-    m_statusMessage = m_syncMgr->getLastMessage();
+  if (!m_syncMgr || m_conflictGameIndex >= m_syncMgr->getItems().size()) {
     m_state = UIState::MAIN_MENU;
-    finishOperationLog();
-    updateLocalFilteredList();
-}
+    m_batchSyncActive = false;
+    return;
+  }
 
-void UIManager::handleInput(u32 kDown, const touchPosition& touch) {
-    if (m_showLogDialog) {
-        if (!m_operationInProgress) {
-            if (kDown & (KEY_A | KEY_B | KEY_START)) {
-                m_showLogDialog = false;
-                m_operationLogs.clear();
-                m_logScrollOffset = 0;
-                m_batchSyncActive = false;
-                updateLocalFilteredList();
-                return;
-            }
-            if (kDown & KEY_TOUCH) {
-                if (touch.py >= 196) {
-                    m_showLogDialog = false;
-                    m_operationLogs.clear();
-                    m_logScrollOffset = 0;
-                    m_batchSyncActive = false;
-                    updateLocalFilteredList();
-                    return;
-                }
-                if (touch.py >= 30 && touch.py < 114) {
-                    constexpr int maxVisible = 12;
-                    if ((int)m_operationLogs.size() > maxVisible) {
-                        m_logScrollOffset = std::min(m_logScrollOffset + 1, (int)m_operationLogs.size() - maxVisible);
-                    }
-                } else if (touch.py >= 114 && touch.py < 196) {
-                    m_logScrollOffset = std::max(0, m_logScrollOffset - 1);
-                }
-            }
-            if (kDown & KEY_UP) {
-                constexpr int maxVisible = 12;
-                if ((int)m_operationLogs.size() > maxVisible) {
-                    m_logScrollOffset = std::min(m_logScrollOffset + 1, (int)m_operationLogs.size() - maxVisible);
-                }
-            } else if (kDown & KEY_DOWN) {
-                m_logScrollOffset = std::max(0, m_logScrollOffset - 1);
-            }
-        }
-        return;
-    }
+  SyncItem &item = m_syncMgr->getItems()[m_conflictGameIndex];
+  ConflictChoice cChoice = (choice == 0)   ? ConflictChoice::OVERWRITE_LOCAL
+                           : (choice == 1) ? ConflictChoice::OVERWRITE_REMOTE
+                                           : ConflictChoice::SKIP;
 
-    if (m_state == UIState::FIRST_LAUNCH) {
-        if (kDown & KEY_UP) {
-            m_setupSelectedIndex = (m_setupSelectedIndex - 1 + 3) % 3;
-        } else if (kDown & KEY_DOWN) {
-            m_setupSelectedIndex = (m_setupSelectedIndex + 1) % 3;
-        }
-
-        if (kDown & KEY_A) {
-            if (m_setupSelectedIndex == 0) {
-                m_enteredEndpoint = launchKeyboard("Enter RomM Server URL", m_enteredEndpoint, 128);
-            } else if (m_setupSelectedIndex == 1) {
-                m_enteredApiKey = launchKeyboard("Enter RomM API Key", m_enteredApiKey, 128);
-            } else if (m_setupSelectedIndex == 2) {
-                executeSaveAction();
-            }
-        }
-
-        if (kDown & KEY_TOUCH) {
-            if (isTouchInside(touch, 16.0f, 44.0f, 288.0f, 32.0f)) {
-                m_setupSelectedIndex = 0;
-                m_enteredEndpoint = launchKeyboard("Enter RomM Server URL", m_enteredEndpoint, 128);
-            } else if (isTouchInside(touch, 16.0f, 96.0f, 288.0f, 32.0f)) {
-                m_setupSelectedIndex = 1;
-                m_enteredApiKey = launchKeyboard("Enter RomM API Key", m_enteredApiKey, 128);
-            } else if (isTouchInside(touch, 16.0f, 148.0f, 288.0f, 34.0f)) {
-                m_setupSelectedIndex = 2;
-                executeSaveAction();
-            }
-        }
-    } else if (m_state == UIState::MAIN_MENU) {
-        size_t total = m_filteredLocalIndices.size();
-
-        if (total > 0) {
-            if (kDown & KEY_UP) {
-                m_selectedGameIndex = (m_selectedGameIndex > 0) ? (m_selectedGameIndex - 1) : (total - 1);
-            } else if (kDown & KEY_DOWN) {
-                m_selectedGameIndex = (m_selectedGameIndex + 1 < total) ? (m_selectedGameIndex + 1) : 0;
-            } else if (kDown & KEY_LEFT) {
-                m_selectedGameIndex = (m_selectedGameIndex >= 4) ? (m_selectedGameIndex - 4) : 0;
-            } else if (kDown & KEY_RIGHT) {
-                m_selectedGameIndex = (m_selectedGameIndex + 4 < total) ? (m_selectedGameIndex + 4) : (total - 1);
-            }
-        }
-
-        if (kDown & KEY_A) {
-            syncSelectedGame();
-        } else if (kDown & KEY_X) {
-            syncAllGames();
-        } else if (kDown & KEY_L) {
-            forceUploadSelected();
-        } else if (kDown & KEY_R) {
-            forceDownloadSelected();
-        } else if (kDown & KEY_SELECT) {
-            openManualMatch();
-        } else if (kDown & KEY_Y) {
-            std::string q = launchKeyboard("Search installed games...", m_localFilterText, 64);
-            if (q != m_localFilterText) {
-                m_localFilterText = q;
-                updateLocalFilteredList();
-            }
-        }
-
-        if (kDown & KEY_TOUCH) {
-            if (isTouchInside(touch, 124.0f, 7.0f, 84.0f, 20.0f)) {
-                openSortPicker();
-            } else if (isTouchInside(touch, 212.0f, 7.0f, 92.0f, 20.0f)) {
-                openFilterPicker();
-            } else if (isTouchInside(touch, 16.0f, 30.0f, 230.0f, 22.0f)) {
-                std::string q = launchKeyboard("Search installed games...", m_localFilterText, 64);
-                if (q != m_localFilterText) {
-                    m_localFilterText = q;
-                    updateLocalFilteredList();
-                }
-            } else if (isTouchInside(touch, 252.0f, 30.0f, 52.0f, 22.0f)) {
-                if (!m_localFilterText.empty()) {
-                    m_localFilterText.clear();
-                    updateLocalFilteredList();
-                }
-            } else if (isTouchInside(touch, 16.0f, 163.0f, 138.0f, 26.0f)) {
-                syncSelectedGame();
-            } else if (isTouchInside(touch, 166.0f, 163.0f, 138.0f, 26.0f)) {
-                syncAllGames();
-            } else if (isTouchInside(touch, 16.0f, 193.0f, 90.0f, 26.0f)) {
-                openManualMatch();
-            } else if (isTouchInside(touch, 114.0f, 193.0f, 92.0f, 26.0f)) {
-                openSavePicker();
-            } else if (isTouchInside(touch, 214.0f, 193.0f, 90.0f, 26.0f)) {
-                toggleIgnoreSelected();
-            } else {
-                for (size_t i = 0; i < 4 && i < total; ++i) {
-                    float rowY = 56.0f + static_cast<float>(i * 26.0f);
-                    if (isTouchInside(touch, 16.0f, rowY, 288.0f, 24.0f)) {
-                        size_t pageOffset = (m_selectedGameIndex / 4) * 4;
-                        size_t target = pageOffset + i;
-                        if (target < total) {
-                            m_selectedGameIndex = target;
-                        }
-                        break;
-                    }
-                }
-            }
-        }
-    } else if (m_state == UIState::MATCHING) {
-        if (m_matchingSubState == MatchingSubState::SELECT_CONSOLE) {
-            size_t consoleTotal = m_availableConsoles.size();
-            if (consoleTotal > 0) {
-                if (kDown & KEY_UP) {
-                    m_selectedConsoleIndex = (m_selectedConsoleIndex > 0) ? (m_selectedConsoleIndex - 1) : (consoleTotal - 1);
-                } else if (kDown & KEY_DOWN) {
-                    m_selectedConsoleIndex = (m_selectedConsoleIndex + 1 < consoleTotal) ? (m_selectedConsoleIndex + 1) : 0;
-                } else if (kDown & KEY_LEFT) {
-                    m_selectedConsoleIndex = (m_selectedConsoleIndex >= 5) ? (m_selectedConsoleIndex - 5) : 0;
-                } else if (kDown & KEY_RIGHT) {
-                    m_selectedConsoleIndex = (m_selectedConsoleIndex + 5 < consoleTotal) ? (m_selectedConsoleIndex + 5) : (consoleTotal - 1);
-                }
-            }
-
-            if (kDown & KEY_A) {
-                selectConsole(m_selectedConsoleIndex);
-            } else if (kDown & KEY_B) {
-                m_state = UIState::MAIN_MENU;
-            } else if (kDown & KEY_X) {
-                runLibraryRefresh(true);
-                m_availableConsoles = m_syncMgr ? m_syncMgr->getPlatforms() : std::vector<RommPlatform>();
-            }
-
-            if (kDown & KEY_TOUCH) {
-                if (isTouchInside(touch, 16.0f, 194.0f, 138.0f, 30.0f)) {
-                    selectConsole(m_selectedConsoleIndex);
-                } else if (isTouchInside(touch, 166.0f, 194.0f, 138.0f, 30.0f)) {
-                    m_state = UIState::MAIN_MENU;
-                } else {
-                    size_t pageOffset = (m_selectedConsoleIndex / 5) * 5;
-                    for (size_t i = 0; i < 5 && (pageOffset + i) < consoleTotal; ++i) {
-                        float rowY = 36.0f + static_cast<float>(i * 30.0f);
-                        if (isTouchInside(touch, 16.0f, rowY, 288.0f, 26.0f)) {
-                            selectConsole(pageOffset + i);
-                            break;
-                        }
-                    }
-                }
-            }
-        } else {
-            size_t remoteTotal = m_filteredRemoteIndices.size();
-            if (remoteTotal > 0) {
-                if (kDown & KEY_UP) {
-                    m_selectedRemoteIndex = (m_selectedRemoteIndex > 0) ? (m_selectedRemoteIndex - 1) : (remoteTotal - 1);
-                } else if (kDown & KEY_DOWN) {
-                    m_selectedRemoteIndex = (m_selectedRemoteIndex + 1 < remoteTotal) ? (m_selectedRemoteIndex + 1) : 0;
-                } else if (kDown & KEY_LEFT) {
-                    m_selectedRemoteIndex = (m_selectedRemoteIndex >= 5) ? (m_selectedRemoteIndex - 5) : 0;
-                } else if (kDown & KEY_RIGHT) {
-                    m_selectedRemoteIndex = (m_selectedRemoteIndex + 5 < remoteTotal) ? (m_selectedRemoteIndex + 5) : (remoteTotal - 1);
-                }
-            }
-
-            if (kDown & KEY_A) {
-                confirmManualMatch();
-            } else if (kDown & KEY_B) {
-                m_matchingSubState = MatchingSubState::SELECT_CONSOLE;
-            } else if (kDown & KEY_Y) {
-                std::string prompt = "Search in " + m_selectedConsoleName + "...";
-                std::string q = launchKeyboard(prompt, m_remoteFilterText, 64);
-                if (q != m_remoteFilterText) {
-                    m_remoteFilterText = q;
-                    updateRemoteFilteredList();
-                }
-            } else if (kDown & KEY_X) {
-                if (!m_remoteFilterText.empty()) {
-                    m_remoteFilterText.clear();
-                    updateRemoteFilteredList();
-                }
-            } else if (kDown & KEY_L) {
-                if (m_syncMgr) {
-                    m_statusMessage = "Refreshing " + m_selectedConsoleName + " games...";
-                    m_loadingMessage = "Refreshing " + m_selectedConsoleName + " games...";
-                    render();
-                    render();
-                    m_syncMgr->loadGamesForPlatform(m_selectedConsoleId, m_selectedConsoleSlug, true);
-                    m_loadingMessage.clear();
-                    updateRemoteFilteredList();
-                }
-            }
-
-            if (kDown & KEY_TOUCH) {
-                if (isTouchInside(touch, 16.0f, 28.0f, 230.0f, 22.0f)) {
-                    std::string prompt = "Search in " + m_selectedConsoleName + "...";
-                    std::string q = launchKeyboard(prompt, m_remoteFilterText, 64);
-                    if (q != m_remoteFilterText) {
-                        m_remoteFilterText = q;
-                        updateRemoteFilteredList();
-                    }
-                } else if (isTouchInside(touch, 252.0f, 28.0f, 52.0f, 22.0f)) {
-                    if (!m_remoteFilterText.empty()) {
-                        m_remoteFilterText.clear();
-                        updateRemoteFilteredList();
-                    }
-                } else if (isTouchInside(touch, 16.0f, 194.0f, 138.0f, 30.0f)) {
-                    confirmManualMatch();
-                } else if (isTouchInside(touch, 166.0f, 194.0f, 138.0f, 30.0f)) {
-                    m_matchingSubState = MatchingSubState::SELECT_CONSOLE;
-                } else {
-                    for (size_t i = 0; i < 5 && i < remoteTotal; ++i) {
-                        float rowY = 54.0f + static_cast<float>(i * 26.0f);
-                        if (isTouchInside(touch, 16.0f, rowY, 288.0f, 24.0f)) {
-                            size_t pageOffset = (m_selectedRemoteIndex / 5) * 5;
-                            size_t target = pageOffset + i;
-                            if (target < remoteTotal) {
-                                m_selectedRemoteIndex = target;
-                            }
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-    } else if (m_state == UIState::CONFLICT_PROMPT) {
-        if (kDown & KEY_UP) {
-            m_conflictChoiceIndex = (m_conflictChoiceIndex - 1 + 3) % 3;
-        } else if (kDown & KEY_DOWN) {
-            m_conflictChoiceIndex = (m_conflictChoiceIndex + 1) % 3;
-        }
-
-        if (kDown & KEY_A) {
-            resolveConflict(m_conflictChoiceIndex);
-        } else if (kDown & KEY_B) {
-            resolveConflict(2);
-        }
-
-        if (kDown & KEY_TOUCH) {
-            if (isTouchInside(touch, 16.0f, 44.0f, 288.0f, 32.0f)) {
-                resolveConflict(0);
-            } else if (isTouchInside(touch, 16.0f, 84.0f, 288.0f, 32.0f)) {
-                resolveConflict(1);
-            } else if (isTouchInside(touch, 16.0f, 124.0f, 288.0f, 32.0f)) {
-                resolveConflict(2);
-            }
-        }
-    } else if (m_state == UIState::SAVE_PICKER) {
-        handleSavePickerInput(kDown, touch);
-    } else if (m_state == UIState::FILTER_PICKER) {
-        handleFilterPickerInput(kDown, touch);
-    } else if (m_state == UIState::SORT_PICKER) {
-        handleSortPickerInput(kDown, touch);
-    }
-}
-
-void UIManager::drawInputBox(float x, float y, float w, float h, const char* label, const std::string& value, bool selected) {
-    u32 borderColor = selected ? CLR_ACCENT : CLR_BORDER_OFF;
-    C2D_DrawRectSolid(x, y, 0.5f, w, h, borderColor);
-    C2D_DrawRectSolid(x + 1.5f, y + 1.5f, 0.5f, w - 3.0f, h - 3.0f, CLR_INPUT_BG);
-
-    C2D_Text lblText;
-    C2D_TextParse(&lblText, m_textBuf, label);
-    C2D_TextOptimize(&lblText);
-    C2D_DrawText(&lblText, C2D_WithColor, x, y - 14.0f, 0.5f, 0.45f, 0.45f, CLR_TEXT_MUTED);
-
-    std::string displayVal = value.empty() ? "<Empty - Tap or Press (A)>" : value;
-    u32 valColor = value.empty() ? CLR_TEXT_MUTED : CLR_TEXT_WHITE;
-
-    C2D_Text valText;
-    C2D_TextParse(&valText, m_textBuf, displayVal.c_str());
-    C2D_TextOptimize(&valText);
-    C2D_DrawText(&valText, C2D_WithColor, x + 8.0f, y + 8.0f, 0.5f, 0.48f, 0.48f, valColor);
-}
-
-void UIManager::drawButton(float x, float y, float w, float h, const char* label, bool selected, u32 accentColor) {
-    u32 btnBg = selected ? (accentColor != 0 ? accentColor : CLR_ACCENT) : CLR_CARD;
-    u32 borderColor = selected ? CLR_TEXT_WHITE : CLR_BORDER_OFF;
-
-    C2D_DrawRectSolid(x, y, 0.5f, w, h, borderColor);
-    C2D_DrawRectSolid(x + 1.5f, y + 1.5f, 0.5f, w - 3.0f, h - 3.0f, btnBg);
-
-    C2D_Text btnText;
-    C2D_TextParse(&btnText, m_textBuf, label);
-    C2D_TextOptimize(&btnText);
-
-    float scale = (h <= 22.0f) ? 0.38f : (h <= 28.0f ? 0.42f : 0.46f);
-    float textW = 0.0f, textH = 0.0f;
-    C2D_TextGetDimensions(&btnText, scale, scale, &textW, &textH);
-
-    if (textW > w - 8.0f && textW > 0.0f) {
-        scale *= (w - 8.0f) / textW;
-        C2D_TextGetDimensions(&btnText, scale, scale, &textW, &textH);
-    }
-
-    float textX = x + (w - textW) / 2.0f;
-    float textY = y + (h - textH) / 2.0f;
-    C2D_DrawText(&btnText, C2D_WithColor, textX, textY, 0.5f, scale, scale, CLR_TEXT_WHITE);
-}
-
-void UIManager::drawLoadingOverlay(const std::string& message) {
-    constexpr u32 CLR_OVERLAY_DIM = C2D_Color32(0x05, 0x07, 0x0B, 0xCC);
-    C2D_DrawRectSolid(0.0f, 0.0f, 0.7f, RomM3DS::SCREEN_BOTTOM_WIDTH, RomM3DS::SCREEN_BOTTOM_HEIGHT, CLR_OVERLAY_DIM);
-
-    float boxW = 260.0f;
-    float boxH = 74.0f;
-    float boxX = (RomM3DS::SCREEN_BOTTOM_WIDTH - boxW) / 2.0f;
-    float boxY = (RomM3DS::SCREEN_BOTTOM_HEIGHT - boxH) / 2.0f;
-
-    C2D_DrawRectSolid(boxX, boxY, 0.75f, boxW, boxH, CLR_ACCENT);
-    C2D_DrawRectSolid(boxX + 2.0f, boxY + 2.0f, 0.75f, boxW - 4.0f, boxH - 4.0f, CLR_HEADER);
-
-    C2D_Text headerText;
-    C2D_TextParse(&headerText, m_textBuf, "Please wait...");
-    C2D_TextOptimize(&headerText);
-    C2D_DrawText(&headerText, C2D_WithColor, boxX + 16.0f, boxY + 14.0f, 0.8f, 0.50f, 0.50f, CLR_ACCENT);
-
-    C2D_Text msgText;
-    C2D_TextParse(&msgText, m_textBuf, message.c_str());
-    C2D_TextOptimize(&msgText);
-
-    float msgScale = 0.42f;
-    float msgW = 0.0f, msgH = 0.0f;
-    C2D_TextGetDimensions(&msgText, msgScale, msgScale, &msgW, &msgH);
-    if (msgW > (boxW - 32.0f) && msgW > 0.0f) {
-        msgScale *= ((boxW - 32.0f) / msgW);
-    }
-    C2D_DrawText(&msgText, C2D_WithColor, boxX + 16.0f, boxY + 40.0f, 0.8f, msgScale, msgScale, CLR_TEXT_WHITE);
-}
-
-static std::vector<std::string> softWrapLogLine(const std::string& line, size_t maxLen = 38) {
-    std::vector<std::string> result;
-    if (line.empty()) {
-        result.push_back("");
-        return result;
-    }
-
-    size_t lineStart = 0;
-    while (lineStart < line.size()) {
-        size_t newlinePos = line.find('\n', lineStart);
-        std::string segment = (newlinePos == std::string::npos) 
-            ? line.substr(lineStart) 
-            : line.substr(lineStart, newlinePos - lineStart);
-
-        if (segment.empty()) {
-            result.push_back("");
-        } else {
-            size_t segStart = 0;
-            bool isFirstSubLine = (result.empty());
-
-            while (segStart < segment.size()) {
-                size_t currentLimit = isFirstSubLine ? maxLen : (maxLen > 2 ? maxLen - 2 : maxLen);
-                size_t remaining = segment.size() - segStart;
-
-                if (remaining <= currentLimit) {
-                    std::string chunk = segment.substr(segStart);
-                    if (!isFirstSubLine) {
-                        chunk = "  " + chunk;
-                    }
-                    result.push_back(chunk);
-                    break;
-                }
-
-                size_t targetEnd = segStart + currentLimit;
-                size_t breakPos = std::string::npos;
-                for (size_t p = targetEnd; p > segStart + (currentLimit / 3); --p) {
-                    char c = segment[p - 1];
-                    if (c == ' ' || c == '/' || c == '\\' || c == '-' || c == '_') {
-                        breakPos = p;
-                        break;
-                    }
-                }
-
-                if (breakPos == std::string::npos) {
-                    breakPos = targetEnd;
-                }
-
-                std::string chunk = segment.substr(segStart, breakPos - segStart);
-                if (!chunk.empty() && chunk.back() == ' ') {
-                    chunk.pop_back();
-                }
-
-                if (!isFirstSubLine) {
-                    chunk = "  " + chunk;
-                }
-                result.push_back(chunk);
-
-                segStart = breakPos;
-                while (segStart < segment.size() && segment[segStart] == ' ') {
-                    segStart++;
-                }
-
-                isFirstSubLine = false;
-            }
-        }
-
-        if (newlinePos == std::string::npos) break;
-        lineStart = newlinePos + 1;
-    }
-
-    return result;
-}
-
-void UIManager::openOperationLog(const std::string& title) {
+  if (m_batchSyncActive) {
+    m_state = UIState::MAIN_MENU;
     m_showLogDialog = true;
     m_operationInProgress = true;
-    m_logDialogTitle = title;
-    m_operationLogs.clear();
-    m_logScrollOffset = 0;
     render();
     render();
+
+    auto logger = [this](const std::string &msg) { addOperationLog(msg); };
+
+    if (cChoice == ConflictChoice::SKIP) {
+      addOperationLog("[WARN] Skipped conflict for: " + item.localTitle.name);
+    } else {
+      std::string actionName = (choice == 0) ? "Download Save (Overwrite Local)"
+                                             : "Upload Save (Use Local Save)";
+      addOperationLog("[Sync] Resolving conflict for " + item.localTitle.name +
+                      " (" + actionName + ")...");
+      if (m_syncMgr->syncItem(item, cChoice, logger)) {
+        m_batchSyncSuccessCount++;
+      }
+    }
+
+    m_batchSyncIndex++;
+    processBatchSync();
+    return;
+  }
+
+  if (cChoice == ConflictChoice::SKIP) {
+    m_statusMessage = "Skipped conflict for " + item.localTitle.name;
+    m_state = UIState::MAIN_MENU;
+    return;
+  }
+
+  std::string opTitle = (choice == 0) ? "Download Save: " : "Upload Save: ";
+  opTitle += item.localTitle.name;
+  openOperationLog(opTitle);
+
+  auto logger = [this](const std::string &msg) { addOperationLog(msg); };
+
+  m_syncMgr->syncItem(item, cChoice, logger);
+  m_statusMessage = m_syncMgr->getLastMessage();
+  m_state = UIState::MAIN_MENU;
+  finishOperationLog();
+  updateLocalFilteredList();
 }
 
-void UIManager::addOperationLog(const std::string& message) {
-    u32 color = C2D_Color32(0xD0, 0xD8, 0xE5, 0xFF);
-    if (message.rfind("[SUCCESS]", 0) == 0 || message.rfind("[OK]", 0) == 0) {
-        color = C2D_Color32(0x40, 0xE0, 0x60, 0xFF);
-    } else if (message.rfind("[ERROR]", 0) == 0 || message.rfind("[FAIL]", 0) == 0) {
-        color = C2D_Color32(0xFF, 0x50, 0x50, 0xFF);
-    } else if (message.rfind("[Sync]", 0) == 0 || message.rfind("[Download]", 0) == 0 || message.rfind("[Upload]", 0) == 0) {
-        color = CLR_ACCENT;
-    } else if (message.rfind("[WARN]", 0) == 0) {
-        color = C2D_Color32(0xFF, 0xCC, 0x00, 0xFF);
-    } else if (message.rfind("Existing", 0) == 0 || message.rfind("Remote", 0) == 0 || message.rfind("Local", 0) == 0 || message.rfind("ROM", 0) == 0) {
-        color = C2D_Color32(0x80, 0xD0, 0xFF, 0xFF);
+void UIManager::handleInput(u32 kDown, const touchPosition &touch) {
+  if (m_showLogDialog) {
+    if (!m_operationInProgress) {
+      if (kDown & (KEY_A | KEY_B | KEY_START)) {
+        m_showLogDialog = false;
+        m_operationLogs.clear();
+        m_logScrollOffset = 0;
+        m_batchSyncActive = false;
+        updateLocalFilteredList();
+        return;
+      }
+      if (kDown & KEY_TOUCH) {
+        if (touch.py >= 196) {
+          m_showLogDialog = false;
+          m_operationLogs.clear();
+          m_logScrollOffset = 0;
+          m_batchSyncActive = false;
+          updateLocalFilteredList();
+          return;
+        }
+        if (touch.py >= 30 && touch.py < 114) {
+          constexpr int maxVisible = 12;
+          if ((int)m_operationLogs.size() > maxVisible) {
+            m_logScrollOffset =
+                std::min(m_logScrollOffset + 1,
+                         (int)m_operationLogs.size() - maxVisible);
+          }
+        } else if (touch.py >= 114 && touch.py < 196) {
+          m_logScrollOffset = std::max(0, m_logScrollOffset - 1);
+        }
+      }
+      if (kDown & KEY_UP) {
+        constexpr int maxVisible = 12;
+        if ((int)m_operationLogs.size() > maxVisible) {
+          m_logScrollOffset = std::min(
+              m_logScrollOffset + 1, (int)m_operationLogs.size() - maxVisible);
+        }
+      } else if (kDown & KEY_DOWN) {
+        m_logScrollOffset = std::max(0, m_logScrollOffset - 1);
+      }
+    }
+    return;
+  }
+
+  if (m_state == UIState::FIRST_LAUNCH) {
+    bool canCancel = (m_configMgr && m_configMgr->hasValidConfig());
+    int numOptions = canCancel ? 4 : 3;
+
+    if (kDown & KEY_UP) {
+      m_setupSelectedIndex = (m_setupSelectedIndex - 1 + 3) % 3;
+      m_setupSelectedIndex =
+          (m_setupSelectedIndex - 1 + numOptions) % numOptions;
+    } else if (kDown & KEY_DOWN) {
+      m_setupSelectedIndex = (m_setupSelectedIndex + 1) % 3;
+      m_setupSelectedIndex = (m_setupSelectedIndex + 1) % numOptions;
+    } else if (canCancel && (kDown & (KEY_LEFT | KEY_RIGHT)) &&
+               m_setupSelectedIndex >= 2) {
+      m_setupSelectedIndex = (m_setupSelectedIndex == 2) ? 3 : 2;
     }
 
-    std::vector<std::string> wrapped = softWrapLogLine(message, 38);
-    for (const auto& wLine : wrapped) {
-        m_operationLogs.push_back({ wLine, color });
+    if (canCancel && (kDown & KEY_B)) {
+      const auto &cfg = m_configMgr->getConfig();
+      m_enteredEndpoint = cfg.serverEndpoint;
+      m_enteredApiKey = cfg.apiKey;
+      m_statusMessage = "Cancelled settings changes.";
+      m_state = UIState::MAIN_MENU;
+      return;
     }
-    m_logScrollOffset = 0;
-    render();
+
+    if (kDown & KEY_A) {
+      if (m_setupSelectedIndex == 0) {
+        m_enteredEndpoint =
+            launchKeyboard("Enter RomM Server URL", m_enteredEndpoint, 128);
+      } else if (m_setupSelectedIndex == 1) {
+        m_enteredApiKey =
+            launchKeyboard("Enter RomM API Key", m_enteredApiKey, 128);
+      } else if (m_setupSelectedIndex == 2) {
+        executeSaveAction();
+      } else if (canCancel && m_setupSelectedIndex == 3) {
+        const auto &cfg = m_configMgr->getConfig();
+        m_enteredEndpoint = cfg.serverEndpoint;
+        m_enteredApiKey = cfg.apiKey;
+        m_statusMessage = "Cancelled settings changes.";
+        m_state = UIState::MAIN_MENU;
+      }
+    }
+
+    if (kDown & KEY_TOUCH) {
+      if (isTouchInside(touch, 16.0f, 44.0f, 288.0f, 32.0f)) {
+        m_setupSelectedIndex = 0;
+        m_enteredEndpoint =
+            launchKeyboard("Enter RomM Server URL", m_enteredEndpoint, 128);
+      } else if (isTouchInside(touch, 16.0f, 96.0f, 288.0f, 32.0f)) {
+        m_setupSelectedIndex = 1;
+        m_enteredApiKey =
+            launchKeyboard("Enter RomM API Key", m_enteredApiKey, 128);
+      } else if (canCancel) {
+        if (isTouchInside(touch, 16.0f, 148.0f, 186.0f, 34.0f)) {
+          m_setupSelectedIndex = 2;
+          executeSaveAction();
+        } else if (isTouchInside(touch, 210.0f, 148.0f, 94.0f, 34.0f)) {
+          m_setupSelectedIndex = 3;
+          const auto &cfg = m_configMgr->getConfig();
+          m_enteredEndpoint = cfg.serverEndpoint;
+          m_enteredApiKey = cfg.apiKey;
+          m_statusMessage = "Cancelled settings changes.";
+          m_state = UIState::MAIN_MENU;
+        }
+      } else if (isTouchInside(touch, 16.0f, 148.0f, 288.0f, 34.0f)) {
+        m_setupSelectedIndex = 2;
+        executeSaveAction();
+      }
+    }
+  } else if (m_state == UIState::MAIN_MENU) {
+    size_t total = m_filteredLocalIndices.size();
+
+    if (total > 0) {
+      if (kDown & KEY_UP) {
+        m_selectedGameIndex =
+            (m_selectedGameIndex > 0) ? (m_selectedGameIndex - 1) : (total - 1);
+      } else if (kDown & KEY_DOWN) {
+        m_selectedGameIndex =
+            (m_selectedGameIndex + 1 < total) ? (m_selectedGameIndex + 1) : 0;
+      } else if (kDown & KEY_LEFT) {
+        m_selectedGameIndex =
+            (m_selectedGameIndex >= 4) ? (m_selectedGameIndex - 4) : 0;
+      } else if (kDown & KEY_RIGHT) {
+        m_selectedGameIndex = (m_selectedGameIndex + 4 < total)
+                                  ? (m_selectedGameIndex + 4)
+                                  : (total - 1);
+      }
+    }
+
+    if (kDown & KEY_A) {
+      syncSelectedGame();
+    } else if (kDown & KEY_X) {
+      syncAllGames();
+    } else if (kDown & KEY_L) {
+      forceUploadSelected();
+    } else if (kDown & KEY_R) {
+      forceDownloadSelected();
+    } else if (kDown & KEY_SELECT) {
+      openManualMatch();
+    } else if (kDown & KEY_Y) {
+      std::string q =
+          launchKeyboard("Search installed games...", m_localFilterText, 64);
+      if (q != m_localFilterText) {
+        m_localFilterText = q;
+        updateLocalFilteredList();
+      }
+    }
+
+    if (kDown & KEY_TOUCH) {
+      if (isTouchInside(touch, 124.0f, 7.0f, 84.0f, 20.0f)) {
+        openSortPicker();
+      } else if (isTouchInside(touch, 212.0f, 7.0f, 92.0f, 20.0f)) {
+        openFilterPicker();
+      } else if (isTouchInside(touch, 16.0f, 30.0f, 230.0f, 22.0f)) {
+        std::string q =
+            launchKeyboard("Search installed games...", m_localFilterText, 64);
+        if (q != m_localFilterText) {
+          m_localFilterText = q;
+          updateLocalFilteredList();
+        }
+      } else if (isTouchInside(touch, 252.0f, 30.0f, 52.0f, 22.0f)) {
+        if (!m_localFilterText.empty()) {
+          m_localFilterText.clear();
+          updateLocalFilteredList();
+        }
+      } else if (isTouchInside(touch, 16.0f, 163.0f, 138.0f, 26.0f)) {
+        syncSelectedGame();
+      } else if (isTouchInside(touch, 166.0f, 163.0f, 138.0f, 26.0f)) {
+        syncAllGames();
+      } else if (isTouchInside(touch, 16.0f, 193.0f, 90.0f, 26.0f)) {
+      } else if (isTouchInside(touch, 16.0f, 193.0f, 68.0f, 26.0f)) {
+        openManualMatch();
+      } else if (isTouchInside(touch, 114.0f, 193.0f, 92.0f, 26.0f)) {
+      } else if (isTouchInside(touch, 90.0f, 193.0f, 74.0f, 26.0f)) {
+        openSavePicker();
+      } else if (isTouchInside(touch, 214.0f, 193.0f, 90.0f, 26.0f)) {
+      } else if (isTouchInside(touch, 170.0f, 193.0f, 64.0f, 26.0f)) {
+        toggleIgnoreSelected();
+      } else if (isTouchInside(touch, 240.0f, 193.0f, 64.0f, 26.0f)) {
+        openServerSettings();
+      } else {
+        for (size_t i = 0; i < 4 && i < total; ++i) {
+          float rowY = 56.0f + static_cast<float>(i * 26.0f);
+          if (isTouchInside(touch, 16.0f, rowY, 288.0f, 24.0f)) {
+            size_t pageOffset = (m_selectedGameIndex / 4) * 4;
+            size_t target = pageOffset + i;
+            if (target < total) {
+              m_selectedGameIndex = target;
+            }
+            break;
+          }
+        }
+      }
+    }
+  } else if (m_state == UIState::MATCHING) {
+    if (m_matchingSubState == MatchingSubState::SELECT_CONSOLE) {
+      size_t consoleTotal = m_availableConsoles.size();
+      if (consoleTotal > 0) {
+        if (kDown & KEY_UP) {
+          m_selectedConsoleIndex = (m_selectedConsoleIndex > 0)
+                                       ? (m_selectedConsoleIndex - 1)
+                                       : (consoleTotal - 1);
+        } else if (kDown & KEY_DOWN) {
+          m_selectedConsoleIndex = (m_selectedConsoleIndex + 1 < consoleTotal)
+                                       ? (m_selectedConsoleIndex + 1)
+                                       : 0;
+        } else if (kDown & KEY_LEFT) {
+          m_selectedConsoleIndex =
+              (m_selectedConsoleIndex >= 5) ? (m_selectedConsoleIndex - 5) : 0;
+        } else if (kDown & KEY_RIGHT) {
+          m_selectedConsoleIndex = (m_selectedConsoleIndex + 5 < consoleTotal)
+                                       ? (m_selectedConsoleIndex + 5)
+                                       : (consoleTotal - 1);
+        }
+      }
+
+      if (kDown & KEY_A) {
+        selectConsole(m_selectedConsoleIndex);
+      } else if (kDown & KEY_B) {
+        m_state = UIState::MAIN_MENU;
+      } else if (kDown & KEY_X) {
+        runLibraryRefresh(true);
+        m_availableConsoles =
+            m_syncMgr ? m_syncMgr->getPlatforms() : std::vector<RommPlatform>();
+      }
+
+      if (kDown & KEY_TOUCH) {
+        if (isTouchInside(touch, 16.0f, 194.0f, 138.0f, 30.0f)) {
+          selectConsole(m_selectedConsoleIndex);
+        } else if (isTouchInside(touch, 166.0f, 194.0f, 138.0f, 30.0f)) {
+          m_state = UIState::MAIN_MENU;
+        } else {
+          size_t pageOffset = (m_selectedConsoleIndex / 5) * 5;
+          for (size_t i = 0; i < 5 && (pageOffset + i) < consoleTotal; ++i) {
+            float rowY = 36.0f + static_cast<float>(i * 30.0f);
+            if (isTouchInside(touch, 16.0f, rowY, 288.0f, 26.0f)) {
+              selectConsole(pageOffset + i);
+              break;
+            }
+          }
+        }
+      }
+    } else {
+      size_t remoteTotal = m_filteredRemoteIndices.size();
+      if (remoteTotal > 0) {
+        if (kDown & KEY_UP) {
+          m_selectedRemoteIndex = (m_selectedRemoteIndex > 0)
+                                      ? (m_selectedRemoteIndex - 1)
+                                      : (remoteTotal - 1);
+        } else if (kDown & KEY_DOWN) {
+          m_selectedRemoteIndex = (m_selectedRemoteIndex + 1 < remoteTotal)
+                                      ? (m_selectedRemoteIndex + 1)
+                                      : 0;
+        } else if (kDown & KEY_LEFT) {
+          m_selectedRemoteIndex =
+              (m_selectedRemoteIndex >= 5) ? (m_selectedRemoteIndex - 5) : 0;
+        } else if (kDown & KEY_RIGHT) {
+          m_selectedRemoteIndex = (m_selectedRemoteIndex + 5 < remoteTotal)
+                                      ? (m_selectedRemoteIndex + 5)
+                                      : (remoteTotal - 1);
+        }
+      }
+
+      if (kDown & KEY_A) {
+        confirmManualMatch();
+      } else if (kDown & KEY_B) {
+        m_matchingSubState = MatchingSubState::SELECT_CONSOLE;
+      } else if (kDown & KEY_Y) {
+        std::string prompt = "Search in " + m_selectedConsoleName + "...";
+        std::string q = launchKeyboard(prompt, m_remoteFilterText, 64);
+        if (q != m_remoteFilterText) {
+          m_remoteFilterText = q;
+          updateRemoteFilteredList();
+        }
+      } else if (kDown & KEY_X) {
+        if (!m_remoteFilterText.empty()) {
+          m_remoteFilterText.clear();
+          updateRemoteFilteredList();
+        }
+      } else if (kDown & KEY_L) {
+        if (m_syncMgr) {
+          m_statusMessage = "Refreshing " + m_selectedConsoleName + " games...";
+          m_loadingMessage =
+              "Refreshing " + m_selectedConsoleName + " games...";
+          render();
+          render();
+          m_syncMgr->loadGamesForPlatform(m_selectedConsoleId,
+                                          m_selectedConsoleSlug, true);
+          m_loadingMessage.clear();
+          updateRemoteFilteredList();
+        }
+      }
+
+      if (kDown & KEY_TOUCH) {
+        if (isTouchInside(touch, 16.0f, 28.0f, 230.0f, 22.0f)) {
+          std::string prompt = "Search in " + m_selectedConsoleName + "...";
+          std::string q = launchKeyboard(prompt, m_remoteFilterText, 64);
+          if (q != m_remoteFilterText) {
+            m_remoteFilterText = q;
+            updateRemoteFilteredList();
+          }
+        } else if (isTouchInside(touch, 252.0f, 28.0f, 52.0f, 22.0f)) {
+          if (!m_remoteFilterText.empty()) {
+            m_remoteFilterText.clear();
+            updateRemoteFilteredList();
+          }
+        } else if (isTouchInside(touch, 16.0f, 194.0f, 138.0f, 30.0f)) {
+          confirmManualMatch();
+        } else if (isTouchInside(touch, 166.0f, 194.0f, 138.0f, 30.0f)) {
+          m_matchingSubState = MatchingSubState::SELECT_CONSOLE;
+        } else {
+          for (size_t i = 0; i < 5 && i < remoteTotal; ++i) {
+            float rowY = 54.0f + static_cast<float>(i * 26.0f);
+            if (isTouchInside(touch, 16.0f, rowY, 288.0f, 24.0f)) {
+              size_t pageOffset = (m_selectedRemoteIndex / 5) * 5;
+              size_t target = pageOffset + i;
+              if (target < remoteTotal) {
+                m_selectedRemoteIndex = target;
+              }
+              break;
+            }
+          }
+        }
+      }
+    }
+  } else if (m_state == UIState::CONFLICT_PROMPT) {
+    if (kDown & KEY_UP) {
+      m_conflictChoiceIndex = (m_conflictChoiceIndex - 1 + 3) % 3;
+    } else if (kDown & KEY_DOWN) {
+      m_conflictChoiceIndex = (m_conflictChoiceIndex + 1) % 3;
+    }
+
+    if (kDown & KEY_A) {
+      resolveConflict(m_conflictChoiceIndex);
+    } else if (kDown & KEY_B) {
+      resolveConflict(2);
+    }
+
+    if (kDown & KEY_TOUCH) {
+      if (isTouchInside(touch, 16.0f, 44.0f, 288.0f, 32.0f)) {
+        resolveConflict(0);
+      } else if (isTouchInside(touch, 16.0f, 84.0f, 288.0f, 32.0f)) {
+        resolveConflict(1);
+      } else if (isTouchInside(touch, 16.0f, 124.0f, 288.0f, 32.0f)) {
+        resolveConflict(2);
+      }
+    }
+  } else if (m_state == UIState::SAVE_PICKER) {
+    handleSavePickerInput(kDown, touch);
+  } else if (m_state == UIState::FILTER_PICKER) {
+    handleFilterPickerInput(kDown, touch);
+  } else if (m_state == UIState::SORT_PICKER) {
+    handleSortPickerInput(kDown, touch);
+  }
+}
+
+void UIManager::drawInputBox(float x, float y, float w, float h,
+                             const char *label, const std::string &value,
+                             bool selected) {
+  u32 borderColor = selected ? CLR_ACCENT : CLR_BORDER_OFF;
+  C2D_DrawRectSolid(x, y, 0.5f, w, h, borderColor);
+  C2D_DrawRectSolid(x + 1.5f, y + 1.5f, 0.5f, w - 3.0f, h - 3.0f, CLR_INPUT_BG);
+
+  C2D_Text lblText;
+  C2D_TextParse(&lblText, m_textBuf, label);
+  C2D_TextOptimize(&lblText);
+  C2D_DrawText(&lblText, C2D_WithColor, x, y - 14.0f, 0.5f, 0.45f, 0.45f,
+               CLR_TEXT_MUTED);
+
+  std::string displayVal = value.empty() ? "<Empty - Tap or Press (A)>" : value;
+  u32 valColor = value.empty() ? CLR_TEXT_MUTED : CLR_TEXT_WHITE;
+
+  C2D_Text valText;
+  C2D_TextParse(&valText, m_textBuf, displayVal.c_str());
+  C2D_TextOptimize(&valText);
+  C2D_DrawText(&valText, C2D_WithColor, x + 8.0f, y + 8.0f, 0.5f, 0.48f, 0.48f,
+               valColor);
+}
+
+void UIManager::drawButton(float x, float y, float w, float h,
+                           const char *label, bool selected, u32 accentColor) {
+  u32 btnBg =
+      selected ? (accentColor != 0 ? accentColor : CLR_ACCENT) : CLR_CARD;
+  u32 borderColor = selected ? CLR_TEXT_WHITE : CLR_BORDER_OFF;
+
+  C2D_DrawRectSolid(x, y, 0.5f, w, h, borderColor);
+  C2D_DrawRectSolid(x + 1.5f, y + 1.5f, 0.5f, w - 3.0f, h - 3.0f, btnBg);
+
+  C2D_Text btnText;
+  C2D_TextParse(&btnText, m_textBuf, label);
+  C2D_TextOptimize(&btnText);
+
+  float scale = (h <= 22.0f) ? 0.38f : (h <= 28.0f ? 0.42f : 0.46f);
+  float textW = 0.0f, textH = 0.0f;
+  C2D_TextGetDimensions(&btnText, scale, scale, &textW, &textH);
+
+  if (textW > w - 8.0f && textW > 0.0f) {
+    scale *= (w - 8.0f) / textW;
+    C2D_TextGetDimensions(&btnText, scale, scale, &textW, &textH);
+  }
+
+  float textX = x + (w - textW) / 2.0f;
+  float textY = y + (h - textH) / 2.0f;
+  C2D_DrawText(&btnText, C2D_WithColor, textX, textY, 0.5f, scale, scale,
+               CLR_TEXT_WHITE);
+}
+
+void UIManager::drawLoadingOverlay(const std::string &message) {
+  constexpr u32 CLR_OVERLAY_DIM = C2D_Color32(0x05, 0x07, 0x0B, 0xCC);
+  C2D_DrawRectSolid(0.0f, 0.0f, 0.7f, RomM3DS::SCREEN_BOTTOM_WIDTH,
+                    RomM3DS::SCREEN_BOTTOM_HEIGHT, CLR_OVERLAY_DIM);
+
+  float boxW = 260.0f;
+  float boxH = 74.0f;
+  float boxX = (RomM3DS::SCREEN_BOTTOM_WIDTH - boxW) / 2.0f;
+  float boxY = (RomM3DS::SCREEN_BOTTOM_HEIGHT - boxH) / 2.0f;
+
+  C2D_DrawRectSolid(boxX, boxY, 0.75f, boxW, boxH, CLR_ACCENT);
+  C2D_DrawRectSolid(boxX + 2.0f, boxY + 2.0f, 0.75f, boxW - 4.0f, boxH - 4.0f,
+                    CLR_HEADER);
+
+  C2D_Text headerText;
+  C2D_TextParse(&headerText, m_textBuf, "Please wait...");
+  C2D_TextOptimize(&headerText);
+  C2D_DrawText(&headerText, C2D_WithColor, boxX + 16.0f, boxY + 14.0f, 0.8f,
+               0.50f, 0.50f, CLR_ACCENT);
+
+  C2D_Text msgText;
+  C2D_TextParse(&msgText, m_textBuf, message.c_str());
+  C2D_TextOptimize(&msgText);
+
+  float msgScale = 0.42f;
+  float msgW = 0.0f, msgH = 0.0f;
+  C2D_TextGetDimensions(&msgText, msgScale, msgScale, &msgW, &msgH);
+  if (msgW > (boxW - 32.0f) && msgW > 0.0f) {
+    msgScale *= ((boxW - 32.0f) / msgW);
+  }
+  C2D_DrawText(&msgText, C2D_WithColor, boxX + 16.0f, boxY + 40.0f, 0.8f,
+               msgScale, msgScale, CLR_TEXT_WHITE);
+}
+
+static std::vector<std::string> softWrapLogLine(const std::string &line,
+                                                size_t maxLen = 38) {
+  std::vector<std::string> result;
+  if (line.empty()) {
+    result.push_back("");
+    return result;
+  }
+
+  size_t lineStart = 0;
+  while (lineStart < line.size()) {
+    size_t newlinePos = line.find('\n', lineStart);
+    std::string segment = (newlinePos == std::string::npos)
+                              ? line.substr(lineStart)
+                              : line.substr(lineStart, newlinePos - lineStart);
+
+    if (segment.empty()) {
+      result.push_back("");
+    } else {
+      size_t segStart = 0;
+      bool isFirstSubLine = (result.empty());
+
+      while (segStart < segment.size()) {
+        size_t currentLimit =
+            isFirstSubLine ? maxLen : (maxLen > 2 ? maxLen - 2 : maxLen);
+        size_t remaining = segment.size() - segStart;
+
+        if (remaining <= currentLimit) {
+          std::string chunk = segment.substr(segStart);
+          if (!isFirstSubLine) {
+            chunk = "  " + chunk;
+          }
+          result.push_back(chunk);
+          break;
+        }
+
+        size_t targetEnd = segStart + currentLimit;
+        size_t breakPos = std::string::npos;
+        for (size_t p = targetEnd; p > segStart + (currentLimit / 3); --p) {
+          char c = segment[p - 1];
+          if (c == ' ' || c == '/' || c == '\\' || c == '-' || c == '_') {
+            breakPos = p;
+            break;
+          }
+        }
+
+        if (breakPos == std::string::npos) {
+          breakPos = targetEnd;
+        }
+
+        std::string chunk = segment.substr(segStart, breakPos - segStart);
+        if (!chunk.empty() && chunk.back() == ' ') {
+          chunk.pop_back();
+        }
+
+        if (!isFirstSubLine) {
+          chunk = "  " + chunk;
+        }
+        result.push_back(chunk);
+
+        segStart = breakPos;
+        while (segStart < segment.size() && segment[segStart] == ' ') {
+          segStart++;
+        }
+
+        isFirstSubLine = false;
+      }
+    }
+
+    if (newlinePos == std::string::npos)
+      break;
+    lineStart = newlinePos + 1;
+  }
+
+  return result;
+}
+
+void UIManager::openOperationLog(const std::string &title) {
+  m_showLogDialog = true;
+  m_operationInProgress = true;
+  m_logDialogTitle = title;
+  m_operationLogs.clear();
+  m_logScrollOffset = 0;
+  render();
+  render();
+}
+
+void UIManager::addOperationLog(const std::string &message) {
+  u32 color = C2D_Color32(0xD0, 0xD8, 0xE5, 0xFF);
+  if (message.rfind("[SUCCESS]", 0) == 0 || message.rfind("[OK]", 0) == 0) {
+    color = C2D_Color32(0x40, 0xE0, 0x60, 0xFF);
+  } else if (message.rfind("[ERROR]", 0) == 0 ||
+             message.rfind("[FAIL]", 0) == 0) {
+    color = C2D_Color32(0xFF, 0x50, 0x50, 0xFF);
+  } else if (message.rfind("[Sync]", 0) == 0 ||
+             message.rfind("[Download]", 0) == 0 ||
+             message.rfind("[Upload]", 0) == 0) {
+    color = CLR_ACCENT;
+  } else if (message.rfind("[WARN]", 0) == 0) {
+    color = C2D_Color32(0xFF, 0xCC, 0x00, 0xFF);
+  } else if (message.rfind("Existing", 0) == 0 ||
+             message.rfind("Remote", 0) == 0 ||
+             message.rfind("Local", 0) == 0 || message.rfind("ROM", 0) == 0) {
+    color = C2D_Color32(0x80, 0xD0, 0xFF, 0xFF);
+  }
+
+  std::vector<std::string> wrapped = softWrapLogLine(message, 38);
+  for (const auto &wLine : wrapped) {
+    m_operationLogs.push_back({wLine, color});
+  }
+  m_logScrollOffset = 0;
+  render();
 }
 
 void UIManager::finishOperationLog() {
-    m_operationInProgress = false;
-    addOperationLog("Operation finished. Press (A) or tap to dismiss.");
-    render();
+  m_operationInProgress = false;
+  addOperationLog("Operation finished. Press (A) or tap to dismiss.");
+  render();
 }
 
 void UIManager::renderOperationLogOverlay() {
-    constexpr u32 CLR_OVERLAY_DIM = C2D_Color32(0x05, 0x07, 0x0B, 0xE0);
-    C2D_DrawRectSolid(0.0f, 0.0f, 0.7f, RomM3DS::SCREEN_BOTTOM_WIDTH, RomM3DS::SCREEN_BOTTOM_HEIGHT, CLR_OVERLAY_DIM);
+  constexpr u32 CLR_OVERLAY_DIM = C2D_Color32(0x05, 0x07, 0x0B, 0xE0);
+  C2D_DrawRectSolid(0.0f, 0.0f, 0.7f, RomM3DS::SCREEN_BOTTOM_WIDTH,
+                    RomM3DS::SCREEN_BOTTOM_HEIGHT, CLR_OVERLAY_DIM);
 
-    float boxX = 6.0f;
-    float boxY = 6.0f;
-    float boxW = RomM3DS::SCREEN_BOTTOM_WIDTH - 12.0f;
-    float boxH = RomM3DS::SCREEN_BOTTOM_HEIGHT - 12.0f;
+  float boxX = 6.0f;
+  float boxY = 6.0f;
+  float boxW = RomM3DS::SCREEN_BOTTOM_WIDTH - 12.0f;
+  float boxH = RomM3DS::SCREEN_BOTTOM_HEIGHT - 12.0f;
 
-    C2D_DrawRectSolid(boxX, boxY, 0.72f, boxW, boxH, CLR_ACCENT);
-    C2D_DrawRectSolid(boxX + 2.0f, boxY + 2.0f, 0.72f, boxW - 4.0f, boxH - 4.0f, CLR_HEADER);
+  C2D_DrawRectSolid(boxX, boxY, 0.72f, boxW, boxH, CLR_ACCENT);
+  C2D_DrawRectSolid(boxX + 2.0f, boxY + 2.0f, 0.72f, boxW - 4.0f, boxH - 4.0f,
+                    CLR_HEADER);
 
-    C2D_Text titleText;
-    C2D_TextParse(&titleText, m_textBuf, m_logDialogTitle.c_str());
-    C2D_TextOptimize(&titleText);
-    C2D_DrawText(&titleText, C2D_WithColor, boxX + 8.0f, boxY + 6.0f, 0.75f, 0.46f, 0.46f, CLR_TEXT_WHITE);
+  C2D_Text titleText;
+  C2D_TextParse(&titleText, m_textBuf, m_logDialogTitle.c_str());
+  C2D_TextOptimize(&titleText);
+  C2D_DrawText(&titleText, C2D_WithColor, boxX + 8.0f, boxY + 6.0f, 0.75f,
+               0.46f, 0.46f, CLR_TEXT_WHITE);
 
-    float logX = boxX + 6.0f;
-    float logY = boxY + 24.0f;
-    float logW = boxW - 12.0f;
-    float logH = 168.0f;
-    constexpr u32 CLR_TERM_BG = C2D_Color32(0x0a, 0x0f, 0x18, 0xFF);
-    constexpr u32 CLR_TERM_BORDER = C2D_Color32(0x1e, 0x2c, 0x40, 0xFF);
-    C2D_DrawRectSolid(logX, logY, 0.75f, logW, logH, CLR_TERM_BORDER);
-    C2D_DrawRectSolid(logX + 1.0f, logY + 1.0f, 0.75f, logW - 2.0f, logH - 2.0f, CLR_TERM_BG);
+  float logX = boxX + 6.0f;
+  float logY = boxY + 24.0f;
+  float logW = boxW - 12.0f;
+  float logH = 168.0f;
+  constexpr u32 CLR_TERM_BG = C2D_Color32(0x0a, 0x0f, 0x18, 0xFF);
+  constexpr u32 CLR_TERM_BORDER = C2D_Color32(0x1e, 0x2c, 0x40, 0xFF);
+  C2D_DrawRectSolid(logX, logY, 0.75f, logW, logH, CLR_TERM_BORDER);
+  C2D_DrawRectSolid(logX + 1.0f, logY + 1.0f, 0.75f, logW - 2.0f, logH - 2.0f,
+                    CLR_TERM_BG);
 
-    constexpr float LINE_HEIGHT = 13.5f;
-    int maxVisibleLines = static_cast<int>((logH - 6.0f) / LINE_HEIGHT);
-    int totalLines = static_cast<int>(m_operationLogs.size());
+  constexpr float LINE_HEIGHT = 13.5f;
+  int maxVisibleLines = static_cast<int>((logH - 6.0f) / LINE_HEIGHT);
+  int totalLines = static_cast<int>(m_operationLogs.size());
 
-    int startLine = totalLines - maxVisibleLines - m_logScrollOffset;
-    if (startLine < 0) startLine = 0;
-    int endLine = startLine + maxVisibleLines;
-    if (endLine > totalLines) endLine = totalLines;
+  int startLine = totalLines - maxVisibleLines - m_logScrollOffset;
+  if (startLine < 0)
+    startLine = 0;
+  int endLine = startLine + maxVisibleLines;
+  if (endLine > totalLines)
+    endLine = totalLines;
 
-    if (totalLines > maxVisibleLines) {
-        std::string scrollInfo = "^ v Scroll";
-        C2D_Text scText;
-        C2D_TextParse(&scText, m_textBuf, scrollInfo.c_str());
-        C2D_TextOptimize(&scText);
-        float scW = 0.0f, scH = 0.0f;
-        C2D_TextGetDimensions(&scText, 0.35f, 0.35f, &scW, &scH);
-        C2D_DrawText(&scText, C2D_WithColor, boxX + boxW - scW - 8.0f, boxY + 8.0f, 0.75f, 0.35f, 0.35f, CLR_TEXT_MUTED);
-    }
+  if (totalLines > maxVisibleLines) {
+    std::string scrollInfo = "^ v Scroll";
+    C2D_Text scText;
+    C2D_TextParse(&scText, m_textBuf, scrollInfo.c_str());
+    C2D_TextOptimize(&scText);
+    float scW = 0.0f, scH = 0.0f;
+    C2D_TextGetDimensions(&scText, 0.35f, 0.35f, &scW, &scH);
+    C2D_DrawText(&scText, C2D_WithColor, boxX + boxW - scW - 8.0f, boxY + 8.0f,
+                 0.75f, 0.35f, 0.35f, CLR_TEXT_MUTED);
+  }
 
-    float textY = logY + 4.0f;
-    constexpr float LOG_FONT_SCALE = 0.38f;
-    for (int i = startLine; i < endLine; ++i) {
-        const auto& entry = m_operationLogs[i];
+  float textY = logY + 4.0f;
+  constexpr float LOG_FONT_SCALE = 0.38f;
+  for (int i = startLine; i < endLine; ++i) {
+    const auto &entry = m_operationLogs[i];
 
-        C2D_Text lText;
-        C2D_TextParse(&lText, m_textBuf, entry.text.c_str());
-        C2D_TextOptimize(&lText);
-        C2D_DrawText(&lText, C2D_WithColor, logX + 5.0f, textY, 0.8f, LOG_FONT_SCALE, LOG_FONT_SCALE, entry.color);
-        textY += LINE_HEIGHT;
-    }
+    C2D_Text lText;
+    C2D_TextParse(&lText, m_textBuf, entry.text.c_str());
+    C2D_TextOptimize(&lText);
+    C2D_DrawText(&lText, C2D_WithColor, logX + 5.0f, textY, 0.8f,
+                 LOG_FONT_SCALE, LOG_FONT_SCALE, entry.color);
+    textY += LINE_HEIGHT;
+  }
 
-    float actionY = boxY + 196.0f;
-    if (m_operationInProgress) {
-        C2D_Text waitText;
-        C2D_TextParse(&waitText, m_textBuf, "Operation running... please wait");
-        C2D_TextOptimize(&waitText);
-        C2D_DrawText(&waitText, C2D_WithColor, boxX + 16.0f, actionY + 6.0f, 0.75f, 0.42f, 0.42f, CLR_TEXT_MUTED);
-    } else {
-        drawButton(boxX + 24.0f, actionY + 2.0f, boxW - 48.0f, 24.0f, "[ (A) Close / Dismiss Log ]", true);
-    }
+  float actionY = boxY + 196.0f;
+  if (m_operationInProgress) {
+    C2D_Text waitText;
+    C2D_TextParse(&waitText, m_textBuf, "Operation running... please wait");
+    C2D_TextOptimize(&waitText);
+    C2D_DrawText(&waitText, C2D_WithColor, boxX + 16.0f, actionY + 6.0f, 0.75f,
+                 0.42f, 0.42f, CLR_TEXT_MUTED);
+  } else {
+    drawButton(boxX + 24.0f, actionY + 2.0f, boxW - 48.0f, 24.0f,
+               "[ (A) Close / Dismiss Log ]", true);
+  }
 }
 
 void UIManager::renderFirstLaunchTop() {
-    C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 42.0f, CLR_HEADER);
-    C2D_DrawRectSolid(0.0f, 40.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f, CLR_ACCENT);
+  bool canCancel = (m_configMgr && m_configMgr->hasValidConfig());
 
-    C2D_Text headerText;
-    C2D_TextParse(&headerText, m_textBuf, "romm3ds - Initial Setup");
-    C2D_TextOptimize(&headerText);
-    C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 10.0f, 0.5f, 0.75f, 0.75f, CLR_TEXT_WHITE);
+  C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 42.0f,
+                    CLR_HEADER);
+  C2D_DrawRectSolid(0.0f, 40.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f,
+                    CLR_ACCENT);
 
-    C2D_Text descText;
-    C2D_TextParse(&descText, m_textBuf,
-                  "Connect to your self-hosted RomM instance.\n\n"
-                  "- RomM Endpoint: http(s)://your-server:port\n"
-                  "- API Key / Token: generated in RomM dashboard\n\n"
-                  "Use D-Pad Up/Down to navigate, (A) to edit fields.\n"
-                  "Touch screen keyboard input is supported.");
-    C2D_TextOptimize(&descText);
-    C2D_DrawText(&descText, C2D_WithColor, 16.0f, 56.0f, 0.5f, 0.48f, 0.48f, CLR_TEXT_MUTED);
+  C2D_Text headerText;
+  C2D_TextParse(&headerText, m_textBuf, "romm3ds - Initial Setup");
+  C2D_TextParse(&headerText, m_textBuf,
+                canCancel ? "romm3ds - Server Settings"
+                          : "romm3ds - Initial Setup");
+  C2D_TextOptimize(&headerText);
+  C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 10.0f, 0.5f, 0.75f, 0.75f,
+               CLR_TEXT_WHITE);
 
-    C2D_Text promptText;
-    C2D_TextParse(&promptText, m_textBuf, "Press START to exit");
-    C2D_TextOptimize(&promptText);
-    C2D_DrawText(&promptText, C2D_WithColor, 16.0f, 212.0f, 0.5f, 0.45f, 0.45f, CLR_TEXT_MUTED);
+  C2D_Text descText;
+  C2D_TextParse(&descText, m_textBuf,
+                "Connect to your self-hosted RomM instance.\n\n"
+                "- RomM Endpoint: http(s)://your-server:port\n"
+                "- API Key / Token: generated in RomM dashboard\n\n"
+                "Use D-Pad Up/Down to navigate, (A) to edit fields.\n"
+                "Touch screen keyboard input is supported.");
+  C2D_TextOptimize(&descText);
+  C2D_DrawText(&descText, C2D_WithColor, 16.0f, 56.0f, 0.5f, 0.48f, 0.48f,
+               CLR_TEXT_MUTED);
+
+  C2D_Text promptText;
+  C2D_TextParse(&promptText, m_textBuf, "Press START to exit");
+  C2D_TextParse(&promptText, m_textBuf,
+                canCancel ? "Press (B) to cancel & return, or START to exit"
+                          : "Press START to exit");
+  C2D_TextOptimize(&promptText);
+  C2D_DrawText(&promptText, C2D_WithColor, 16.0f, 212.0f, 0.5f, 0.45f, 0.45f,
+               CLR_TEXT_MUTED);
 }
 
 void UIManager::renderFirstLaunchBottom() {
-    C2D_DrawRectSolid(8.0f, 6.0f, 0.5f, RomM3DS::SCREEN_BOTTOM_WIDTH - 16.0f, RomM3DS::SCREEN_BOTTOM_HEIGHT - 12.0f, CLR_CARD);
+  bool canCancel = (m_configMgr && m_configMgr->hasValidConfig());
 
-    drawInputBox(16.0f, 44.0f, 288.0f, 32.0f, "RomM Server Endpoint:", m_enteredEndpoint, m_setupSelectedIndex == 0);
+  C2D_DrawRectSolid(8.0f, 6.0f, 0.5f, RomM3DS::SCREEN_BOTTOM_WIDTH - 16.0f,
+                    RomM3DS::SCREEN_BOTTOM_HEIGHT - 12.0f, CLR_CARD);
 
-    std::string maskedKey = m_enteredApiKey.empty() ? "" : std::string(m_enteredApiKey.length(), '*');
-    drawInputBox(16.0f, 96.0f, 288.0f, 32.0f, "API Key / Credentials:", maskedKey, m_setupSelectedIndex == 1);
+  drawInputBox(16.0f, 44.0f, 288.0f, 32.0f,
+               "RomM Server Endpoint:", m_enteredEndpoint,
+               m_setupSelectedIndex == 0);
 
-    drawButton(16.0f, 148.0f, 288.0f, 34.0f, "[ Save Configuration ]", m_setupSelectedIndex == 2);
+  std::string maskedKey =
+      m_enteredApiKey.empty() ? "" : std::string(m_enteredApiKey.length(), '*');
+  drawInputBox(16.0f, 96.0f, 288.0f, 32.0f, "API Key / Credentials:", maskedKey,
+               m_setupSelectedIndex == 1);
 
-    u32 statusColor = (m_statusMessage.find("Error") != std::string::npos || m_statusMessage.find("Failed") != std::string::npos) ? CLR_ERROR : CLR_GREEN;
-    C2D_Text statusText;
-    C2D_TextParse(&statusText, m_textBuf, m_statusMessage.c_str());
-    C2D_TextOptimize(&statusText);
-    C2D_DrawText(&statusText, C2D_WithColor, 16.0f, 198.0f, 0.5f, 0.44f, 0.44f, statusColor);
+  drawButton(16.0f, 148.0f, 288.0f, 34.0f, "[ Save Configuration ]",
+             m_setupSelectedIndex == 2);
+  if (canCancel) {
+    drawButton(16.0f, 148.0f, 186.0f, 34.0f, "[ Save Configuration ]",
+               m_setupSelectedIndex == 2);
+    drawButton(210.0f, 148.0f, 94.0f, 34.0f, "[ Cancel (B) ]",
+               m_setupSelectedIndex == 3);
+  } else {
+    drawButton(16.0f, 148.0f, 288.0f, 34.0f, "[ Save Configuration ]",
+               m_setupSelectedIndex == 2);
+  }
+
+  u32 statusColor = (m_statusMessage.find("Error") != std::string::npos ||
+                     m_statusMessage.find("Failed") != std::string::npos)
+                        ? CLR_ERROR
+                        : CLR_GREEN;
+  C2D_Text statusText;
+  C2D_TextParse(&statusText, m_textBuf, m_statusMessage.c_str());
+  C2D_TextOptimize(&statusText);
+  C2D_DrawText(&statusText, C2D_WithColor, 16.0f, 198.0f, 0.5f, 0.44f, 0.44f,
+               statusColor);
 }
 
 void UIManager::renderMainMenuTop() {
-    C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 42.0f, CLR_HEADER);
-    C2D_DrawRectSolid(0.0f, 40.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f, CLR_ACCENT);
+  C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 42.0f,
+                    CLR_HEADER);
+  C2D_DrawRectSolid(0.0f, 40.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f,
+                    CLR_ACCENT);
 
-    C2D_Text headerText;
-    C2D_TextParse(&headerText, m_textBuf, "romm3ds - Save Synchronization");
-    C2D_TextOptimize(&headerText);
-    C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 10.0f, 0.5f, 0.75f, 0.75f, CLR_TEXT_WHITE);
+  C2D_Text headerText;
+  C2D_TextParse(&headerText, m_textBuf, "romm3ds - Save Synchronization");
+  C2D_TextOptimize(&headerText);
+  C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 10.0f, 0.5f, 0.75f, 0.75f,
+               CLR_TEXT_WHITE);
 
-    if (m_syncMgr && !m_filteredLocalIndices.empty() && m_selectedGameIndex < m_filteredLocalIndices.size()) {
-        size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
-        const auto& item = m_syncMgr->getItems()[actualIdx];
+  if (m_syncMgr && !m_filteredLocalIndices.empty() &&
+      m_selectedGameIndex < m_filteredLocalIndices.size()) {
+    size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
+    const auto &item = m_syncMgr->getItems()[actualIdx];
 
-        updateGameLogo(item.localTitle);
+    updateGameLogo(item.localTitle);
 
-        float textX = 16.0f;
-        float maxTextW = 368.0f;
+    float textX = 16.0f;
+    float maxTextW = 368.0f;
 
-        if (m_hasLogo) {
-            C2D_DrawRectSolid(14.0f, 46.0f, 0.5f, 52.0f, 52.0f, CLR_CARD);
-            C2D_DrawRectSolid(15.0f, 47.0f, 0.5f, 50.0f, 50.0f, CLR_BORDER_OFF);
-            C2D_DrawImageAt(m_logoImage, 16.0f, 48.0f, 0.5f);
+    if (m_hasLogo) {
+      C2D_DrawRectSolid(14.0f, 46.0f, 0.5f, 52.0f, 52.0f, CLR_CARD);
+      C2D_DrawRectSolid(15.0f, 47.0f, 0.5f, 50.0f, 50.0f, CLR_BORDER_OFF);
+      C2D_DrawImageAt(m_logoImage, 16.0f, 48.0f, 0.5f);
 
-            textX = 74.0f;
-            maxTextW = 310.0f;
-        }
-
-        std::string displayName = item.localTitle.name + "  [" + item.localTitle.console + "]";
-        if (item.isIgnored) {
-            displayName += " [IGNORED / HIDDEN]";
-        }
-        C2D_Text nameText;
-        C2D_TextParse(&nameText, m_textBuf, displayName.c_str());
-        C2D_TextOptimize(&nameText);
-        u32 nameColor = item.isIgnored ? CLR_TEXT_MUTED : CLR_TEXT_WHITE;
-        float nameScale = 0.58f;
-        float nameW = 0.0f, nameH = 0.0f;
-        C2D_TextGetDimensions(&nameText, nameScale, nameScale, &nameW, &nameH);
-        if (nameW > maxTextW && nameW > 0.0f) {
-            nameScale *= (maxTextW / nameW);
-        }
-        C2D_DrawText(&nameText, C2D_WithColor, textX, 48.0f, 0.5f, nameScale, nameScale, nameColor);
-
-        std::string matchDesc = item.isIgnored ? "Status: Ignored / Excluded from Sync"
-                                : (item.isMatched ? ("Matched: " + item.remoteTitle) : "Unmatched (Press SELECT to match)");
-        u32 matchColor = item.isIgnored ? CLR_TEXT_MUTED : (item.isMatched ? CLR_GREEN : CLR_YELLOW);
-        C2D_Text matchText;
-        C2D_TextParse(&matchText, m_textBuf, matchDesc.c_str());
-        C2D_TextOptimize(&matchText);
-        float matchScale = 0.45f;
-        float matchW = 0.0f, matchH = 0.0f;
-        C2D_TextGetDimensions(&matchText, matchScale, matchScale, &matchW, &matchH);
-        if (matchW > maxTextW && matchW > 0.0f) {
-            matchScale *= (maxTextW / matchW);
-        }
-        C2D_DrawText(&matchText, C2D_WithColor, textX, 70.0f, 0.5f, matchScale, matchScale, matchColor);
-
-        std::string romOrTid = item.localTitle.isFileRom
-                                   ? ("ROM: " + item.localTitle.romPath)
-                                   : ("Title ID: " + item.localTitle.titleIdHex);
-
-        std::string detailLine1 = "Console: " + item.localTitle.console +
-                                  "  |  " + romOrTid +
-                                  (!item.localTitle.productCode.empty() ? (" (" + item.localTitle.productCode + ")") : "");
-        C2D_Text detailText1;
-        C2D_TextParse(&detailText1, m_textBuf, detailLine1.c_str());
-        C2D_TextOptimize(&detailText1);
-        float d1Scale = 0.40f;
-        float d1W = 0.0f, d1H = 0.0f;
-        C2D_TextGetDimensions(&detailText1, d1Scale, d1Scale, &d1W, &d1H);
-        if (d1W > 368.0f && d1W > 0.0f) {
-            d1Scale *= (368.0f / d1W);
-        }
-        C2D_DrawText(&detailText1, C2D_WithColor, 16.0f, 102.0f, 0.5f, d1Scale, d1Scale, CLR_TEXT_MUTED);
-
-        time_t localTime = item.localTitle.saveTime;
-        time_t remoteTime = item.remoteSaveTime != 0 ? item.remoteSaveTime : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
-        bool remoteIsNewer = (remoteTime > 0 && (localTime == 0 || remoteTime > localTime + 5));
-        bool localIsNewer = (localTime > 0 && (remoteTime == 0 || localTime > remoteTime + 5));
-
-        std::string detailLine2 = "Local: " + std::string(item.localTitle.hasSave ? "YES" : "NO") +
-                                  "  |  Remote: " + std::string(item.remoteHasSave ? "YES" : "NO");
-        if (item.remoteHasSave && !item.remoteSaveUpdatedAt.empty()) {
-            std::string formattedRemote = SyncManager::formatIsoTimestamp(item.remoteSaveUpdatedAt);
-            detailLine2 += " (" + formattedRemote.substr(0, 10) + ")";
-        }
-        if (item.localTitle.hasSave && item.remoteHasSave) {
-            if (remoteIsNewer) {
-                detailLine2 += "  *REMOTE IS NEWER*";
-            } else if (localIsNewer) {
-                detailLine2 += "  *LOCAL IS NEWER*";
-            } else {
-                detailLine2 += "  *IN SYNC*";
-            }
-        }
-        C2D_Text detailText2;
-        C2D_TextParse(&detailText2, m_textBuf, detailLine2.c_str());
-        C2D_TextOptimize(&detailText2);
-        float d2Scale = 0.42f;
-        float d2W = 0.0f, d2H = 0.0f;
-        C2D_TextGetDimensions(&detailText2, d2Scale, d2Scale, &d2W, &d2H);
-        if (d2W > 368.0f && d2W > 0.0f) {
-            d2Scale *= (368.0f / d2W);
-        }
-        u32 saveColor = remoteIsNewer ? CLR_GREEN : (localIsNewer ? CLR_YELLOW : ((item.localTitle.hasSave || item.remoteHasSave) ? CLR_TEXT_WHITE : CLR_TEXT_MUTED));
-        C2D_DrawText(&detailText2, C2D_WithColor, 16.0f, 118.0f, 0.5f, d2Scale, d2Scale, saveColor);
-
-        std::string detailLine3;
-        if (!item.localTitle.savePath.empty()) {
-            detailLine3 = "Save Path: " + item.localTitle.savePath;
-            C2D_Text detailText3;
-            C2D_TextParse(&detailText3, m_textBuf, detailLine3.c_str());
-            C2D_TextOptimize(&detailText3);
-            float d3Scale = 0.38f;
-            float d3W = 0.0f, d3H = 0.0f;
-            C2D_TextGetDimensions(&detailText3, d3Scale, d3Scale, &d3W, &d3H);
-            if (d3W > 368.0f && d3W > 0.0f) {
-                d3Scale *= (368.0f / d3W);
-            }
-            C2D_DrawText(&detailText3, C2D_WithColor, 16.0f, 134.0f, 0.5f, d3Scale, d3Scale, CLR_TEXT_MUTED);
-        }
-
-        float ctrlY = detailLine3.empty() ? 138.0f : 150.0f;
-        std::string controls = "Controls:\n"
-                               "  (A) Sync Selected       (X) Batch Sync All\n"
-                               "  (L) Force Upload Save   (R) Force Download Save\n"
-                               "  (SELECT) Match Title    (Y) Search Filter\n"
-                               "  Tap [Match], [Save Path], [Hide], or [Sort]/[Filter]";
-        C2D_Text ctrlText;
-        C2D_TextParse(&ctrlText, m_textBuf, controls.c_str());
-        C2D_TextOptimize(&ctrlText);
-        C2D_DrawText(&ctrlText, C2D_WithColor, 16.0f, ctrlY, 0.5f, 0.42f, 0.42f, CLR_TEXT_WHITE);
-    } else {
-        C2D_Text emptyText;
-        std::string msg = "No installed titles match the current filter.\n\n"
-                          "- Filter Mode: " + getActiveFilterDescription() + "\n"
-                          "- Sort Mode: " + std::string(getSortModeName(m_localSortMode)) + "\n";
-        if (!m_localFilterText.empty()) {
-            msg += "- Search Query: \"" + m_localFilterText + "\"\n";
-        }
-        msg += "\nTap [Clr], [Sort], or [Filter] to change view, or (START) to exit.";
-        C2D_TextParse(&emptyText, m_textBuf, msg.c_str());
-        C2D_TextOptimize(&emptyText);
-        C2D_DrawText(&emptyText, C2D_WithColor, 16.0f, 65.0f, 0.5f, 0.48f, 0.48f, CLR_TEXT_MUTED);
+      textX = 74.0f;
+      maxTextW = 310.0f;
     }
+
+    std::string displayName =
+        item.localTitle.name + "  [" + item.localTitle.console + "]";
+    if (item.isIgnored) {
+      displayName += " [IGNORED / HIDDEN]";
+    }
+    C2D_Text nameText;
+    C2D_TextParse(&nameText, m_textBuf, displayName.c_str());
+    C2D_TextOptimize(&nameText);
+    u32 nameColor = item.isIgnored ? CLR_TEXT_MUTED : CLR_TEXT_WHITE;
+    float nameScale = 0.58f;
+    float nameW = 0.0f, nameH = 0.0f;
+    C2D_TextGetDimensions(&nameText, nameScale, nameScale, &nameW, &nameH);
+    if (nameW > maxTextW && nameW > 0.0f) {
+      nameScale *= (maxTextW / nameW);
+    }
+    C2D_DrawText(&nameText, C2D_WithColor, textX, 48.0f, 0.5f, nameScale,
+                 nameScale, nameColor);
+
+    std::string matchDesc =
+        item.isIgnored ? "Status: Ignored / Excluded from Sync"
+                       : (item.isMatched ? ("Matched: " + item.remoteTitle)
+                                         : "Unmatched (Press SELECT to match)");
+    u32 matchColor = item.isIgnored ? CLR_TEXT_MUTED
+                                    : (item.isMatched ? CLR_GREEN : CLR_YELLOW);
+    C2D_Text matchText;
+    C2D_TextParse(&matchText, m_textBuf, matchDesc.c_str());
+    C2D_TextOptimize(&matchText);
+    float matchScale = 0.45f;
+    float matchW = 0.0f, matchH = 0.0f;
+    C2D_TextGetDimensions(&matchText, matchScale, matchScale, &matchW, &matchH);
+    if (matchW > maxTextW && matchW > 0.0f) {
+      matchScale *= (maxTextW / matchW);
+    }
+    C2D_DrawText(&matchText, C2D_WithColor, textX, 70.0f, 0.5f, matchScale,
+                 matchScale, matchColor);
+
+    std::string romOrTid = item.localTitle.isFileRom
+                               ? ("ROM: " + item.localTitle.romPath)
+                               : ("Title ID: " + item.localTitle.titleIdHex);
+
+    std::string detailLine1 = "Console: " + item.localTitle.console + "  |  " +
+                              romOrTid +
+                              (!item.localTitle.productCode.empty()
+                                   ? (" (" + item.localTitle.productCode + ")")
+                                   : "");
+    C2D_Text detailText1;
+    C2D_TextParse(&detailText1, m_textBuf, detailLine1.c_str());
+    C2D_TextOptimize(&detailText1);
+    float d1Scale = 0.40f;
+    float d1W = 0.0f, d1H = 0.0f;
+    C2D_TextGetDimensions(&detailText1, d1Scale, d1Scale, &d1W, &d1H);
+    if (d1W > 368.0f && d1W > 0.0f) {
+      d1Scale *= (368.0f / d1W);
+    }
+    C2D_DrawText(&detailText1, C2D_WithColor, 16.0f, 102.0f, 0.5f, d1Scale,
+                 d1Scale, CLR_TEXT_MUTED);
+
+    time_t localTime = item.localTitle.saveTime;
+    time_t remoteTime =
+        item.remoteSaveTime != 0
+            ? item.remoteSaveTime
+            : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
+    bool remoteIsNewer =
+        (remoteTime > 0 && (localTime == 0 || remoteTime > localTime + 5));
+    bool localIsNewer =
+        (localTime > 0 && (remoteTime == 0 || localTime > remoteTime + 5));
+
+    std::string detailLine2 =
+        "Local: " + std::string(item.localTitle.hasSave ? "YES" : "NO") +
+        "  |  Remote: " + std::string(item.remoteHasSave ? "YES" : "NO");
+    if (item.remoteHasSave && !item.remoteSaveUpdatedAt.empty()) {
+      std::string formattedRemote =
+          SyncManager::formatIsoTimestamp(item.remoteSaveUpdatedAt);
+      detailLine2 += " (" + formattedRemote.substr(0, 10) + ")";
+    }
+    if (item.localTitle.hasSave && item.remoteHasSave) {
+      if (remoteIsNewer) {
+        detailLine2 += "  *REMOTE IS NEWER*";
+      } else if (localIsNewer) {
+        detailLine2 += "  *LOCAL IS NEWER*";
+      } else {
+        detailLine2 += "  *IN SYNC*";
+      }
+    }
+    C2D_Text detailText2;
+    C2D_TextParse(&detailText2, m_textBuf, detailLine2.c_str());
+    C2D_TextOptimize(&detailText2);
+    float d2Scale = 0.42f;
+    float d2W = 0.0f, d2H = 0.0f;
+    C2D_TextGetDimensions(&detailText2, d2Scale, d2Scale, &d2W, &d2H);
+    if (d2W > 368.0f && d2W > 0.0f) {
+      d2Scale *= (368.0f / d2W);
+    }
+    u32 saveColor =
+        remoteIsNewer
+            ? CLR_GREEN
+            : (localIsNewer ? CLR_YELLOW
+                            : ((item.localTitle.hasSave || item.remoteHasSave)
+                                   ? CLR_TEXT_WHITE
+                                   : CLR_TEXT_MUTED));
+    C2D_DrawText(&detailText2, C2D_WithColor, 16.0f, 118.0f, 0.5f, d2Scale,
+                 d2Scale, saveColor);
+
+    std::string detailLine3;
+    if (!item.localTitle.savePath.empty()) {
+      detailLine3 = "Save Path: " + item.localTitle.savePath;
+      C2D_Text detailText3;
+      C2D_TextParse(&detailText3, m_textBuf, detailLine3.c_str());
+      C2D_TextOptimize(&detailText3);
+      float d3Scale = 0.38f;
+      float d3W = 0.0f, d3H = 0.0f;
+      C2D_TextGetDimensions(&detailText3, d3Scale, d3Scale, &d3W, &d3H);
+      if (d3W > 368.0f && d3W > 0.0f) {
+        d3Scale *= (368.0f / d3W);
+      }
+      C2D_DrawText(&detailText3, C2D_WithColor, 16.0f, 134.0f, 0.5f, d3Scale,
+                   d3Scale, CLR_TEXT_MUTED);
+    }
+
+    float ctrlY = detailLine3.empty() ? 138.0f : 150.0f;
+    std::string controls =
+        "Controls:\n"
+        "  (A) Sync Selected       (X) Batch Sync All\n"
+        "  (L) Force Upload Save   (R) Force Download Save\n"
+        "  (SELECT) Match Title    (Y) Search Filter\n"
+        "  Tap [Match], [Save Path], [Hide], or [Sort]/[Filter]";
+    "  Tap [Match], [Save Path], [Hide], [Cfg], or [Sort]/[Filter]";
+    C2D_Text ctrlText;
+    C2D_TextParse(&ctrlText, m_textBuf, controls.c_str());
+    C2D_TextOptimize(&ctrlText);
+    C2D_DrawText(&ctrlText, C2D_WithColor, 16.0f, ctrlY, 0.5f, 0.42f, 0.42f,
+                 CLR_TEXT_WHITE);
+  } else {
+    C2D_Text emptyText;
+    std::string msg = "No installed titles match the current filter.\n\n"
+                      "- Filter Mode: " +
+                      getActiveFilterDescription() +
+                      "\n"
+                      "- Sort Mode: " +
+                      std::string(getSortModeName(m_localSortMode)) + "\n";
+    if (!m_localFilterText.empty()) {
+      msg += "- Search Query: \"" + m_localFilterText + "\"\n";
+    }
+    msg +=
+        "\nTap [Clr], [Sort], or [Filter] to change view, or (START) to exit.";
+    C2D_TextParse(&emptyText, m_textBuf, msg.c_str());
+    C2D_TextOptimize(&emptyText);
+    C2D_DrawText(&emptyText, C2D_WithColor, 16.0f, 65.0f, 0.5f, 0.48f, 0.48f,
+                 CLR_TEXT_MUTED);
+  }
 }
 
 void UIManager::renderMainMenuBottom() {
-    C2D_DrawRectSolid(8.0f, 4.0f, 0.5f, RomM3DS::SCREEN_BOTTOM_WIDTH - 16.0f, RomM3DS::SCREEN_BOTTOM_HEIGHT - 8.0f, CLR_CARD);
+  C2D_DrawRectSolid(8.0f, 4.0f, 0.5f, RomM3DS::SCREEN_BOTTOM_WIDTH - 16.0f,
+                    RomM3DS::SCREEN_BOTTOM_HEIGHT - 8.0f, CLR_CARD);
 
-    size_t total = m_filteredLocalIndices.size();
-    std::string header = "Installed (" + std::to_string(total > 0 ? (m_selectedGameIndex + 1) : 0) +
-                         "/" + std::to_string(total) + ")";
-    C2D_Text titleText;
-    C2D_TextParse(&titleText, m_textBuf, header.c_str());
-    C2D_TextOptimize(&titleText);
-    C2D_DrawText(&titleText, C2D_WithColor, 16.0f, 9.0f, 0.5f, 0.44f, 0.44f, CLR_TEXT_WHITE);
+  size_t total = m_filteredLocalIndices.size();
+  std::string header =
+      "Installed (" +
+      std::to_string(total > 0 ? (m_selectedGameIndex + 1) : 0) + "/" +
+      std::to_string(total) + ")";
+  C2D_Text titleText;
+  C2D_TextParse(&titleText, m_textBuf, header.c_str());
+  C2D_TextOptimize(&titleText);
+  C2D_DrawText(&titleText, C2D_WithColor, 16.0f, 9.0f, 0.5f, 0.44f, 0.44f,
+               CLR_TEXT_WHITE);
 
-    std::string sortLabel = std::string(getSortModeName(m_localSortMode));
-    drawButton(124.0f, 7.0f, 84.0f, 20.0f, sortLabel.c_str(), false, CLR_BORDER_OFF);
+  std::string sortLabel = std::string(getSortModeName(m_localSortMode));
+  drawButton(124.0f, 7.0f, 84.0f, 20.0f, sortLabel.c_str(), false,
+             CLR_BORDER_OFF);
 
-    std::string modeLabel = getActiveFilterButtonLabel();
-    u32 modeColor = (m_localFilterMode == LocalFilterMode::HIDDEN) ? CLR_YELLOW : CLR_ACCENT;
-    drawButton(212.0f, 7.0f, 92.0f, 20.0f, modeLabel.c_str(), false, modeColor);
+  std::string modeLabel = getActiveFilterButtonLabel();
+  u32 modeColor =
+      (m_localFilterMode == LocalFilterMode::HIDDEN) ? CLR_YELLOW : CLR_ACCENT;
+  drawButton(212.0f, 7.0f, 92.0f, 20.0f, modeLabel.c_str(), false, modeColor);
 
-    std::string searchDisplay = m_localFilterText.empty() ? "Search: Tap to filter (Y)..." : ("Search: " + m_localFilterText);
-    u32 searchBorder = m_localFilterText.empty() ? CLR_BORDER_OFF : CLR_ACCENT;
-    u32 searchTextColor = m_localFilterText.empty() ? CLR_TEXT_MUTED : CLR_TEXT_WHITE;
-    C2D_DrawRectSolid(16.0f, 30.0f, 0.5f, 230.0f, 22.0f, searchBorder);
-    C2D_DrawRectSolid(17.5f, 31.5f, 0.5f, 227.0f, 19.0f, CLR_INPUT_BG);
+  std::string searchDisplay = m_localFilterText.empty()
+                                  ? "Search: Tap to filter (Y)..."
+                                  : ("Search: " + m_localFilterText);
+  u32 searchBorder = m_localFilterText.empty() ? CLR_BORDER_OFF : CLR_ACCENT;
+  u32 searchTextColor =
+      m_localFilterText.empty() ? CLR_TEXT_MUTED : CLR_TEXT_WHITE;
+  C2D_DrawRectSolid(16.0f, 30.0f, 0.5f, 230.0f, 22.0f, searchBorder);
+  C2D_DrawRectSolid(17.5f, 31.5f, 0.5f, 227.0f, 19.0f, CLR_INPUT_BG);
 
-    C2D_Text searchTxt;
-    C2D_TextParse(&searchTxt, m_textBuf, searchDisplay.c_str());
-    C2D_TextOptimize(&searchTxt);
-    C2D_DrawText(&searchTxt, C2D_WithColor, 22.0f, 34.0f, 0.5f, 0.40f, 0.40f, searchTextColor);
+  C2D_Text searchTxt;
+  C2D_TextParse(&searchTxt, m_textBuf, searchDisplay.c_str());
+  C2D_TextOptimize(&searchTxt);
+  C2D_DrawText(&searchTxt, C2D_WithColor, 22.0f, 34.0f, 0.5f, 0.40f, 0.40f,
+               searchTextColor);
 
-    drawButton(252.0f, 30.0f, 52.0f, 22.0f, "[ Clr ]", false);
+  drawButton(252.0f, 30.0f, 52.0f, 22.0f, "[ Clr ]", false);
 
-    size_t pageOffset = (m_selectedGameIndex / 4) * 4;
-    for (size_t i = 0; i < 4 && (pageOffset + i) < total; ++i) {
-        size_t filteredIdx = pageOffset + i;
-        size_t actualIdx = m_filteredLocalIndices[filteredIdx];
-        const auto& item = m_syncMgr->getItems()[actualIdx];
-        bool selected = (filteredIdx == m_selectedGameIndex);
+  size_t pageOffset = (m_selectedGameIndex / 4) * 4;
+  for (size_t i = 0; i < 4 && (pageOffset + i) < total; ++i) {
+    size_t filteredIdx = pageOffset + i;
+    size_t actualIdx = m_filteredLocalIndices[filteredIdx];
+    const auto &item = m_syncMgr->getItems()[actualIdx];
+    bool selected = (filteredIdx == m_selectedGameIndex);
 
-        float y = 56.0f + static_cast<float>(i * 26.0f);
-        u32 rowBg = selected ? CLR_HEADER : CLR_INPUT_BG;
-        u32 borderColor = selected ? CLR_ACCENT : CLR_BORDER_OFF;
+    float y = 56.0f + static_cast<float>(i * 26.0f);
+    u32 rowBg = selected ? CLR_HEADER : CLR_INPUT_BG;
+    u32 borderColor = selected ? CLR_ACCENT : CLR_BORDER_OFF;
 
-        C2D_DrawRectSolid(16.0f, y, 0.5f, 288.0f, 24.0f, borderColor);
-        C2D_DrawRectSolid(17.5f, y + 1.5f, 0.5f, 285.0f, 21.0f, rowBg);
+    C2D_DrawRectSolid(16.0f, y, 0.5f, 288.0f, 24.0f, borderColor);
+    C2D_DrawRectSolid(17.5f, y + 1.5f, 0.5f, 285.0f, 21.0f, rowBg);
 
-        u32 dotColor = item.isIgnored ? CLR_TEXT_MUTED : (item.isMatched ? CLR_GREEN : CLR_YELLOW);
-        C2D_DrawRectSolid(22.0f, y + 7.0f, 0.5f, 8.0f, 8.0f, dotColor);
+    u32 dotColor = item.isIgnored ? CLR_TEXT_MUTED
+                                  : (item.isMatched ? CLR_GREEN : CLR_YELLOW);
+    C2D_DrawRectSolid(22.0f, y + 7.0f, 0.5f, 8.0f, 8.0f, dotColor);
 
-        std::string tag;
-        if (item.localTitle.hasSave) {
-            tag += " [S]";
-        }
-        if (item.localTitle.hasSave && item.remoteHasSave) {
-            time_t lt = item.localTitle.saveTime;
-            time_t rt = item.remoteSaveTime != 0 ? item.remoteSaveTime : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
-            if (rt > lt + 5 && lt > 0) {
-                tag += " [v]";
-            } else if (lt > rt + 5 && rt > 0) {
-                tag += " [^]";
-            }
-        }
-        if (item.isIgnored) {
-            tag += " (Hide)";
-        }
-
-        std::string prefix = "[" + item.localTitle.console + "] ";
-        std::string fullLabel = prefix + item.localTitle.name + tag;
-
-        constexpr float MAX_ROW_TEXT_WIDTH = 260.0f;
-        float textScale = 0.40f;
-
-        C2D_Text rowText;
-        C2D_TextParse(&rowText, m_textBuf, fullLabel.c_str());
-        C2D_TextOptimize(&rowText);
-
-        float textW = 0.0f, textH = 0.0f;
-        C2D_TextGetDimensions(&rowText, textScale, textScale, &textW, &textH);
-
-        if (textW > MAX_ROW_TEXT_WIDTH) {
-            std::string name = item.localTitle.name;
-            int low = 0;
-            int high = static_cast<int>(name.length());
-            int bestLen = 0;
-
-            while (low <= high) {
-                int mid = low + (high - low) / 2;
-                std::string testLabel = prefix + name.substr(0, mid) + ".." + tag;
-                C2D_Text testText;
-                C2D_TextParse(&testText, m_textBuf, testLabel.c_str());
-                C2D_TextOptimize(&testText);
-                float curW = 0.0f, curH = 0.0f;
-                C2D_TextGetDimensions(&testText, textScale, textScale, &curW, &curH);
-
-                if (curW <= MAX_ROW_TEXT_WIDTH) {
-                    bestLen = mid;
-                    low = mid + 1;
-                } else {
-                    high = mid - 1;
-                }
-            }
-
-            fullLabel = prefix + name.substr(0, bestLen) + ".." + tag;
-            C2D_TextParse(&rowText, m_textBuf, fullLabel.c_str());
-            C2D_TextOptimize(&rowText);
-        }
-
-        C2D_DrawText(&rowText, C2D_WithColor, 36.0f, y + 5.0f, 0.5f, textScale, textScale, CLR_TEXT_WHITE);
+    std::string tag;
+    if (item.localTitle.hasSave) {
+      tag += " [S]";
+    }
+    if (item.localTitle.hasSave && item.remoteHasSave) {
+      time_t lt = item.localTitle.saveTime;
+      time_t rt =
+          item.remoteSaveTime != 0
+              ? item.remoteSaveTime
+              : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
+      if (rt > lt + 5 && lt > 0) {
+        tag += " [v]";
+      } else if (lt > rt + 5 && rt > 0) {
+        tag += " [^]";
+      }
+    }
+    if (item.isIgnored) {
+      tag += " (Hide)";
     }
 
-    drawButton(16.0f, 163.0f, 138.0f, 26.0f, "[ Sync (A) ]", false);
-    drawButton(166.0f, 163.0f, 138.0f, 26.0f, "[ Sync All (X) ]", false);
+    std::string prefix = "[" + item.localTitle.console + "] ";
+    std::string fullLabel = prefix + item.localTitle.name + tag;
 
-    drawButton(16.0f, 193.0f, 90.0f, 26.0f, "[ Match ]", false);
-    drawButton(114.0f, 193.0f, 92.0f, 26.0f, "[ Save Path ]", false);
+    constexpr float MAX_ROW_TEXT_WIDTH = 260.0f;
+    float textScale = 0.40f;
 
-    bool isCurrentlyIgnored = (!m_filteredLocalIndices.empty() &&
-                               m_selectedGameIndex < m_filteredLocalIndices.size() &&
-                               m_syncMgr->getItems()[m_filteredLocalIndices[m_selectedGameIndex]].isIgnored);
-    const char* ignoreLabel = isCurrentlyIgnored ? "[ Unhide ]" : "[ Hide ]";
-    u32 ignoreAccent = isCurrentlyIgnored ? CLR_GREEN : 0;
-    drawButton(214.0f, 193.0f, 90.0f, 26.0f, ignoreLabel, false, ignoreAccent);
+    C2D_Text rowText;
+    C2D_TextParse(&rowText, m_textBuf, fullLabel.c_str());
+    C2D_TextOptimize(&rowText);
 
-    u32 statusColor = (m_statusMessage.find("Error") != std::string::npos ||
-                       m_statusMessage.find("Failed") != std::string::npos) ? CLR_ERROR : CLR_GREEN;
-    C2D_Text statusText;
-    C2D_TextParse(&statusText, m_textBuf, m_statusMessage.c_str());
-    C2D_TextOptimize(&statusText);
-    C2D_DrawText(&statusText, C2D_WithColor, 16.0f, 223.0f, 0.5f, 0.38f, 0.38f, statusColor);
+    float textW = 0.0f, textH = 0.0f;
+    C2D_TextGetDimensions(&rowText, textScale, textScale, &textW, &textH);
+
+    if (textW > MAX_ROW_TEXT_WIDTH) {
+      std::string name = item.localTitle.name;
+      int low = 0;
+      int high = static_cast<int>(name.length());
+      int bestLen = 0;
+
+      while (low <= high) {
+        int mid = low + (high - low) / 2;
+        std::string testLabel = prefix + name.substr(0, mid) + ".." + tag;
+        C2D_Text testText;
+        C2D_TextParse(&testText, m_textBuf, testLabel.c_str());
+        C2D_TextOptimize(&testText);
+        float curW = 0.0f, curH = 0.0f;
+        C2D_TextGetDimensions(&testText, textScale, textScale, &curW, &curH);
+
+        if (curW <= MAX_ROW_TEXT_WIDTH) {
+          bestLen = mid;
+          low = mid + 1;
+        } else {
+          high = mid - 1;
+        }
+      }
+
+      fullLabel = prefix + name.substr(0, bestLen) + ".." + tag;
+      C2D_TextParse(&rowText, m_textBuf, fullLabel.c_str());
+      C2D_TextOptimize(&rowText);
+    }
+
+    C2D_DrawText(&rowText, C2D_WithColor, 36.0f, y + 5.0f, 0.5f, textScale,
+                 textScale, CLR_TEXT_WHITE);
+  }
+
+  drawButton(16.0f, 163.0f, 138.0f, 26.0f, "[ Sync (A) ]", false);
+  drawButton(166.0f, 163.0f, 138.0f, 26.0f, "[ Sync All (X) ]", false);
+
+  drawButton(16.0f, 193.0f, 90.0f, 26.0f, "[ Match ]", false);
+  drawButton(114.0f, 193.0f, 92.0f, 26.0f, "[ Save Path ]", false);
+  drawButton(16.0f, 193.0f, 68.0f, 26.0f, "[ Match ]", false);
+  drawButton(90.0f, 193.0f, 74.0f, 26.0f, "[ Save Path ]", false);
+
+  bool isCurrentlyIgnored =
+      (!m_filteredLocalIndices.empty() &&
+       m_selectedGameIndex < m_filteredLocalIndices.size() &&
+       m_syncMgr->getItems()[m_filteredLocalIndices[m_selectedGameIndex]]
+           .isIgnored);
+  const char *ignoreLabel = isCurrentlyIgnored ? "[ Unhide ]" : "[ Hide ]";
+  u32 ignoreAccent = isCurrentlyIgnored ? CLR_GREEN : 0;
+  drawButton(214.0f, 193.0f, 90.0f, 26.0f, ignoreLabel, false, ignoreAccent);
+  drawButton(170.0f, 193.0f, 64.0f, 26.0f, ignoreLabel, false, ignoreAccent);
+  drawButton(240.0f, 193.0f, 64.0f, 26.0f, "[ Cfg ]", false);
+
+  u32 statusColor = (m_statusMessage.find("Error") != std::string::npos ||
+                     m_statusMessage.find("Failed") != std::string::npos)
+                        ? CLR_ERROR
+                        : CLR_GREEN;
+  C2D_Text statusText;
+  C2D_TextParse(&statusText, m_textBuf, m_statusMessage.c_str());
+  C2D_TextOptimize(&statusText);
+  C2D_DrawText(&statusText, C2D_WithColor, 16.0f, 223.0f, 0.5f, 0.38f, 0.38f,
+               statusColor);
 }
 
 void UIManager::renderMatchingTop() {
-    if (m_matchingSubState == MatchingSubState::SELECT_CONSOLE) {
-        renderMatchingConsolesTop();
-    } else {
-        renderMatchingGamesTop();
-    }
+  if (m_matchingSubState == MatchingSubState::SELECT_CONSOLE) {
+    renderMatchingConsolesTop();
+  } else {
+    renderMatchingGamesTop();
+  }
 }
 
 void UIManager::renderMatchingBottom() {
-    if (m_matchingSubState == MatchingSubState::SELECT_CONSOLE) {
-        renderMatchingConsolesBottom();
-    } else {
-        renderMatchingGamesBottom();
-    }
+  if (m_matchingSubState == MatchingSubState::SELECT_CONSOLE) {
+    renderMatchingConsolesBottom();
+  } else {
+    renderMatchingGamesBottom();
+  }
 }
 
 void UIManager::renderMatchingConsolesTop() {
-    C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 42.0f, CLR_HEADER);
-    C2D_DrawRectSolid(0.0f, 40.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f, CLR_ACCENT);
+  C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 42.0f,
+                    CLR_HEADER);
+  C2D_DrawRectSolid(0.0f, 40.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f,
+                    CLR_ACCENT);
 
-    C2D_Text headerText;
-    C2D_TextParse(&headerText, m_textBuf, "romm3ds - RomM Consoles");
-    C2D_TextOptimize(&headerText);
-    C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 10.0f, 0.5f, 0.75f, 0.75f, CLR_TEXT_WHITE);
+  C2D_Text headerText;
+  C2D_TextParse(&headerText, m_textBuf, "romm3ds - RomM Consoles");
+  C2D_TextOptimize(&headerText);
+  C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 10.0f, 0.5f, 0.75f, 0.75f,
+               CLR_TEXT_WHITE);
 
-    if (m_syncMgr && !m_filteredLocalIndices.empty() && m_selectedGameIndex < m_filteredLocalIndices.size()) {
-        size_t localActualIdx = m_filteredLocalIndices[m_selectedGameIndex];
-        const auto& item = m_syncMgr->getItems()[localActualIdx];
+  if (m_syncMgr && !m_filteredLocalIndices.empty() &&
+      m_selectedGameIndex < m_filteredLocalIndices.size()) {
+    size_t localActualIdx = m_filteredLocalIndices[m_selectedGameIndex];
+    const auto &item = m_syncMgr->getItems()[localActualIdx];
 
-        std::string guide = "Target Local Game:\n  " + item.localTitle.name + " [" + item.localTitle.console + "]\n\n"
-                            "Select console to browse in RomM library:\n"
-                            "  (A) Open Selected Console\n"
-                            "  (B) Back to Main Menu\n"
-                            "  (X) Refresh Consoles & Library";
-        if (!m_loadingMessage.empty()) {
-            guide += "\n\n--> " + m_loadingMessage;
-        }
-        C2D_Text guideText;
-        C2D_TextParse(&guideText, m_textBuf, guide.c_str());
-        C2D_TextOptimize(&guideText);
-        C2D_DrawText(&guideText, C2D_WithColor, 16.0f, 56.0f, 0.5f, 0.48f, 0.48f, CLR_TEXT_WHITE);
+    std::string guide = "Target Local Game:\n  " + item.localTitle.name + " [" +
+                        item.localTitle.console +
+                        "]\n\n"
+                        "Select console to browse in RomM library:\n"
+                        "  (A) Open Selected Console\n"
+                        "  (B) Back to Main Menu\n"
+                        "  (X) Refresh Consoles & Library";
+    if (!m_loadingMessage.empty()) {
+      guide += "\n\n--> " + m_loadingMessage;
     }
+    C2D_Text guideText;
+    C2D_TextParse(&guideText, m_textBuf, guide.c_str());
+    C2D_TextOptimize(&guideText);
+    C2D_DrawText(&guideText, C2D_WithColor, 16.0f, 56.0f, 0.5f, 0.48f, 0.48f,
+                 CLR_TEXT_WHITE);
+  }
 }
 
 void UIManager::renderMatchingConsolesBottom() {
-    C2D_DrawRectSolid(8.0f, 4.0f, 0.5f, RomM3DS::SCREEN_BOTTOM_WIDTH - 16.0f, RomM3DS::SCREEN_BOTTOM_HEIGHT - 8.0f, CLR_CARD);
+  C2D_DrawRectSolid(8.0f, 4.0f, 0.5f, RomM3DS::SCREEN_BOTTOM_WIDTH - 16.0f,
+                    RomM3DS::SCREEN_BOTTOM_HEIGHT - 8.0f, CLR_CARD);
 
-    size_t consoleTotal = m_availableConsoles.size();
-    std::string header = "RomM Consoles (" + std::to_string(consoleTotal > 0 ? (m_selectedConsoleIndex + 1) : 0) +
-                         "/" + std::to_string(consoleTotal) + ")";
-    C2D_Text titleText;
-    C2D_TextParse(&titleText, m_textBuf, header.c_str());
-    C2D_TextOptimize(&titleText);
-    C2D_DrawText(&titleText, C2D_WithColor, 16.0f, 9.0f, 0.5f, 0.48f, 0.48f, CLR_TEXT_WHITE);
+  size_t consoleTotal = m_availableConsoles.size();
+  std::string header =
+      "RomM Consoles (" +
+      std::to_string(consoleTotal > 0 ? (m_selectedConsoleIndex + 1) : 0) +
+      "/" + std::to_string(consoleTotal) + ")";
+  C2D_Text titleText;
+  C2D_TextParse(&titleText, m_textBuf, header.c_str());
+  C2D_TextOptimize(&titleText);
+  C2D_DrawText(&titleText, C2D_WithColor, 16.0f, 9.0f, 0.5f, 0.48f, 0.48f,
+               CLR_TEXT_WHITE);
 
-    size_t pageOffset = (m_selectedConsoleIndex / 5) * 5;
-    for (size_t i = 0; i < 5 && (pageOffset + i) < consoleTotal; ++i) {
-        size_t idx = pageOffset + i;
-        const auto& c = m_availableConsoles[idx];
-        bool selected = (idx == m_selectedConsoleIndex);
+  size_t pageOffset = (m_selectedConsoleIndex / 5) * 5;
+  for (size_t i = 0; i < 5 && (pageOffset + i) < consoleTotal; ++i) {
+    size_t idx = pageOffset + i;
+    const auto &c = m_availableConsoles[idx];
+    bool selected = (idx == m_selectedConsoleIndex);
 
-        float y = 36.0f + static_cast<float>(i * 30.0f);
-        u32 rowBg = selected ? CLR_HEADER : CLR_INPUT_BG;
-        u32 borderColor = selected ? CLR_ACCENT : CLR_BORDER_OFF;
+    float y = 36.0f + static_cast<float>(i * 30.0f);
+    u32 rowBg = selected ? CLR_HEADER : CLR_INPUT_BG;
+    u32 borderColor = selected ? CLR_ACCENT : CLR_BORDER_OFF;
 
-        C2D_DrawRectSolid(16.0f, y, 0.5f, 288.0f, 26.0f, borderColor);
-        C2D_DrawRectSolid(17.5f, y + 1.5f, 0.5f, 285.0f, 23.0f, rowBg);
+    C2D_DrawRectSolid(16.0f, y, 0.5f, 288.0f, 26.0f, borderColor);
+    C2D_DrawRectSolid(17.5f, y + 1.5f, 0.5f, 285.0f, 23.0f, rowBg);
 
-        u32 dotColor = selected ? CLR_YELLOW : CLR_ACCENT;
-        C2D_DrawRectSolid(24.0f, y + 8.0f, 0.5f, 8.0f, 8.0f, dotColor);
+    u32 dotColor = selected ? CLR_YELLOW : CLR_ACCENT;
+    C2D_DrawRectSolid(24.0f, y + 8.0f, 0.5f, 8.0f, 8.0f, dotColor);
 
-        std::string nameLabel = c.name;
-        if (nameLabel.length() > 22) {
-            nameLabel = nameLabel.substr(0, 20) + "..";
-        }
-        C2D_Text nameText;
-        C2D_TextParse(&nameText, m_textBuf, nameLabel.c_str());
-        C2D_TextOptimize(&nameText);
-        C2D_DrawText(&nameText, C2D_WithColor, 38.0f, y + 5.0f, 0.5f, 0.44f, 0.44f, CLR_TEXT_WHITE);
-
-        std::string countLabel = std::to_string(c.romCount) + " ROMs";
-        C2D_Text countText;
-        C2D_TextParse(&countText, m_textBuf, countLabel.c_str());
-        C2D_TextOptimize(&countText);
-        C2D_DrawText(&countText, C2D_WithColor, 230.0f, y + 6.0f, 0.5f, 0.40f, 0.40f, CLR_TEXT_MUTED);
+    std::string nameLabel = c.name;
+    if (nameLabel.length() > 22) {
+      nameLabel = nameLabel.substr(0, 20) + "..";
     }
+    C2D_Text nameText;
+    C2D_TextParse(&nameText, m_textBuf, nameLabel.c_str());
+    C2D_TextOptimize(&nameText);
+    C2D_DrawText(&nameText, C2D_WithColor, 38.0f, y + 5.0f, 0.5f, 0.44f, 0.44f,
+                 CLR_TEXT_WHITE);
 
-    if (consoleTotal == 0) {
-        C2D_Text emptyTxt;
-        C2D_TextParse(&emptyTxt, m_textBuf, "No consoles found in RomM library.\nCheck connection or refresh (X).");
-        C2D_TextOptimize(&emptyTxt);
-        C2D_DrawText(&emptyTxt, C2D_WithColor, 24.0f, 80.0f, 0.5f, 0.45f, 0.45f, CLR_TEXT_MUTED);
-    }
+    std::string countLabel = std::to_string(c.romCount) + " ROMs";
+    C2D_Text countText;
+    C2D_TextParse(&countText, m_textBuf, countLabel.c_str());
+    C2D_TextOptimize(&countText);
+    C2D_DrawText(&countText, C2D_WithColor, 230.0f, y + 6.0f, 0.5f, 0.40f,
+                 0.40f, CLR_TEXT_MUTED);
+  }
 
-    drawButton(16.0f, 194.0f, 138.0f, 30.0f, "[ Open Console (A) ]", false);
-    drawButton(166.0f, 194.0f, 138.0f, 30.0f, "[ Back (B) ]", false);
+  if (consoleTotal == 0) {
+    C2D_Text emptyTxt;
+    C2D_TextParse(
+        &emptyTxt, m_textBuf,
+        "No consoles found in RomM library.\nCheck connection or refresh (X).");
+    C2D_TextOptimize(&emptyTxt);
+    C2D_DrawText(&emptyTxt, C2D_WithColor, 24.0f, 80.0f, 0.5f, 0.45f, 0.45f,
+                 CLR_TEXT_MUTED);
+  }
+
+  drawButton(16.0f, 194.0f, 138.0f, 30.0f, "[ Open Console (A) ]", false);
+  drawButton(166.0f, 194.0f, 138.0f, 30.0f, "[ Back (B) ]", false);
 }
 
 void UIManager::renderMatchingGamesTop() {
-    C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 42.0f, CLR_HEADER);
-    C2D_DrawRectSolid(0.0f, 40.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f, CLR_YELLOW);
+  C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 42.0f,
+                    CLR_HEADER);
+  C2D_DrawRectSolid(0.0f, 40.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f,
+                    CLR_YELLOW);
 
-    std::string header = "romm3ds - " + m_selectedConsoleName;
-    if (header.length() > 36) header = header.substr(0, 34) + "..";
-    C2D_Text headerText;
-    C2D_TextParse(&headerText, m_textBuf, header.c_str());
-    C2D_TextOptimize(&headerText);
-    C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 10.0f, 0.5f, 0.75f, 0.75f, CLR_TEXT_WHITE);
+  std::string header = "romm3ds - " + m_selectedConsoleName;
+  if (header.length() > 36)
+    header = header.substr(0, 34) + "..";
+  C2D_Text headerText;
+  C2D_TextParse(&headerText, m_textBuf, header.c_str());
+  C2D_TextOptimize(&headerText);
+  C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 10.0f, 0.5f, 0.75f, 0.75f,
+               CLR_TEXT_WHITE);
 
-    if (m_syncMgr && !m_filteredLocalIndices.empty() && m_selectedGameIndex < m_filteredLocalIndices.size()) {
-        size_t localActualIdx = m_filteredLocalIndices[m_selectedGameIndex];
-        const auto& item = m_syncMgr->getItems()[localActualIdx];
+  if (m_syncMgr && !m_filteredLocalIndices.empty() &&
+      m_selectedGameIndex < m_filteredLocalIndices.size()) {
+    size_t localActualIdx = m_filteredLocalIndices[m_selectedGameIndex];
+    const auto &item = m_syncMgr->getItems()[localActualIdx];
 
-        std::string guide = "Local Target: " + item.localTitle.name + " [" + item.localTitle.console + "]\n"
-                            "Console: " + m_selectedConsoleName + " (" + m_selectedConsoleSlug + ")\n\n"
-                            "Controls:\n"
-                            "  (A) Pair Selected Game     (B) Back to Consoles\n"
-                            "  (Y) Search Filter Games    (X) Clear Filter\n"
-                            "  (L) Refresh from Server";
-        if (!m_remoteFilterText.empty()) {
-            guide += "\n\nActive Filter: \"" + m_remoteFilterText + "\"";
-        }
-        C2D_Text guideText;
-        C2D_TextParse(&guideText, m_textBuf, guide.c_str());
-        C2D_TextOptimize(&guideText);
-        C2D_DrawText(&guideText, C2D_WithColor, 16.0f, 56.0f, 0.5f, 0.48f, 0.48f, CLR_TEXT_WHITE);
+    std::string guide = "Local Target: " + item.localTitle.name + " [" +
+                        item.localTitle.console +
+                        "]\n"
+                        "Console: " +
+                        m_selectedConsoleName + " (" + m_selectedConsoleSlug +
+                        ")\n\n"
+                        "Controls:\n"
+                        "  (A) Pair Selected Game     (B) Back to Consoles\n"
+                        "  (Y) Search Filter Games    (X) Clear Filter\n"
+                        "  (L) Refresh from Server";
+    if (!m_remoteFilterText.empty()) {
+      guide += "\n\nActive Filter: \"" + m_remoteFilterText + "\"";
     }
+    C2D_Text guideText;
+    C2D_TextParse(&guideText, m_textBuf, guide.c_str());
+    C2D_TextOptimize(&guideText);
+    C2D_DrawText(&guideText, C2D_WithColor, 16.0f, 56.0f, 0.5f, 0.48f, 0.48f,
+                 CLR_TEXT_WHITE);
+  }
 }
 
 void UIManager::renderMatchingGamesBottom() {
-    C2D_DrawRectSolid(8.0f, 4.0f, 0.5f, RomM3DS::SCREEN_BOTTOM_WIDTH - 16.0f, RomM3DS::SCREEN_BOTTOM_HEIGHT - 8.0f, CLR_CARD);
+  C2D_DrawRectSolid(8.0f, 4.0f, 0.5f, RomM3DS::SCREEN_BOTTOM_WIDTH - 16.0f,
+                    RomM3DS::SCREEN_BOTTOM_HEIGHT - 8.0f, CLR_CARD);
 
-    size_t remoteTotal = m_filteredRemoteIndices.size();
-    std::string header = m_selectedConsoleName + " (" + std::to_string(remoteTotal > 0 ? (m_selectedRemoteIndex + 1) : 0) +
-                         "/" + std::to_string(remoteTotal) + ")";
-    C2D_Text titleText;
-    C2D_TextParse(&titleText, m_textBuf, header.c_str());
-    C2D_TextOptimize(&titleText);
-    C2D_DrawText(&titleText, C2D_WithColor, 16.0f, 9.0f, 0.5f, 0.48f, 0.48f, CLR_TEXT_WHITE);
+  size_t remoteTotal = m_filteredRemoteIndices.size();
+  std::string header =
+      m_selectedConsoleName + " (" +
+      std::to_string(remoteTotal > 0 ? (m_selectedRemoteIndex + 1) : 0) + "/" +
+      std::to_string(remoteTotal) + ")";
+  C2D_Text titleText;
+  C2D_TextParse(&titleText, m_textBuf, header.c_str());
+  C2D_TextOptimize(&titleText);
+  C2D_DrawText(&titleText, C2D_WithColor, 16.0f, 9.0f, 0.5f, 0.48f, 0.48f,
+               CLR_TEXT_WHITE);
 
-    std::string searchDisplay = m_remoteFilterText.empty() ? "Search: Tap to filter (Y)..." : ("Search: " + m_remoteFilterText);
-    u32 searchBorder = m_remoteFilterText.empty() ? CLR_BORDER_OFF : CLR_ACCENT;
-    u32 searchTextColor = m_remoteFilterText.empty() ? CLR_TEXT_MUTED : CLR_TEXT_WHITE;
-    C2D_DrawRectSolid(16.0f, 28.0f, 0.5f, 230.0f, 22.0f, searchBorder);
-    C2D_DrawRectSolid(17.5f, 29.5f, 0.5f, 227.0f, 19.0f, CLR_INPUT_BG);
+  std::string searchDisplay = m_remoteFilterText.empty()
+                                  ? "Search: Tap to filter (Y)..."
+                                  : ("Search: " + m_remoteFilterText);
+  u32 searchBorder = m_remoteFilterText.empty() ? CLR_BORDER_OFF : CLR_ACCENT;
+  u32 searchTextColor =
+      m_remoteFilterText.empty() ? CLR_TEXT_MUTED : CLR_TEXT_WHITE;
+  C2D_DrawRectSolid(16.0f, 28.0f, 0.5f, 230.0f, 22.0f, searchBorder);
+  C2D_DrawRectSolid(17.5f, 29.5f, 0.5f, 227.0f, 19.0f, CLR_INPUT_BG);
 
-    C2D_Text searchTxt;
-    C2D_TextParse(&searchTxt, m_textBuf, searchDisplay.c_str());
-    C2D_TextOptimize(&searchTxt);
-    C2D_DrawText(&searchTxt, C2D_WithColor, 22.0f, 32.0f, 0.5f, 0.40f, 0.40f, searchTextColor);
+  C2D_Text searchTxt;
+  C2D_TextParse(&searchTxt, m_textBuf, searchDisplay.c_str());
+  C2D_TextOptimize(&searchTxt);
+  C2D_DrawText(&searchTxt, C2D_WithColor, 22.0f, 32.0f, 0.5f, 0.40f, 0.40f,
+               searchTextColor);
 
-    drawButton(252.0f, 28.0f, 52.0f, 22.0f, "[ Clr ]", false);
+  drawButton(252.0f, 28.0f, 52.0f, 22.0f, "[ Clr ]", false);
 
-    const auto& remote = m_syncMgr ? m_syncMgr->getRemoteLibrary() : std::vector<RommGame>();
-    size_t pageOffset = (m_selectedRemoteIndex / 5) * 5;
-    for (size_t i = 0; i < 5 && (pageOffset + i) < remoteTotal; ++i) {
-        size_t filteredIdx = pageOffset + i;
-        size_t actualIdx = m_filteredRemoteIndices[filteredIdx];
-        const auto& g = remote[actualIdx];
-        bool selected = (filteredIdx == m_selectedRemoteIndex);
+  const auto &remote =
+      m_syncMgr ? m_syncMgr->getRemoteLibrary() : std::vector<RommGame>();
+  size_t pageOffset = (m_selectedRemoteIndex / 5) * 5;
+  for (size_t i = 0; i < 5 && (pageOffset + i) < remoteTotal; ++i) {
+    size_t filteredIdx = pageOffset + i;
+    size_t actualIdx = m_filteredRemoteIndices[filteredIdx];
+    const auto &g = remote[actualIdx];
+    bool selected = (filteredIdx == m_selectedRemoteIndex);
 
-        float y = 54.0f + static_cast<float>(i * 26.0f);
-        u32 rowBg = selected ? CLR_HEADER : CLR_INPUT_BG;
-        u32 borderColor = selected ? CLR_ACCENT : CLR_BORDER_OFF;
+    float y = 54.0f + static_cast<float>(i * 26.0f);
+    u32 rowBg = selected ? CLR_HEADER : CLR_INPUT_BG;
+    u32 borderColor = selected ? CLR_ACCENT : CLR_BORDER_OFF;
 
-        C2D_DrawRectSolid(16.0f, y, 0.5f, 288.0f, 24.0f, borderColor);
-        C2D_DrawRectSolid(17.5f, y + 1.5f, 0.5f, 285.0f, 21.0f, rowBg);
+    C2D_DrawRectSolid(16.0f, y, 0.5f, 288.0f, 24.0f, borderColor);
+    C2D_DrawRectSolid(17.5f, y + 1.5f, 0.5f, 285.0f, 21.0f, rowBg);
 
-        std::string label = g.title;
-        constexpr float MAX_REMOTE_ROW_WIDTH = 268.0f;
-        float textScale = 0.42f;
+    std::string label = g.title;
+    constexpr float MAX_REMOTE_ROW_WIDTH = 268.0f;
+    float textScale = 0.42f;
 
-        C2D_Text rowText;
-        C2D_TextParse(&rowText, m_textBuf, label.c_str());
-        C2D_TextOptimize(&rowText);
+    C2D_Text rowText;
+    C2D_TextParse(&rowText, m_textBuf, label.c_str());
+    C2D_TextOptimize(&rowText);
 
-        float textW = 0.0f, textH = 0.0f;
-        C2D_TextGetDimensions(&rowText, textScale, textScale, &textW, &textH);
+    float textW = 0.0f, textH = 0.0f;
+    C2D_TextGetDimensions(&rowText, textScale, textScale, &textW, &textH);
 
-        if (textW > MAX_REMOTE_ROW_WIDTH) {
-            int low = 0;
-            int high = static_cast<int>(label.length());
-            int bestLen = 0;
+    if (textW > MAX_REMOTE_ROW_WIDTH) {
+      int low = 0;
+      int high = static_cast<int>(label.length());
+      int bestLen = 0;
 
-            while (low <= high) {
-                int mid = low + (high - low) / 2;
-                std::string testLabel = label.substr(0, mid) + "..";
-                C2D_Text testText;
-                C2D_TextParse(&testText, m_textBuf, testLabel.c_str());
-                C2D_TextOptimize(&testText);
-                float curW = 0.0f, curH = 0.0f;
-                C2D_TextGetDimensions(&testText, textScale, textScale, &curW, &curH);
+      while (low <= high) {
+        int mid = low + (high - low) / 2;
+        std::string testLabel = label.substr(0, mid) + "..";
+        C2D_Text testText;
+        C2D_TextParse(&testText, m_textBuf, testLabel.c_str());
+        C2D_TextOptimize(&testText);
+        float curW = 0.0f, curH = 0.0f;
+        C2D_TextGetDimensions(&testText, textScale, textScale, &curW, &curH);
 
-                if (curW <= MAX_REMOTE_ROW_WIDTH) {
-                    bestLen = mid;
-                    low = mid + 1;
-                } else {
-                    high = mid - 1;
-                }
-            }
-
-            label = label.substr(0, bestLen) + "..";
-            C2D_TextParse(&rowText, m_textBuf, label.c_str());
-            C2D_TextOptimize(&rowText);
+        if (curW <= MAX_REMOTE_ROW_WIDTH) {
+          bestLen = mid;
+          low = mid + 1;
+        } else {
+          high = mid - 1;
         }
+      }
 
-        C2D_DrawText(&rowText, C2D_WithColor, 24.0f, y + 5.0f, 0.5f, textScale, textScale, CLR_TEXT_WHITE);
+      label = label.substr(0, bestLen) + "..";
+      C2D_TextParse(&rowText, m_textBuf, label.c_str());
+      C2D_TextOptimize(&rowText);
     }
 
-    if (remoteTotal == 0) {
-        C2D_Text noMatches;
-        std::string noMsg = m_remoteFilterText.empty() ? "No games found for this console." : "No games match search query.\nTap [Clr] to reset filter.";
-        C2D_TextParse(&noMatches, m_textBuf, noMsg.c_str());
-        C2D_TextOptimize(&noMatches);
-        C2D_DrawText(&noMatches, C2D_WithColor, 24.0f, 80.0f, 0.5f, 0.45f, 0.45f, CLR_TEXT_MUTED);
-    }
+    C2D_DrawText(&rowText, C2D_WithColor, 24.0f, y + 5.0f, 0.5f, textScale,
+                 textScale, CLR_TEXT_WHITE);
+  }
 
-    drawButton(16.0f, 194.0f, 138.0f, 30.0f, "[ Pair Game (A) ]", false);
-    drawButton(166.0f, 194.0f, 138.0f, 30.0f, "[ Consoles (B) ]", false);
+  if (remoteTotal == 0) {
+    C2D_Text noMatches;
+    std::string noMsg =
+        m_remoteFilterText.empty()
+            ? "No games found for this console."
+            : "No games match search query.\nTap [Clr] to reset filter.";
+    C2D_TextParse(&noMatches, m_textBuf, noMsg.c_str());
+    C2D_TextOptimize(&noMatches);
+    C2D_DrawText(&noMatches, C2D_WithColor, 24.0f, 80.0f, 0.5f, 0.45f, 0.45f,
+                 CLR_TEXT_MUTED);
+  }
+
+  drawButton(16.0f, 194.0f, 138.0f, 30.0f, "[ Pair Game (A) ]", false);
+  drawButton(166.0f, 194.0f, 138.0f, 30.0f, "[ Consoles (B) ]", false);
 }
 
 void UIManager::renderConflictTop() {
-    C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 36.0f, CLR_HEADER);
-    C2D_DrawRectSolid(0.0f, 34.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f, CLR_YELLOW);
+  C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 36.0f,
+                    CLR_HEADER);
+  C2D_DrawRectSolid(0.0f, 34.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f,
+                    CLR_YELLOW);
 
-    C2D_Text headerText;
-    C2D_TextParse(&headerText, m_textBuf, "Save Conflict Resolution");
-    C2D_TextOptimize(&headerText);
-    C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 8.0f, 0.5f, 0.65f, 0.65f, CLR_TEXT_WHITE);
+  C2D_Text headerText;
+  C2D_TextParse(&headerText, m_textBuf, "Save Conflict Resolution");
+  C2D_TextOptimize(&headerText);
+  C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 8.0f, 0.5f, 0.65f, 0.65f,
+               CLR_TEXT_WHITE);
 
-    if (!m_syncMgr || m_conflictGameIndex >= m_syncMgr->getItems().size()) {
-        return;
-    }
+  if (!m_syncMgr || m_conflictGameIndex >= m_syncMgr->getItems().size()) {
+    return;
+  }
 
-    const auto& item = m_syncMgr->getItems()[m_conflictGameIndex];
+  const auto &item = m_syncMgr->getItems()[m_conflictGameIndex];
 
-    std::string titleStr = "Game: " + item.localTitle.name;
-    if (titleStr.length() > 36) {
-        titleStr = titleStr.substr(0, 33) + "...";
-    }
-    C2D_Text titleText;
-    C2D_TextParse(&titleText, m_textBuf, titleStr.c_str());
-    C2D_TextOptimize(&titleText);
-    C2D_DrawText(&titleText, C2D_WithColor, 16.0f, 44.0f, 0.5f, 0.52f, 0.52f, CLR_ACCENT);
+  std::string titleStr = "Game: " + item.localTitle.name;
+  if (titleStr.length() > 36) {
+    titleStr = titleStr.substr(0, 33) + "...";
+  }
+  C2D_Text titleText;
+  C2D_TextParse(&titleText, m_textBuf, titleStr.c_str());
+  C2D_TextOptimize(&titleText);
+  C2D_DrawText(&titleText, C2D_WithColor, 16.0f, 44.0f, 0.5f, 0.52f, 0.52f,
+               CLR_ACCENT);
 
-    std::string localTimeStr = SyncManager::formatTimestamp(item.localTitle.saveTime);
-    std::string remoteTimeStr = SyncManager::formatIsoTimestamp(item.remoteSaveUpdatedAt);
+  std::string localTimeStr =
+      SyncManager::formatTimestamp(item.localTitle.saveTime);
+  std::string remoteTimeStr =
+      SyncManager::formatIsoTimestamp(item.remoteSaveUpdatedAt);
 
-    time_t localTime = item.localTitle.saveTime;
-    time_t remoteTime = item.remoteSaveTime != 0 ? item.remoteSaveTime : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
+  time_t localTime = item.localTitle.saveTime;
+  time_t remoteTime =
+      item.remoteSaveTime != 0
+          ? item.remoteSaveTime
+          : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
 
-    bool remoteIsNewer = (remoteTime > 0 && (localTime == 0 || remoteTime > localTime + 5));
-    bool localIsNewer = (localTime > 0 && (remoteTime == 0 || localTime > remoteTime + 5));
+  bool remoteIsNewer =
+      (remoteTime > 0 && (localTime == 0 || remoteTime > localTime + 5));
+  bool localIsNewer =
+      (localTime > 0 && (remoteTime == 0 || localTime > remoteTime + 5));
 
-    // Card 1: Local (3DS) Save
-    float card1Y = 68.0f;
-    float cardH = 46.0f;
-    u32 card1Border = localIsNewer ? CLR_GREEN : CLR_BORDER_OFF;
-    C2D_DrawRectSolid(12.0f, card1Y, 0.5f, 376.0f, cardH, CLR_CARD);
-    C2D_DrawRectSolid(12.0f, card1Y, 0.5f, 4.0f, cardH, card1Border);
+  // Card 1: Local (3DS) Save
+  float card1Y = 68.0f;
+  float cardH = 46.0f;
+  u32 card1Border = localIsNewer ? CLR_GREEN : CLR_BORDER_OFF;
+  C2D_DrawRectSolid(12.0f, card1Y, 0.5f, 376.0f, cardH, CLR_CARD);
+  C2D_DrawRectSolid(12.0f, card1Y, 0.5f, 4.0f, cardH, card1Border);
 
-    C2D_Text localLbl;
-    C2D_TextParse(&localLbl, m_textBuf, "Local (3DS) Save:");
-    C2D_TextOptimize(&localLbl);
-    C2D_DrawText(&localLbl, C2D_WithColor, 24.0f, card1Y + 5.0f, 0.5f, 0.44f, 0.44f, CLR_TEXT_MUTED);
+  C2D_Text localLbl;
+  C2D_TextParse(&localLbl, m_textBuf, "Local (3DS) Save:");
+  C2D_TextOptimize(&localLbl);
+  C2D_DrawText(&localLbl, C2D_WithColor, 24.0f, card1Y + 5.0f, 0.5f, 0.44f,
+               0.44f, CLR_TEXT_MUTED);
 
-    C2D_Text localDateText;
-    C2D_TextParse(&localDateText, m_textBuf, localTimeStr.c_str());
-    C2D_TextOptimize(&localDateText);
-    C2D_DrawText(&localDateText, C2D_WithColor, 24.0f, card1Y + 23.0f, 0.5f, 0.50f, 0.50f, CLR_TEXT_WHITE);
+  C2D_Text localDateText;
+  C2D_TextParse(&localDateText, m_textBuf, localTimeStr.c_str());
+  C2D_TextOptimize(&localDateText);
+  C2D_DrawText(&localDateText, C2D_WithColor, 24.0f, card1Y + 23.0f, 0.5f,
+               0.50f, 0.50f, CLR_TEXT_WHITE);
 
-    const char* localTag = localIsNewer ? "[ NEWER ]" : (remoteIsNewer ? "[ OLDER ]" : "[ SAME ]");
-    u32 localTagColor = localIsNewer ? CLR_GREEN : CLR_TEXT_MUTED;
-    C2D_Text localTagText;
-    C2D_TextParse(&localTagText, m_textBuf, localTag);
-    C2D_TextOptimize(&localTagText);
-    C2D_DrawText(&localTagText, C2D_WithColor, 298.0f, card1Y + 13.0f, 0.5f, 0.52f, 0.52f, localTagColor);
+  const char *localTag =
+      localIsNewer ? "[ NEWER ]" : (remoteIsNewer ? "[ OLDER ]" : "[ SAME ]");
+  u32 localTagColor = localIsNewer ? CLR_GREEN : CLR_TEXT_MUTED;
+  C2D_Text localTagText;
+  C2D_TextParse(&localTagText, m_textBuf, localTag);
+  C2D_TextOptimize(&localTagText);
+  C2D_DrawText(&localTagText, C2D_WithColor, 298.0f, card1Y + 13.0f, 0.5f,
+               0.52f, 0.52f, localTagColor);
 
-    // Card 2: Remote (RomM) Save
-    float card2Y = 122.0f;
-    u32 card2Border = remoteIsNewer ? CLR_GREEN : CLR_BORDER_OFF;
-    C2D_DrawRectSolid(12.0f, card2Y, 0.5f, 376.0f, cardH, CLR_CARD);
-    C2D_DrawRectSolid(12.0f, card2Y, 0.5f, 4.0f, cardH, card2Border);
+  // Card 2: Remote (RomM) Save
+  float card2Y = 122.0f;
+  u32 card2Border = remoteIsNewer ? CLR_GREEN : CLR_BORDER_OFF;
+  C2D_DrawRectSolid(12.0f, card2Y, 0.5f, 376.0f, cardH, CLR_CARD);
+  C2D_DrawRectSolid(12.0f, card2Y, 0.5f, 4.0f, cardH, card2Border);
 
-    C2D_Text remoteLbl;
-    C2D_TextParse(&remoteLbl, m_textBuf, "Remote (RomM) Save:");
-    C2D_TextOptimize(&remoteLbl);
-    C2D_DrawText(&remoteLbl, C2D_WithColor, 24.0f, card2Y + 5.0f, 0.5f, 0.44f, 0.44f, CLR_TEXT_MUTED);
+  C2D_Text remoteLbl;
+  C2D_TextParse(&remoteLbl, m_textBuf, "Remote (RomM) Save:");
+  C2D_TextOptimize(&remoteLbl);
+  C2D_DrawText(&remoteLbl, C2D_WithColor, 24.0f, card2Y + 5.0f, 0.5f, 0.44f,
+               0.44f, CLR_TEXT_MUTED);
 
-    C2D_Text remoteDateText;
-    C2D_TextParse(&remoteDateText, m_textBuf, remoteTimeStr.c_str());
-    C2D_TextOptimize(&remoteDateText);
-    C2D_DrawText(&remoteDateText, C2D_WithColor, 24.0f, card2Y + 23.0f, 0.5f, 0.50f, 0.50f, CLR_TEXT_WHITE);
+  C2D_Text remoteDateText;
+  C2D_TextParse(&remoteDateText, m_textBuf, remoteTimeStr.c_str());
+  C2D_TextOptimize(&remoteDateText);
+  C2D_DrawText(&remoteDateText, C2D_WithColor, 24.0f, card2Y + 23.0f, 0.5f,
+               0.50f, 0.50f, CLR_TEXT_WHITE);
 
-    const char* remoteTag = remoteIsNewer ? "[ NEWER ]" : (localIsNewer ? "[ OLDER ]" : "[ SAME ]");
-    u32 remoteTagColor = remoteIsNewer ? CLR_GREEN : CLR_TEXT_MUTED;
-    C2D_Text remoteTagText;
-    C2D_TextParse(&remoteTagText, m_textBuf, remoteTag);
-    C2D_TextOptimize(&remoteTagText);
-    C2D_DrawText(&remoteTagText, C2D_WithColor, 298.0f, card2Y + 13.0f, 0.5f, 0.52f, 0.52f, remoteTagColor);
+  const char *remoteTag =
+      remoteIsNewer ? "[ NEWER ]" : (localIsNewer ? "[ OLDER ]" : "[ SAME ]");
+  u32 remoteTagColor = remoteIsNewer ? CLR_GREEN : CLR_TEXT_MUTED;
+  C2D_Text remoteTagText;
+  C2D_TextParse(&remoteTagText, m_textBuf, remoteTag);
+  C2D_TextOptimize(&remoteTagText);
+  C2D_DrawText(&remoteTagText, C2D_WithColor, 298.0f, card2Y + 13.0f, 0.5f,
+               0.52f, 0.52f, remoteTagColor);
 
-    // Recommendation
-    std::string summary;
-    u32 summaryColor = CLR_TEXT_WHITE;
-    if (remoteIsNewer) {
-        summary = "-> Recommendation: Download Save (Remote is newer)";
-        summaryColor = CLR_GREEN;
-    } else if (localIsNewer) {
-        summary = "-> Recommendation: Upload Save (Local 3DS is newer)";
-        summaryColor = CLR_GREEN;
-    } else {
-        summary = "Saves have identical timestamps.";
-        summaryColor = CLR_TEXT_MUTED;
-    }
+  // Recommendation
+  std::string summary;
+  u32 summaryColor = CLR_TEXT_WHITE;
+  if (remoteIsNewer) {
+    summary = "-> Recommendation: Download Save (Remote is newer)";
+    summaryColor = CLR_GREEN;
+  } else if (localIsNewer) {
+    summary = "-> Recommendation: Upload Save (Local 3DS is newer)";
+    summaryColor = CLR_GREEN;
+  } else {
+    summary = "Saves have identical timestamps.";
+    summaryColor = CLR_TEXT_MUTED;
+  }
 
-    C2D_Text summaryText;
-    C2D_TextParse(&summaryText, m_textBuf, summary.c_str());
-    C2D_TextOptimize(&summaryText);
-    C2D_DrawText(&summaryText, C2D_WithColor, 16.0f, 178.0f, 0.5f, 0.44f, 0.44f, summaryColor);
+  C2D_Text summaryText;
+  C2D_TextParse(&summaryText, m_textBuf, summary.c_str());
+  C2D_TextOptimize(&summaryText);
+  C2D_DrawText(&summaryText, C2D_WithColor, 16.0f, 178.0f, 0.5f, 0.44f, 0.44f,
+               summaryColor);
 
-    C2D_Text guideText;
-    C2D_TextParse(&guideText, m_textBuf, "Select resolution option on bottom screen.");
-    C2D_TextOptimize(&guideText);
-    C2D_DrawText(&guideText, C2D_WithColor, 16.0f, 202.0f, 0.5f, 0.40f, 0.40f, CLR_TEXT_MUTED);
+  C2D_Text guideText;
+  C2D_TextParse(&guideText, m_textBuf,
+                "Select resolution option on bottom screen.");
+  C2D_TextOptimize(&guideText);
+  C2D_DrawText(&guideText, C2D_WithColor, 16.0f, 202.0f, 0.5f, 0.40f, 0.40f,
+               CLR_TEXT_MUTED);
 }
 
 void UIManager::renderConflictBottom() {
-    C2D_DrawRectSolid(8.0f, 6.0f, 0.5f, RomM3DS::SCREEN_BOTTOM_WIDTH - 16.0f, RomM3DS::SCREEN_BOTTOM_HEIGHT - 12.0f, CLR_CARD);
+  C2D_DrawRectSolid(8.0f, 6.0f, 0.5f, RomM3DS::SCREEN_BOTTOM_WIDTH - 16.0f,
+                    RomM3DS::SCREEN_BOTTOM_HEIGHT - 12.0f, CLR_CARD);
 
-    C2D_Text promptText;
-    std::string promptStr = m_batchSyncActive ? "Batch Sync Conflict Action:" : "Select Resolution Action:";
-    C2D_TextParse(&promptText, m_textBuf, promptStr.c_str());
-    C2D_TextOptimize(&promptText);
-    C2D_DrawText(&promptText, C2D_WithColor, 16.0f, 14.0f, 0.5f, 0.55f, 0.55f, CLR_TEXT_WHITE);
+  C2D_Text promptText;
+  std::string promptStr = m_batchSyncActive ? "Batch Sync Conflict Action:"
+                                            : "Select Resolution Action:";
+  C2D_TextParse(&promptText, m_textBuf, promptStr.c_str());
+  C2D_TextOptimize(&promptText);
+  C2D_DrawText(&promptText, C2D_WithColor, 16.0f, 14.0f, 0.5f, 0.55f, 0.55f,
+               CLR_TEXT_WHITE);
 
-    bool remoteIsNewer = false;
-    bool localIsNewer = false;
-    if (m_syncMgr && m_conflictGameIndex < m_syncMgr->getItems().size()) {
-        const auto& item = m_syncMgr->getItems()[m_conflictGameIndex];
-        time_t localTime = item.localTitle.saveTime;
-        time_t remoteTime = item.remoteSaveTime != 0 ? item.remoteSaveTime : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
-        remoteIsNewer = (remoteTime > 0 && (localTime == 0 || remoteTime > localTime + 5));
-        localIsNewer = (localTime > 0 && (remoteTime == 0 || localTime > remoteTime + 5));
-    }
+  bool remoteIsNewer = false;
+  bool localIsNewer = false;
+  if (m_syncMgr && m_conflictGameIndex < m_syncMgr->getItems().size()) {
+    const auto &item = m_syncMgr->getItems()[m_conflictGameIndex];
+    time_t localTime = item.localTitle.saveTime;
+    time_t remoteTime =
+        item.remoteSaveTime != 0
+            ? item.remoteSaveTime
+            : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
+    remoteIsNewer =
+        (remoteTime > 0 && (localTime == 0 || remoteTime > localTime + 5));
+    localIsNewer =
+        (localTime > 0 && (remoteTime == 0 || localTime > remoteTime + 5));
+  }
 
-    std::string btnLocal = remoteIsNewer ? "[ Download Save (Overwrite Local) * ]" : "[ Download Save (Overwrite Local) ]";
-    std::string btnRemote = localIsNewer ? "[ Upload Save (Use Local Save) * ]" : "[ Upload Save (Use Local Save) ]";
-    std::string btnSkip = m_batchSyncActive ? "[ Skip & Continue Batch Sync ]" : "[ Skip This Game ]";
+  std::string btnLocal = remoteIsNewer ? "[ Download Save (Overwrite Local) * ]"
+                                       : "[ Download Save (Overwrite Local) ]";
+  std::string btnRemote = localIsNewer ? "[ Upload Save (Use Local Save) * ]"
+                                       : "[ Upload Save (Use Local Save) ]";
+  std::string btnSkip = m_batchSyncActive ? "[ Skip & Continue Batch Sync ]"
+                                          : "[ Skip This Game ]";
 
-    drawButton(16.0f, 44.0f, 288.0f, 32.0f, btnLocal.c_str(), m_conflictChoiceIndex == 0);
-    drawButton(16.0f, 84.0f, 288.0f, 32.0f, btnRemote.c_str(), m_conflictChoiceIndex == 1);
-    drawButton(16.0f, 124.0f, 288.0f, 32.0f, btnSkip.c_str(), m_conflictChoiceIndex == 2);
+  drawButton(16.0f, 44.0f, 288.0f, 32.0f, btnLocal.c_str(),
+             m_conflictChoiceIndex == 0);
+  drawButton(16.0f, 84.0f, 288.0f, 32.0f, btnRemote.c_str(),
+             m_conflictChoiceIndex == 1);
+  drawButton(16.0f, 124.0f, 288.0f, 32.0f, btnSkip.c_str(),
+             m_conflictChoiceIndex == 2);
 
-    C2D_Text guideText;
-    C2D_TextParse(&guideText, m_textBuf, "Use D-Pad Up/Down + (A) or tap with stylus.");
-    C2D_TextOptimize(&guideText);
-    C2D_DrawText(&guideText, C2D_WithColor, 16.0f, 180.0f, 0.5f, 0.44f, 0.44f, CLR_TEXT_MUTED);
+  C2D_Text guideText;
+  C2D_TextParse(&guideText, m_textBuf,
+                "Use D-Pad Up/Down + (A) or tap with stylus.");
+  C2D_TextOptimize(&guideText);
+  C2D_DrawText(&guideText, C2D_WithColor, 16.0f, 180.0f, 0.5f, 0.44f, 0.44f,
+               CLR_TEXT_MUTED);
 }
 
 void UIManager::renderTopScreen() {
-    switch (m_state) {
-        case UIState::FIRST_LAUNCH:
-            renderFirstLaunchTop();
-            break;
-        case UIState::MAIN_MENU:
-            renderMainMenuTop();
-            break;
-        case UIState::MATCHING:
-            renderMatchingTop();
-            break;
-        case UIState::CONFLICT_PROMPT:
-            renderConflictTop();
-            break;
-        case UIState::SAVE_PICKER:
-            renderSavePickerTop();
-            break;
-        case UIState::FILTER_PICKER:
-            renderFilterPickerTop();
-            break;
-        case UIState::SORT_PICKER:
-            renderSortPickerTop();
-            break;
-    }
+  switch (m_state) {
+  case UIState::FIRST_LAUNCH:
+    renderFirstLaunchTop();
+    break;
+  case UIState::MAIN_MENU:
+    renderMainMenuTop();
+    break;
+  case UIState::MATCHING:
+    renderMatchingTop();
+    break;
+  case UIState::CONFLICT_PROMPT:
+    renderConflictTop();
+    break;
+  case UIState::SAVE_PICKER:
+    renderSavePickerTop();
+    break;
+  case UIState::FILTER_PICKER:
+    renderFilterPickerTop();
+    break;
+  case UIState::SORT_PICKER:
+    renderSortPickerTop();
+    break;
+  }
 }
 
 void UIManager::renderBottomScreen() {
-    switch (m_state) {
-        case UIState::FIRST_LAUNCH:
-            renderFirstLaunchBottom();
-            break;
-        case UIState::MAIN_MENU:
-            renderMainMenuBottom();
-            break;
-        case UIState::MATCHING:
-            renderMatchingBottom();
-            break;
-        case UIState::CONFLICT_PROMPT:
-            renderConflictBottom();
-            break;
-        case UIState::SAVE_PICKER:
-            renderSavePickerBottom();
-            break;
-        case UIState::FILTER_PICKER:
-            renderFilterPickerBottom();
-            break;
-        case UIState::SORT_PICKER:
-            renderSortPickerBottom();
-            break;
-    }
+  switch (m_state) {
+  case UIState::FIRST_LAUNCH:
+    renderFirstLaunchBottom();
+    break;
+  case UIState::MAIN_MENU:
+    renderMainMenuBottom();
+    break;
+  case UIState::MATCHING:
+    renderMatchingBottom();
+    break;
+  case UIState::CONFLICT_PROMPT:
+    renderConflictBottom();
+    break;
+  case UIState::SAVE_PICKER:
+    renderSavePickerBottom();
+    break;
+  case UIState::FILTER_PICKER:
+    renderFilterPickerBottom();
+    break;
+  case UIState::SORT_PICKER:
+    renderSortPickerBottom();
+    break;
+  }
 
-    if (m_showLogDialog) {
-        renderOperationLogOverlay();
-    } else if (!m_loadingMessage.empty()) {
-        drawLoadingOverlay(m_loadingMessage);
-    }
+  if (m_showLogDialog) {
+    renderOperationLogOverlay();
+  } else if (!m_loadingMessage.empty()) {
+    drawLoadingOverlay(m_loadingMessage);
+  }
 }
 
 void UIManager::render() {
-    C2D_TextBufClear(m_textBuf);
-    C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
+  C2D_TextBufClear(m_textBuf);
+  C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
 
-    C2D_TargetClear(m_topTarget, CLR_BG_TOP);
-    C2D_SceneBegin(m_topTarget);
-    renderTopScreen();
+  C2D_TargetClear(m_topTarget, CLR_BG_TOP);
+  C2D_SceneBegin(m_topTarget);
+  renderTopScreen();
 
-    C2D_TargetClear(m_bottomTarget, CLR_BG_BOTTOM);
-    C2D_SceneBegin(m_bottomTarget);
-    renderBottomScreen();
+  C2D_TargetClear(m_bottomTarget, CLR_BG_BOTTOM);
+  C2D_SceneBegin(m_bottomTarget);
+  renderBottomScreen();
 
-    C3D_FrameEnd(0);
+  C3D_FrameEnd(0);
 }
 
 void UIManager::openSavePicker() {
-    if (!m_syncMgr || m_filteredLocalIndices.empty()) return;
-    if (m_selectedGameIndex >= m_filteredLocalIndices.size()) return;
+  if (!m_syncMgr || m_filteredLocalIndices.empty())
+    return;
+  if (m_selectedGameIndex >= m_filteredLocalIndices.size())
+    return;
 
-    size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
-    const auto& item = m_syncMgr->getItems()[actualIdx];
+  size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
+  const auto &item = m_syncMgr->getItems()[actualIdx];
 
-    std::string startDir = "sdmc:/3ds";
-    if (!item.localTitle.savePath.empty()) {
-        size_t slash = item.localTitle.savePath.find_last_of("/\\");
-        if (slash != std::string::npos) {
-            startDir = item.localTitle.savePath.substr(0, slash);
-        }
-    } else if (item.localTitle.isFileRom && !item.localTitle.romPath.empty()) {
-        size_t slash = item.localTitle.romPath.find_last_of("/\\");
-        if (slash != std::string::npos) {
-            startDir = item.localTitle.romPath.substr(0, slash);
-        }
+  std::string startDir = "sdmc:/3ds";
+  if (!item.localTitle.savePath.empty()) {
+    size_t slash = item.localTitle.savePath.find_last_of("/\\");
+    if (slash != std::string::npos) {
+      startDir = item.localTitle.savePath.substr(0, slash);
     }
+  } else if (item.localTitle.isFileRom && !item.localTitle.romPath.empty()) {
+    size_t slash = item.localTitle.romPath.find_last_of("/\\");
+    if (slash != std::string::npos) {
+      startDir = item.localTitle.romPath.substr(0, slash);
+    }
+  }
 
-    struct stat st;
+  struct stat st;
+  if (stat(startDir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
+    startDir = "sdmc:/3ds";
     if (stat(startDir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
-        startDir = "sdmc:/3ds";
-        if (stat(startDir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
-            startDir = "sdmc:/";
-        }
+      startDir = "sdmc:/";
     }
+  }
 
-    loadBrowserDirectory(startDir);
+  loadBrowserDirectory(startDir);
 
-    if (!item.localTitle.savePath.empty()) {
-        size_t slash = item.localTitle.savePath.find_last_of("/\\");
-        std::string fileName = (slash != std::string::npos) ? item.localTitle.savePath.substr(slash + 1) : item.localTitle.savePath;
-        for (size_t i = 0; i < m_browserEntries.size(); ++i) {
-            if (m_browserEntries[i].name == fileName) {
-                m_browserSelectedIndex = i;
-                break;
-            }
-        }
+  if (!item.localTitle.savePath.empty()) {
+    size_t slash = item.localTitle.savePath.find_last_of("/\\");
+    std::string fileName = (slash != std::string::npos)
+                               ? item.localTitle.savePath.substr(slash + 1)
+                               : item.localTitle.savePath;
+    for (size_t i = 0; i < m_browserEntries.size(); ++i) {
+      if (m_browserEntries[i].name == fileName) {
+        m_browserSelectedIndex = i;
+        break;
+      }
     }
+  }
 
-    m_state = UIState::SAVE_PICKER;
+  m_state = UIState::SAVE_PICKER;
 }
 
-void UIManager::loadBrowserDirectory(const std::string& dir) {
-    m_browserCurrentDir = dir;
-    if (m_browserCurrentDir.empty()) m_browserCurrentDir = "sdmc:/";
-    if (m_browserCurrentDir.back() != '/') m_browserCurrentDir += '/';
+void UIManager::loadBrowserDirectory(const std::string &dir) {
+  m_browserCurrentDir = dir;
+  if (m_browserCurrentDir.empty())
+    m_browserCurrentDir = "sdmc:/";
+  if (m_browserCurrentDir.back() != '/')
+    m_browserCurrentDir += '/';
 
-    m_browserEntries.clear();
-    m_browserSelectedIndex = 0;
+  m_browserEntries.clear();
+  m_browserSelectedIndex = 0;
 
-    if (m_browserCurrentDir != "sdmc:/" && m_browserCurrentDir != "/") {
-        FileEntry parent;
-        parent.name = "..";
-        parent.isDir = true;
-        m_browserEntries.push_back(parent);
+  if (m_browserCurrentDir != "sdmc:/" && m_browserCurrentDir != "/") {
+    FileEntry parent;
+    parent.name = "..";
+    parent.isDir = true;
+    m_browserEntries.push_back(parent);
+  }
+
+  DIR *d = opendir(m_browserCurrentDir.c_str());
+  if (d) {
+    struct dirent *entry = nullptr;
+    std::vector<FileEntry> dirs;
+    std::vector<FileEntry> files;
+
+    while ((entry = readdir(d)) != nullptr) {
+      const char *name = entry->d_name;
+      if (!name || name[0] == '\0')
+        continue;
+      if (std::strcmp(name, ".") == 0 || std::strcmp(name, "..") == 0)
+        continue;
+      if (name[0] == '.')
+        continue;
+
+      std::string full = m_browserCurrentDir + name;
+      struct stat st;
+      if (stat(full.c_str(), &st) != 0)
+        continue;
+
+      FileEntry fe;
+      fe.name = name;
+      fe.isDir = S_ISDIR(st.st_mode);
+      fe.size = st.st_size;
+      fe.mtime = st.st_mtime;
+
+      if (fe.isDir) {
+        dirs.push_back(fe);
+      } else {
+        files.push_back(fe);
+      }
     }
+    closedir(d);
 
-    DIR* d = opendir(m_browserCurrentDir.c_str());
-    if (d) {
-        struct dirent* entry = nullptr;
-        std::vector<FileEntry> dirs;
-        std::vector<FileEntry> files;
+    std::sort(
+        dirs.begin(), dirs.end(),
+        [](const FileEntry &a, const FileEntry &b) { return a.name < b.name; });
 
-        while ((entry = readdir(d)) != nullptr) {
-            const char* name = entry->d_name;
-            if (!name || name[0] == '\0') continue;
-            if (std::strcmp(name, ".") == 0 || std::strcmp(name, "..") == 0) continue;
-            if (name[0] == '.') continue;
+    auto isSaveExt = [](const std::string &n) {
+      size_t dot = n.find_last_of('.');
+      if (dot == std::string::npos)
+        return false;
+      std::string ext = n.substr(dot);
+      for (char &c : ext)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      return (ext == ".sav" || ext == ".srm" || ext == ".dsv");
+    };
 
-            std::string full = m_browserCurrentDir + name;
-            struct stat st;
-            if (stat(full.c_str(), &st) != 0) continue;
+    std::sort(files.begin(), files.end(),
+              [&](const FileEntry &a, const FileEntry &b) {
+                bool aSave = isSaveExt(a.name);
+                bool bSave = isSaveExt(b.name);
+                if (aSave != bSave)
+                  return aSave > bSave;
+                return a.name < b.name;
+              });
 
-            FileEntry fe;
-            fe.name = name;
-            fe.isDir = S_ISDIR(st.st_mode);
-            fe.size = st.st_size;
-            fe.mtime = st.st_mtime;
-
-            if (fe.isDir) {
-                dirs.push_back(fe);
-            } else {
-                files.push_back(fe);
-            }
-        }
-        closedir(d);
-
-        std::sort(dirs.begin(), dirs.end(), [](const FileEntry& a, const FileEntry& b) {
-            return a.name < b.name;
-        });
-
-        auto isSaveExt = [](const std::string& n) {
-            size_t dot = n.find_last_of('.');
-            if (dot == std::string::npos) return false;
-            std::string ext = n.substr(dot);
-            for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            return (ext == ".sav" || ext == ".srm" || ext == ".dsv");
-        };
-
-        std::sort(files.begin(), files.end(), [&](const FileEntry& a, const FileEntry& b) {
-            bool aSave = isSaveExt(a.name);
-            bool bSave = isSaveExt(b.name);
-            if (aSave != bSave) return aSave > bSave;
-            return a.name < b.name;
-        });
-
-        for (const auto& de : dirs) m_browserEntries.push_back(de);
-        for (const auto& fe : files) m_browserEntries.push_back(fe);
-    }
+    for (const auto &de : dirs)
+      m_browserEntries.push_back(de);
+    for (const auto &fe : files)
+      m_browserEntries.push_back(fe);
+  }
 }
 
-void UIManager::applyCustomSavePath(const std::string& path) {
-    if (!m_syncMgr || m_filteredLocalIndices.empty()) return;
-    if (m_selectedGameIndex >= m_filteredLocalIndices.size()) return;
+void UIManager::applyCustomSavePath(const std::string &path) {
+  if (!m_syncMgr || m_filteredLocalIndices.empty())
+    return;
+  if (m_selectedGameIndex >= m_filteredLocalIndices.size())
+    return;
 
-    size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
-    m_syncMgr->setCustomSavePath(actualIdx, path);
-    m_statusMessage = m_syncMgr->getLastMessage();
-    updateLocalFilteredList();
-    m_state = UIState::MAIN_MENU;
+  size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
+  m_syncMgr->setCustomSavePath(actualIdx, path);
+  m_statusMessage = m_syncMgr->getLastMessage();
+  updateLocalFilteredList();
+  m_state = UIState::MAIN_MENU;
 }
 
-void UIManager::handleSavePickerInput(u32 kDown, const touchPosition& touch) {
-    size_t total = m_browserEntries.size();
+void UIManager::handleSavePickerInput(u32 kDown, const touchPosition &touch) {
+  size_t total = m_browserEntries.size();
 
-    if (total > 0) {
-        if (kDown & KEY_UP) {
-            m_browserSelectedIndex = (m_browserSelectedIndex > 0) ? (m_browserSelectedIndex - 1) : (total - 1);
-        } else if (kDown & KEY_DOWN) {
-            m_browserSelectedIndex = (m_browserSelectedIndex + 1 < total) ? (m_browserSelectedIndex + 1) : 0;
-        } else if (kDown & KEY_LEFT) {
-            m_browserSelectedIndex = (m_browserSelectedIndex >= 5) ? (m_browserSelectedIndex - 5) : 0;
-        } else if (kDown & KEY_RIGHT) {
-            m_browserSelectedIndex = (m_browserSelectedIndex + 5 < total) ? (m_browserSelectedIndex + 5) : (total - 1);
-        }
+  if (total > 0) {
+    if (kDown & KEY_UP) {
+      m_browserSelectedIndex = (m_browserSelectedIndex > 0)
+                                   ? (m_browserSelectedIndex - 1)
+                                   : (total - 1);
+    } else if (kDown & KEY_DOWN) {
+      m_browserSelectedIndex = (m_browserSelectedIndex + 1 < total)
+                                   ? (m_browserSelectedIndex + 1)
+                                   : 0;
+    } else if (kDown & KEY_LEFT) {
+      m_browserSelectedIndex =
+          (m_browserSelectedIndex >= 5) ? (m_browserSelectedIndex - 5) : 0;
+    } else if (kDown & KEY_RIGHT) {
+      m_browserSelectedIndex = (m_browserSelectedIndex + 5 < total)
+                                   ? (m_browserSelectedIndex + 5)
+                                   : (total - 1);
     }
+  }
 
-    if (kDown & KEY_A) {
-        if (total > 0 && m_browserSelectedIndex < total) {
-            const auto& fe = m_browserEntries[m_browserSelectedIndex];
-            if (fe.name == "..") {
-                std::string cur = m_browserCurrentDir;
-                while (!cur.empty() && cur.back() == '/') cur.pop_back();
-                size_t slash = cur.find_last_of("/\\");
-                if (slash != std::string::npos) {
-                    std::string parent = cur.substr(0, slash + 1);
-                    if (parent.empty() || parent == "sdmc:" || parent == "sdmc") parent = "sdmc:/";
-                    loadBrowserDirectory(parent);
-                } else {
-                    loadBrowserDirectory("sdmc:/");
-                }
-            } else if (fe.isDir) {
-                std::string next = m_browserCurrentDir;
-                if (!next.empty() && next.back() != '/') next += '/';
-                next += fe.name;
-                loadBrowserDirectory(next);
-            } else {
-                std::string fullPath = m_browserCurrentDir;
-                if (!fullPath.empty() && fullPath.back() != '/') fullPath += '/';
-                fullPath += fe.name;
-                applyCustomSavePath(fullPath);
-            }
-        }
-    } else if (kDown & KEY_X) {
-        std::string initText = m_browserCurrentDir;
-        if (!m_filteredLocalIndices.empty() && m_selectedGameIndex < m_filteredLocalIndices.size()) {
-            size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
-            const auto& item = m_syncMgr->getItems()[actualIdx];
-            if (!item.localTitle.savePath.empty()) {
-                initText = item.localTitle.savePath;
-            }
-        }
-        std::string entered = launchKeyboard("Enter save path on SD (sdmc:/...)", initText, 256);
-        if (!entered.empty() && entered != initText) {
-            if (entered.rfind("sdmc:", 0) != 0 && entered.rfind("/", 0) == 0) {
-                entered = "sdmc:" + entered;
-            } else if (entered.rfind("sdmc:", 0) != 0) {
-                entered = "sdmc:/" + entered;
-            }
-            applyCustomSavePath(entered);
-        }
-    } else if (kDown & KEY_Y) {
-        applyCustomSavePath("");
-    } else if (kDown & KEY_B) {
-        m_state = UIState::MAIN_MENU;
-    }
-
-    if (kDown & KEY_TOUCH) {
-        if (isTouchInside(touch, 8.0f, 206.0f, 72.0f, 26.0f)) {
-            if (total > 0 && m_browserSelectedIndex < total) {
-                const auto& fe = m_browserEntries[m_browserSelectedIndex];
-                if (fe.name == "..") {
-                    std::string cur = m_browserCurrentDir;
-                    while (!cur.empty() && cur.back() == '/') cur.pop_back();
-                    size_t slash = cur.find_last_of("/\\");
-                    if (slash != std::string::npos) {
-                        std::string parent = cur.substr(0, slash + 1);
-                        if (parent.empty() || parent == "sdmc:" || parent == "sdmc") parent = "sdmc:/";
-                        loadBrowserDirectory(parent);
-                    } else {
-                        loadBrowserDirectory("sdmc:/");
-                    }
-                } else if (fe.isDir) {
-                    std::string next = m_browserCurrentDir;
-                    if (!next.empty() && next.back() != '/') next += '/';
-                    next += fe.name;
-                    loadBrowserDirectory(next);
-                } else {
-                    std::string fullPath = m_browserCurrentDir;
-                    if (!fullPath.empty() && fullPath.back() != '/') fullPath += '/';
-                    fullPath += fe.name;
-                    applyCustomSavePath(fullPath);
-                }
-            }
-        } else if (isTouchInside(touch, 84.0f, 206.0f, 82.0f, 26.0f)) {
-            std::string initText = m_browserCurrentDir;
-            if (!m_filteredLocalIndices.empty() && m_selectedGameIndex < m_filteredLocalIndices.size()) {
-                size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
-                const auto& item = m_syncMgr->getItems()[actualIdx];
-                if (!item.localTitle.savePath.empty()) {
-                    initText = item.localTitle.savePath;
-                }
-            }
-            std::string entered = launchKeyboard("Enter save path on SD (sdmc:/...)", initText, 256);
-            if (!entered.empty() && entered != initText) {
-                if (entered.rfind("sdmc:", 0) != 0 && entered.rfind("/", 0) == 0) {
-                    entered = "sdmc:" + entered;
-                } else if (entered.rfind("sdmc:", 0) != 0) {
-                    entered = "sdmc:/" + entered;
-                }
-                applyCustomSavePath(entered);
-            }
-        } else if (isTouchInside(touch, 170.0f, 206.0f, 68.0f, 26.0f)) {
-            applyCustomSavePath("");
-        } else if (isTouchInside(touch, 242.0f, 206.0f, 70.0f, 26.0f)) {
-            m_state = UIState::MAIN_MENU;
+  if (kDown & KEY_A) {
+    if (total > 0 && m_browserSelectedIndex < total) {
+      const auto &fe = m_browserEntries[m_browserSelectedIndex];
+      if (fe.name == "..") {
+        std::string cur = m_browserCurrentDir;
+        while (!cur.empty() && cur.back() == '/')
+          cur.pop_back();
+        size_t slash = cur.find_last_of("/\\");
+        if (slash != std::string::npos) {
+          std::string parent = cur.substr(0, slash + 1);
+          if (parent.empty() || parent == "sdmc:" || parent == "sdmc")
+            parent = "sdmc:/";
+          loadBrowserDirectory(parent);
         } else {
-            size_t pageOffset = (m_browserSelectedIndex / 5) * 5;
-            for (size_t i = 0; i < 5 && (pageOffset + i) < total; ++i) {
-                float rowY = 32.0f + static_cast<float>(i * 34.0f);
-                if (isTouchInside(touch, 8.0f, rowY, RomM3DS::SCREEN_BOTTOM_WIDTH - 16.0f, 32.0f)) {
-                    size_t target = pageOffset + i;
-                    if (m_browserSelectedIndex == target) {
-                        const auto& fe = m_browserEntries[target];
-                        if (fe.name == "..") {
-                            std::string cur = m_browserCurrentDir;
-                            while (!cur.empty() && cur.back() == '/') cur.pop_back();
-                            size_t slash = cur.find_last_of("/\\");
-                            if (slash != std::string::npos) {
-                                std::string parent = cur.substr(0, slash + 1);
-                                if (parent.empty() || parent == "sdmc:" || parent == "sdmc") parent = "sdmc:/";
-                                loadBrowserDirectory(parent);
-                            } else {
-                                loadBrowserDirectory("sdmc:/");
-                            }
-                        } else if (fe.isDir) {
-                            std::string next = m_browserCurrentDir;
-                            if (!next.empty() && next.back() != '/') next += '/';
-                            next += fe.name;
-                            loadBrowserDirectory(next);
-                        } else {
-                            std::string fullPath = m_browserCurrentDir;
-                            if (!fullPath.empty() && fullPath.back() != '/') fullPath += '/';
-                            fullPath += fe.name;
-                            applyCustomSavePath(fullPath);
-                        }
-                    } else {
-                        m_browserSelectedIndex = target;
-                    }
-                    break;
-                }
-            }
+          loadBrowserDirectory("sdmc:/");
         }
+      } else if (fe.isDir) {
+        std::string next = m_browserCurrentDir;
+        if (!next.empty() && next.back() != '/')
+          next += '/';
+        next += fe.name;
+        loadBrowserDirectory(next);
+      } else {
+        std::string fullPath = m_browserCurrentDir;
+        if (!fullPath.empty() && fullPath.back() != '/')
+          fullPath += '/';
+        fullPath += fe.name;
+        applyCustomSavePath(fullPath);
+      }
     }
+  } else if (kDown & KEY_X) {
+    std::string initText = m_browserCurrentDir;
+    if (!m_filteredLocalIndices.empty() &&
+        m_selectedGameIndex < m_filteredLocalIndices.size()) {
+      size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
+      const auto &item = m_syncMgr->getItems()[actualIdx];
+      if (!item.localTitle.savePath.empty()) {
+        initText = item.localTitle.savePath;
+      }
+    }
+    std::string entered =
+        launchKeyboard("Enter save path on SD (sdmc:/...)", initText, 256);
+    if (!entered.empty() && entered != initText) {
+      if (entered.rfind("sdmc:", 0) != 0 && entered.rfind("/", 0) == 0) {
+        entered = "sdmc:" + entered;
+      } else if (entered.rfind("sdmc:", 0) != 0) {
+        entered = "sdmc:/" + entered;
+      }
+      applyCustomSavePath(entered);
+    }
+  } else if (kDown & KEY_Y) {
+    applyCustomSavePath("");
+  } else if (kDown & KEY_B) {
+    m_state = UIState::MAIN_MENU;
+  }
+
+  if (kDown & KEY_TOUCH) {
+    if (isTouchInside(touch, 8.0f, 206.0f, 72.0f, 26.0f)) {
+      if (total > 0 && m_browserSelectedIndex < total) {
+        const auto &fe = m_browserEntries[m_browserSelectedIndex];
+        if (fe.name == "..") {
+          std::string cur = m_browserCurrentDir;
+          while (!cur.empty() && cur.back() == '/')
+            cur.pop_back();
+          size_t slash = cur.find_last_of("/\\");
+          if (slash != std::string::npos) {
+            std::string parent = cur.substr(0, slash + 1);
+            if (parent.empty() || parent == "sdmc:" || parent == "sdmc")
+              parent = "sdmc:/";
+            loadBrowserDirectory(parent);
+          } else {
+            loadBrowserDirectory("sdmc:/");
+          }
+        } else if (fe.isDir) {
+          std::string next = m_browserCurrentDir;
+          if (!next.empty() && next.back() != '/')
+            next += '/';
+          next += fe.name;
+          loadBrowserDirectory(next);
+        } else {
+          std::string fullPath = m_browserCurrentDir;
+          if (!fullPath.empty() && fullPath.back() != '/')
+            fullPath += '/';
+          fullPath += fe.name;
+          applyCustomSavePath(fullPath);
+        }
+      }
+    } else if (isTouchInside(touch, 84.0f, 206.0f, 82.0f, 26.0f)) {
+      std::string initText = m_browserCurrentDir;
+      if (!m_filteredLocalIndices.empty() &&
+          m_selectedGameIndex < m_filteredLocalIndices.size()) {
+        size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
+        const auto &item = m_syncMgr->getItems()[actualIdx];
+        if (!item.localTitle.savePath.empty()) {
+          initText = item.localTitle.savePath;
+        }
+      }
+      std::string entered =
+          launchKeyboard("Enter save path on SD (sdmc:/...)", initText, 256);
+      if (!entered.empty() && entered != initText) {
+        if (entered.rfind("sdmc:", 0) != 0 && entered.rfind("/", 0) == 0) {
+          entered = "sdmc:" + entered;
+        } else if (entered.rfind("sdmc:", 0) != 0) {
+          entered = "sdmc:/" + entered;
+        }
+        applyCustomSavePath(entered);
+      }
+    } else if (isTouchInside(touch, 170.0f, 206.0f, 68.0f, 26.0f)) {
+      applyCustomSavePath("");
+    } else if (isTouchInside(touch, 242.0f, 206.0f, 70.0f, 26.0f)) {
+      m_state = UIState::MAIN_MENU;
+    } else {
+      size_t pageOffset = (m_browserSelectedIndex / 5) * 5;
+      for (size_t i = 0; i < 5 && (pageOffset + i) < total; ++i) {
+        float rowY = 32.0f + static_cast<float>(i * 34.0f);
+        if (isTouchInside(touch, 8.0f, rowY,
+                          RomM3DS::SCREEN_BOTTOM_WIDTH - 16.0f, 32.0f)) {
+          size_t target = pageOffset + i;
+          if (m_browserSelectedIndex == target) {
+            const auto &fe = m_browserEntries[target];
+            if (fe.name == "..") {
+              std::string cur = m_browserCurrentDir;
+              while (!cur.empty() && cur.back() == '/')
+                cur.pop_back();
+              size_t slash = cur.find_last_of("/\\");
+              if (slash != std::string::npos) {
+                std::string parent = cur.substr(0, slash + 1);
+                if (parent.empty() || parent == "sdmc:" || parent == "sdmc")
+                  parent = "sdmc:/";
+                loadBrowserDirectory(parent);
+              } else {
+                loadBrowserDirectory("sdmc:/");
+              }
+            } else if (fe.isDir) {
+              std::string next = m_browserCurrentDir;
+              if (!next.empty() && next.back() != '/')
+                next += '/';
+              next += fe.name;
+              loadBrowserDirectory(next);
+            } else {
+              std::string fullPath = m_browserCurrentDir;
+              if (!fullPath.empty() && fullPath.back() != '/')
+                fullPath += '/';
+              fullPath += fe.name;
+              applyCustomSavePath(fullPath);
+            }
+          } else {
+            m_browserSelectedIndex = target;
+          }
+          break;
+        }
+      }
+    }
+  }
 }
 
 void UIManager::renderSavePickerTop() {
-    C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, RomM3DS::SCREEN_TOP_HEIGHT, CLR_BG_TOP);
+  C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH,
+                    RomM3DS::SCREEN_TOP_HEIGHT, CLR_BG_TOP);
 
-    C2D_DrawRectSolid(8.0f, 6.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH - 16.0f, 110.0f, CLR_CARD);
+  C2D_DrawRectSolid(8.0f, 6.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH - 16.0f, 110.0f,
+                    CLR_CARD);
 
-    C2D_Text titleText;
-    C2D_TextParse(&titleText, m_textBuf, "Set Custom Save Location");
-    C2D_TextOptimize(&titleText);
-    C2D_DrawText(&titleText, C2D_WithColor, 16.0f, 12.0f, 0.5f, 0.55f, 0.55f, CLR_ACCENT);
+  C2D_Text titleText;
+  C2D_TextParse(&titleText, m_textBuf, "Set Custom Save Location");
+  C2D_TextOptimize(&titleText);
+  C2D_DrawText(&titleText, C2D_WithColor, 16.0f, 12.0f, 0.5f, 0.55f, 0.55f,
+               CLR_ACCENT);
 
-    std::string gameName = "Unknown Title";
-    std::string curSavePath = "(None / Auto-detect)";
-    bool hasSave = false;
+  std::string gameName = "Unknown Title";
+  std::string curSavePath = "(None / Auto-detect)";
+  bool hasSave = false;
 
-    if (m_syncMgr && !m_filteredLocalIndices.empty() && m_selectedGameIndex < m_filteredLocalIndices.size()) {
-        size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
-        const auto& item = m_syncMgr->getItems()[actualIdx];
-        gameName = item.localTitle.name;
-        if (!item.localTitle.savePath.empty()) {
-            curSavePath = item.localTitle.savePath;
-        }
-        hasSave = item.localTitle.hasSave;
+  if (m_syncMgr && !m_filteredLocalIndices.empty() &&
+      m_selectedGameIndex < m_filteredLocalIndices.size()) {
+    size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
+    const auto &item = m_syncMgr->getItems()[actualIdx];
+    gameName = item.localTitle.name;
+    if (!item.localTitle.savePath.empty()) {
+      curSavePath = item.localTitle.savePath;
     }
+    hasSave = item.localTitle.hasSave;
+  }
 
-    C2D_Text nameText;
-    C2D_TextParse(&nameText, m_textBuf, gameName.c_str());
-    C2D_TextOptimize(&nameText);
-    float nScale = 0.52f;
-    float nW = 0.0f, nH = 0.0f;
-    C2D_TextGetDimensions(&nameText, nScale, nScale, &nW, &nH);
-    if (nW > 360.0f && nW > 0.0f) nScale *= (360.0f / nW);
-    C2D_DrawText(&nameText, C2D_WithColor, 16.0f, 36.0f, 0.5f, nScale, nScale, CLR_TEXT_WHITE);
+  C2D_Text nameText;
+  C2D_TextParse(&nameText, m_textBuf, gameName.c_str());
+  C2D_TextOptimize(&nameText);
+  float nScale = 0.52f;
+  float nW = 0.0f, nH = 0.0f;
+  C2D_TextGetDimensions(&nameText, nScale, nScale, &nW, &nH);
+  if (nW > 360.0f && nW > 0.0f)
+    nScale *= (360.0f / nW);
+  C2D_DrawText(&nameText, C2D_WithColor, 16.0f, 36.0f, 0.5f, nScale, nScale,
+               CLR_TEXT_WHITE);
 
-    std::string pathLine = "Active Path: " + curSavePath;
-    C2D_Text pathText;
-    C2D_TextParse(&pathText, m_textBuf, pathLine.c_str());
-    C2D_TextOptimize(&pathText);
-    float pScale = 0.40f;
-    float pW = 0.0f, pH = 0.0f;
-    C2D_TextGetDimensions(&pathText, pScale, pScale, &pW, &pH);
-    if (pW > 360.0f && pW > 0.0f) pScale *= (360.0f / pW);
-    C2D_DrawText(&pathText, C2D_WithColor, 16.0f, 62.0f, 0.5f, pScale, pScale, CLR_TEXT_MUTED);
+  std::string pathLine = "Active Path: " + curSavePath;
+  C2D_Text pathText;
+  C2D_TextParse(&pathText, m_textBuf, pathLine.c_str());
+  C2D_TextOptimize(&pathText);
+  float pScale = 0.40f;
+  float pW = 0.0f, pH = 0.0f;
+  C2D_TextGetDimensions(&pathText, pScale, pScale, &pW, &pH);
+  if (pW > 360.0f && pW > 0.0f)
+    pScale *= (360.0f / pW);
+  C2D_DrawText(&pathText, C2D_WithColor, 16.0f, 62.0f, 0.5f, pScale, pScale,
+               CLR_TEXT_MUTED);
 
-    std::string statusLine = hasSave ? "Save file verified on SD (Ready for sync)" : "No save file found at active path";
-    u32 statusColor = hasSave ? CLR_GREEN : CLR_YELLOW;
-    C2D_Text stText;
-    C2D_TextParse(&stText, m_textBuf, statusLine.c_str());
-    C2D_TextOptimize(&stText);
-    C2D_DrawText(&stText, C2D_WithColor, 16.0f, 84.0f, 0.5f, 0.42f, 0.42f, statusColor);
+  std::string statusLine = hasSave ? "Save file verified on SD (Ready for sync)"
+                                   : "No save file found at active path";
+  u32 statusColor = hasSave ? CLR_GREEN : CLR_YELLOW;
+  C2D_Text stText;
+  C2D_TextParse(&stText, m_textBuf, statusLine.c_str());
+  C2D_TextOptimize(&stText);
+  C2D_DrawText(&stText, C2D_WithColor, 16.0f, 84.0f, 0.5f, 0.42f, 0.42f,
+               statusColor);
 
-    C2D_DrawRectSolid(8.0f, 122.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH - 16.0f, 110.0f, CLR_CARD);
+  C2D_DrawRectSolid(8.0f, 122.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH - 16.0f,
+                    110.0f, CLR_CARD);
 
-    std::string inst = "Instructions:\n"
-                       "  (A) Select highlighted .sav file, or open folder\n"
-                       "  (X) Manual keyboard entry (enter exact SD path)\n"
-                       "  (Y) Reset / Clear custom override (use auto-detect)\n"
-                       "  (B) Cancel and return to library\n"
-                       "  D-Pad Up/Down to browse, Left/Right for page jumps";
-    C2D_Text instText;
-    C2D_TextParse(&instText, m_textBuf, inst.c_str());
-    C2D_TextOptimize(&instText);
-    C2D_DrawText(&instText, C2D_WithColor, 16.0f, 130.0f, 0.5f, 0.40f, 0.40f, CLR_TEXT_WHITE);
+  std::string inst = "Instructions:\n"
+                     "  (A) Select highlighted .sav file, or open folder\n"
+                     "  (X) Manual keyboard entry (enter exact SD path)\n"
+                     "  (Y) Reset / Clear custom override (use auto-detect)\n"
+                     "  (B) Cancel and return to library\n"
+                     "  D-Pad Up/Down to browse, Left/Right for page jumps";
+  C2D_Text instText;
+  C2D_TextParse(&instText, m_textBuf, inst.c_str());
+  C2D_TextOptimize(&instText);
+  C2D_DrawText(&instText, C2D_WithColor, 16.0f, 130.0f, 0.5f, 0.40f, 0.40f,
+               CLR_TEXT_WHITE);
 }
 
 void UIManager::renderSavePickerBottom() {
-    C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_BOTTOM_WIDTH, RomM3DS::SCREEN_BOTTOM_HEIGHT, CLR_BG_BOTTOM);
+  C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_BOTTOM_WIDTH,
+                    RomM3DS::SCREEN_BOTTOM_HEIGHT, CLR_BG_BOTTOM);
 
-    C2D_DrawRectSolid(8.0f, 6.0f, 0.5f, RomM3DS::SCREEN_BOTTOM_WIDTH - 16.0f, 22.0f, CLR_CARD);
+  C2D_DrawRectSolid(8.0f, 6.0f, 0.5f, RomM3DS::SCREEN_BOTTOM_WIDTH - 16.0f,
+                    22.0f, CLR_CARD);
 
-    std::string dirLabel = "Folder: " + m_browserCurrentDir;
-    C2D_Text dirText;
-    C2D_TextParse(&dirText, m_textBuf, dirLabel.c_str());
-    C2D_TextOptimize(&dirText);
-    float dScale = 0.38f;
-    float dW = 0.0f, dH = 0.0f;
-    C2D_TextGetDimensions(&dirText, dScale, dScale, &dW, &dH);
-    if (dW > 290.0f && dW > 0.0f) dScale *= (290.0f / dW);
-    C2D_DrawText(&dirText, C2D_WithColor, 14.0f, 10.0f, 0.5f, dScale, dScale, CLR_ACCENT);
+  std::string dirLabel = "Folder: " + m_browserCurrentDir;
+  C2D_Text dirText;
+  C2D_TextParse(&dirText, m_textBuf, dirLabel.c_str());
+  C2D_TextOptimize(&dirText);
+  float dScale = 0.38f;
+  float dW = 0.0f, dH = 0.0f;
+  C2D_TextGetDimensions(&dirText, dScale, dScale, &dW, &dH);
+  if (dW > 290.0f && dW > 0.0f)
+    dScale *= (290.0f / dW);
+  C2D_DrawText(&dirText, C2D_WithColor, 14.0f, 10.0f, 0.5f, dScale, dScale,
+               CLR_ACCENT);
 
-    size_t total = m_browserEntries.size();
-    if (total == 0) {
-        C2D_Text emptyText;
-        C2D_TextParse(&emptyText, m_textBuf, "(Directory is empty)");
-        C2D_TextOptimize(&emptyText);
-        C2D_DrawText(&emptyText, C2D_WithColor, 16.0f, 60.0f, 0.5f, 0.44f, 0.44f, CLR_TEXT_MUTED);
+  size_t total = m_browserEntries.size();
+  if (total == 0) {
+    C2D_Text emptyText;
+    C2D_TextParse(&emptyText, m_textBuf, "(Directory is empty)");
+    C2D_TextOptimize(&emptyText);
+    C2D_DrawText(&emptyText, C2D_WithColor, 16.0f, 60.0f, 0.5f, 0.44f, 0.44f,
+                 CLR_TEXT_MUTED);
+  } else {
+    size_t pageOffset = (m_browserSelectedIndex / 5) * 5;
+    for (size_t i = 0; i < 5 && (pageOffset + i) < total; ++i) {
+      size_t idx = pageOffset + i;
+      const auto &fe = m_browserEntries[idx];
+      bool selected = (idx == m_browserSelectedIndex);
+      float y = 32.0f + static_cast<float>(i * 34.0f);
+
+      u32 rowBg = selected ? CLR_HEADER : CLR_INPUT_BG;
+      u32 borderColor = selected ? CLR_ACCENT : CLR_BORDER_OFF;
+      C2D_DrawRectSolid(8.0f, y, 0.5f, RomM3DS::SCREEN_BOTTOM_WIDTH - 16.0f,
+                        30.0f, borderColor);
+      C2D_DrawRectSolid(9.5f, y + 1.5f, 0.5f,
+                        RomM3DS::SCREEN_BOTTOM_WIDTH - 19.0f, 27.0f, rowBg);
+
+      std::string prefix = fe.isDir ? "[DIR] " : "      ";
+      auto isSaveExt = [](const std::string &n) {
+        size_t dot = n.find_last_of('.');
+        if (dot == std::string::npos)
+          return false;
+        std::string ext = n.substr(dot);
+        for (char &c : ext)
+          c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return (ext == ".sav" || ext == ".srm" || ext == ".dsv");
+      };
+      if (!fe.isDir && isSaveExt(fe.name)) {
+        prefix = "[SAV] ";
+      }
+
+      u32 nameColor = fe.isDir
+                          ? CLR_YELLOW
+                          : (isSaveExt(fe.name) ? CLR_GREEN : CLR_TEXT_WHITE);
+      std::string rowLabel = prefix + fe.name;
+
+      C2D_Text rowText;
+      C2D_TextParse(&rowText, m_textBuf, rowLabel.c_str());
+      C2D_TextOptimize(&rowText);
+      float rScale = 0.42f;
+      float rW = 0.0f, rH = 0.0f;
+      C2D_TextGetDimensions(&rowText, rScale, rScale, &rW, &rH);
+      float maxNameW = fe.isDir ? 280.0f : 210.0f;
+      if (rW > maxNameW && rW > 0.0f)
+        rScale *= (maxNameW / rW);
+      C2D_DrawText(&rowText, C2D_WithColor, 14.0f, y + 6.0f, 0.5f, rScale,
+                   rScale, nameColor);
+
+      if (!fe.isDir) {
+        std::string sizeStr;
+        if (fe.size < 1024)
+          sizeStr = std::to_string(fe.size) + " B";
+        else if (fe.size < 1024 * 1024)
+          sizeStr = std::to_string(fe.size / 1024) + " KB";
+        else
+          sizeStr = std::to_string(fe.size / (1024 * 1024)) + " MB";
+
+        C2D_Text sizeText;
+        C2D_TextParse(&sizeText, m_textBuf, sizeStr.c_str());
+        C2D_TextOptimize(&sizeText);
+        float sW = 0.0f, sH = 0.0f;
+        C2D_TextGetDimensions(&sizeText, 0.38f, 0.38f, &sW, &sH);
+        C2D_DrawText(&sizeText, C2D_WithColor,
+                     RomM3DS::SCREEN_BOTTOM_WIDTH - 16.0f - sW, y + 7.0f, 0.5f,
+                     0.38f, 0.38f, CLR_TEXT_MUTED);
+      }
+    }
+  }
+
+  drawButton(8.0f, 206.0f, 72.0f, 26.0f, "[ Select ]", false);
+  drawButton(84.0f, 206.0f, 82.0f, 26.0f, "[ Keyboard ]", false);
+  drawButton(170.0f, 206.0f, 68.0f, 26.0f, "[ Reset ]", false);
+  drawButton(242.0f, 206.0f, 70.0f, 26.0f, "[ Back ]", false);
+}
+
+void UIManager::handleFilterPickerInput(u32 kDown, const touchPosition &touch) {
+  size_t total = m_filterOptions.size();
+  if (total > 0) {
+    if (kDown & KEY_UP) {
+      m_selectedFilterPickerIndex = (m_selectedFilterPickerIndex > 0)
+                                        ? (m_selectedFilterPickerIndex - 1)
+                                        : (total - 1);
+    } else if (kDown & KEY_DOWN) {
+      m_selectedFilterPickerIndex = (m_selectedFilterPickerIndex + 1 < total)
+                                        ? (m_selectedFilterPickerIndex + 1)
+                                        : 0;
+    } else if (kDown & KEY_LEFT) {
+      m_selectedFilterPickerIndex = (m_selectedFilterPickerIndex >= 5)
+                                        ? (m_selectedFilterPickerIndex - 5)
+                                        : 0;
+    } else if (kDown & KEY_RIGHT) {
+      m_selectedFilterPickerIndex = (m_selectedFilterPickerIndex + 5 < total)
+                                        ? (m_selectedFilterPickerIndex + 5)
+                                        : (total - 1);
+    }
+  }
+
+  auto applySelected = [&]() {
+    if (m_selectedFilterPickerIndex < total) {
+      const auto &opt = m_filterOptions[m_selectedFilterPickerIndex];
+      m_localFilterMode = opt.mode;
+      m_localFilterConsole = opt.console;
+      updateLocalFilteredList();
+    }
+    m_state = UIState::MAIN_MENU;
+  };
+
+  if (kDown & KEY_A) {
+    applySelected();
+  } else if (kDown & KEY_B) {
+    m_state = UIState::MAIN_MENU;
+  }
+
+  if (kDown & KEY_TOUCH) {
+    if (isTouchInside(touch, 16.0f, 194.0f, 138.0f, 30.0f)) {
+      applySelected();
+    } else if (isTouchInside(touch, 166.0f, 194.0f, 138.0f, 30.0f)) {
+      m_state = UIState::MAIN_MENU;
     } else {
-        size_t pageOffset = (m_browserSelectedIndex / 5) * 5;
-        for (size_t i = 0; i < 5 && (pageOffset + i) < total; ++i) {
-            size_t idx = pageOffset + i;
-            const auto& fe = m_browserEntries[idx];
-            bool selected = (idx == m_browserSelectedIndex);
-            float y = 32.0f + static_cast<float>(i * 34.0f);
-
-            u32 rowBg = selected ? CLR_HEADER : CLR_INPUT_BG;
-            u32 borderColor = selected ? CLR_ACCENT : CLR_BORDER_OFF;
-            C2D_DrawRectSolid(8.0f, y, 0.5f, RomM3DS::SCREEN_BOTTOM_WIDTH - 16.0f, 30.0f, borderColor);
-            C2D_DrawRectSolid(9.5f, y + 1.5f, 0.5f, RomM3DS::SCREEN_BOTTOM_WIDTH - 19.0f, 27.0f, rowBg);
-
-            std::string prefix = fe.isDir ? "[DIR] " : "      ";
-            auto isSaveExt = [](const std::string& n) {
-                size_t dot = n.find_last_of('.');
-                if (dot == std::string::npos) return false;
-                std::string ext = n.substr(dot);
-                for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-                return (ext == ".sav" || ext == ".srm" || ext == ".dsv");
-            };
-            if (!fe.isDir && isSaveExt(fe.name)) {
-                prefix = "[SAV] ";
-            }
-
-            u32 nameColor = fe.isDir ? CLR_YELLOW : (isSaveExt(fe.name) ? CLR_GREEN : CLR_TEXT_WHITE);
-            std::string rowLabel = prefix + fe.name;
-
-            C2D_Text rowText;
-            C2D_TextParse(&rowText, m_textBuf, rowLabel.c_str());
-            C2D_TextOptimize(&rowText);
-            float rScale = 0.42f;
-            float rW = 0.0f, rH = 0.0f;
-            C2D_TextGetDimensions(&rowText, rScale, rScale, &rW, &rH);
-            float maxNameW = fe.isDir ? 280.0f : 210.0f;
-            if (rW > maxNameW && rW > 0.0f) rScale *= (maxNameW / rW);
-            C2D_DrawText(&rowText, C2D_WithColor, 14.0f, y + 6.0f, 0.5f, rScale, rScale, nameColor);
-
-            if (!fe.isDir) {
-                std::string sizeStr;
-                if (fe.size < 1024) sizeStr = std::to_string(fe.size) + " B";
-                else if (fe.size < 1024 * 1024) sizeStr = std::to_string(fe.size / 1024) + " KB";
-                else sizeStr = std::to_string(fe.size / (1024 * 1024)) + " MB";
-
-                C2D_Text sizeText;
-                C2D_TextParse(&sizeText, m_textBuf, sizeStr.c_str());
-                C2D_TextOptimize(&sizeText);
-                float sW = 0.0f, sH = 0.0f;
-                C2D_TextGetDimensions(&sizeText, 0.38f, 0.38f, &sW, &sH);
-                C2D_DrawText(&sizeText, C2D_WithColor, RomM3DS::SCREEN_BOTTOM_WIDTH - 16.0f - sW, y + 7.0f, 0.5f, 0.38f, 0.38f, CLR_TEXT_MUTED);
-            }
+      size_t pageOffset = (m_selectedFilterPickerIndex / 5) * 5;
+      for (size_t i = 0; i < 5 && (pageOffset + i) < total; ++i) {
+        float rowY = 36.0f + static_cast<float>(i * 30.0f);
+        if (isTouchInside(touch, 16.0f, rowY, 288.0f, 26.0f)) {
+          m_selectedFilterPickerIndex = pageOffset + i;
+          applySelected();
+          break;
         }
+      }
     }
-
-    drawButton(8.0f, 206.0f, 72.0f, 26.0f, "[ Select ]", false);
-    drawButton(84.0f, 206.0f, 82.0f, 26.0f, "[ Keyboard ]", false);
-    drawButton(170.0f, 206.0f, 68.0f, 26.0f, "[ Reset ]", false);
-    drawButton(242.0f, 206.0f, 70.0f, 26.0f, "[ Back ]", false);
+  }
 }
 
-void UIManager::handleFilterPickerInput(u32 kDown, const touchPosition& touch) {
-    size_t total = m_filterOptions.size();
-    if (total > 0) {
-        if (kDown & KEY_UP) {
-            m_selectedFilterPickerIndex = (m_selectedFilterPickerIndex > 0) ? (m_selectedFilterPickerIndex - 1) : (total - 1);
-        } else if (kDown & KEY_DOWN) {
-            m_selectedFilterPickerIndex = (m_selectedFilterPickerIndex + 1 < total) ? (m_selectedFilterPickerIndex + 1) : 0;
-        } else if (kDown & KEY_LEFT) {
-            m_selectedFilterPickerIndex = (m_selectedFilterPickerIndex >= 5) ? (m_selectedFilterPickerIndex - 5) : 0;
-        } else if (kDown & KEY_RIGHT) {
-            m_selectedFilterPickerIndex = (m_selectedFilterPickerIndex + 5 < total) ? (m_selectedFilterPickerIndex + 5) : (total - 1);
-        }
+void UIManager::handleSortPickerInput(u32 kDown, const touchPosition &touch) {
+  size_t total = m_sortOptions.size();
+  if (total > 0) {
+    if (kDown & KEY_UP) {
+      m_selectedSortPickerIndex = (m_selectedSortPickerIndex > 0)
+                                      ? (m_selectedSortPickerIndex - 1)
+                                      : (total - 1);
+    } else if (kDown & KEY_DOWN) {
+      m_selectedSortPickerIndex = (m_selectedSortPickerIndex + 1 < total)
+                                      ? (m_selectedSortPickerIndex + 1)
+                                      : 0;
     }
+  }
 
-    auto applySelected = [&]() {
-        if (m_selectedFilterPickerIndex < total) {
-            const auto& opt = m_filterOptions[m_selectedFilterPickerIndex];
-            m_localFilterMode = opt.mode;
-            m_localFilterConsole = opt.console;
-            updateLocalFilteredList();
-        }
-        m_state = UIState::MAIN_MENU;
-    };
-
-    if (kDown & KEY_A) {
-        applySelected();
-    } else if (kDown & KEY_B) {
-        m_state = UIState::MAIN_MENU;
+  auto applySelected = [&]() {
+    if (m_selectedSortPickerIndex < total) {
+      m_localSortMode = m_sortOptions[m_selectedSortPickerIndex].mode;
+      updateLocalFilteredList();
     }
+    m_state = UIState::MAIN_MENU;
+  };
 
-    if (kDown & KEY_TOUCH) {
-        if (isTouchInside(touch, 16.0f, 194.0f, 138.0f, 30.0f)) {
-            applySelected();
-        } else if (isTouchInside(touch, 166.0f, 194.0f, 138.0f, 30.0f)) {
-            m_state = UIState::MAIN_MENU;
-        } else {
-            size_t pageOffset = (m_selectedFilterPickerIndex / 5) * 5;
-            for (size_t i = 0; i < 5 && (pageOffset + i) < total; ++i) {
-                float rowY = 36.0f + static_cast<float>(i * 30.0f);
-                if (isTouchInside(touch, 16.0f, rowY, 288.0f, 26.0f)) {
-                    m_selectedFilterPickerIndex = pageOffset + i;
-                    applySelected();
-                    break;
-                }
-            }
+  if (kDown & KEY_A) {
+    applySelected();
+  } else if (kDown & KEY_B) {
+    m_state = UIState::MAIN_MENU;
+  }
+
+  if (kDown & KEY_TOUCH) {
+    if (isTouchInside(touch, 16.0f, 194.0f, 138.0f, 30.0f)) {
+      applySelected();
+    } else if (isTouchInside(touch, 166.0f, 194.0f, 138.0f, 30.0f)) {
+      m_state = UIState::MAIN_MENU;
+    } else {
+      size_t pageOffset = (m_selectedSortPickerIndex / 5) * 5;
+      for (size_t i = 0; i < 5 && (pageOffset + i) < total; ++i) {
+        float rowY = 36.0f + static_cast<float>(i * 30.0f);
+        if (isTouchInside(touch, 16.0f, rowY, 288.0f, 26.0f)) {
+          m_selectedSortPickerIndex = pageOffset + i;
+          applySelected();
+          break;
         }
+      }
     }
-}
-
-void UIManager::handleSortPickerInput(u32 kDown, const touchPosition& touch) {
-    size_t total = m_sortOptions.size();
-    if (total > 0) {
-        if (kDown & KEY_UP) {
-            m_selectedSortPickerIndex = (m_selectedSortPickerIndex > 0) ? (m_selectedSortPickerIndex - 1) : (total - 1);
-        } else if (kDown & KEY_DOWN) {
-            m_selectedSortPickerIndex = (m_selectedSortPickerIndex + 1 < total) ? (m_selectedSortPickerIndex + 1) : 0;
-        }
-    }
-
-    auto applySelected = [&]() {
-        if (m_selectedSortPickerIndex < total) {
-            m_localSortMode = m_sortOptions[m_selectedSortPickerIndex].mode;
-            updateLocalFilteredList();
-        }
-        m_state = UIState::MAIN_MENU;
-    };
-
-    if (kDown & KEY_A) {
-        applySelected();
-    } else if (kDown & KEY_B) {
-        m_state = UIState::MAIN_MENU;
-    }
-
-    if (kDown & KEY_TOUCH) {
-        if (isTouchInside(touch, 16.0f, 194.0f, 138.0f, 30.0f)) {
-            applySelected();
-        } else if (isTouchInside(touch, 166.0f, 194.0f, 138.0f, 30.0f)) {
-            m_state = UIState::MAIN_MENU;
-        } else {
-            size_t pageOffset = (m_selectedSortPickerIndex / 5) * 5;
-            for (size_t i = 0; i < 5 && (pageOffset + i) < total; ++i) {
-                float rowY = 36.0f + static_cast<float>(i * 30.0f);
-                if (isTouchInside(touch, 16.0f, rowY, 288.0f, 26.0f)) {
-                    m_selectedSortPickerIndex = pageOffset + i;
-                    applySelected();
-                    break;
-                }
-            }
-        }
-    }
+  }
 }
 
 void UIManager::renderFilterPickerTop() {
-    C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 42.0f, CLR_HEADER);
-    C2D_DrawRectSolid(0.0f, 40.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f, CLR_ACCENT);
+  C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 42.0f,
+                    CLR_HEADER);
+  C2D_DrawRectSolid(0.0f, 40.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f,
+                    CLR_ACCENT);
 
-    C2D_Text headerText;
-    C2D_TextParse(&headerText, m_textBuf, "romm3ds - Filter Local Library");
-    C2D_TextOptimize(&headerText);
-    C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 10.0f, 0.5f, 0.72f, 0.72f, CLR_TEXT_WHITE);
+  C2D_Text headerText;
+  C2D_TextParse(&headerText, m_textBuf, "romm3ds - Filter Local Library");
+  C2D_TextOptimize(&headerText);
+  C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 10.0f, 0.5f, 0.72f, 0.72f,
+               CLR_TEXT_WHITE);
 
-    std::string guide = "Active Filter: " + getActiveFilterDescription() + "\n\n"
-                        "Select a filter option on the bottom screen:\n"
-                        "  (A) / Tap Option: Apply Selected Filter\n"
-                        "  (B) / Back: Cancel & Return to Library\n"
-                        "  D-Pad Up/Down to navigate, Left/Right for page jumps";
-    C2D_Text guideText;
-    C2D_TextParse(&guideText, m_textBuf, guide.c_str());
-    C2D_TextOptimize(&guideText);
-    C2D_DrawText(&guideText, C2D_WithColor, 16.0f, 56.0f, 0.5f, 0.48f, 0.48f, CLR_TEXT_WHITE);
+  std::string guide = "Active Filter: " + getActiveFilterDescription() +
+                      "\n\n"
+                      "Select a filter option on the bottom screen:\n"
+                      "  (A) / Tap Option: Apply Selected Filter\n"
+                      "  (B) / Back: Cancel & Return to Library\n"
+                      "  D-Pad Up/Down to navigate, Left/Right for page jumps";
+  C2D_Text guideText;
+  C2D_TextParse(&guideText, m_textBuf, guide.c_str());
+  C2D_TextOptimize(&guideText);
+  C2D_DrawText(&guideText, C2D_WithColor, 16.0f, 56.0f, 0.5f, 0.48f, 0.48f,
+               CLR_TEXT_WHITE);
 }
 
 void UIManager::renderFilterPickerBottom() {
-    C2D_DrawRectSolid(8.0f, 4.0f, 0.5f, RomM3DS::SCREEN_BOTTOM_WIDTH - 16.0f, RomM3DS::SCREEN_BOTTOM_HEIGHT - 8.0f, CLR_CARD);
+  C2D_DrawRectSolid(8.0f, 4.0f, 0.5f, RomM3DS::SCREEN_BOTTOM_WIDTH - 16.0f,
+                    RomM3DS::SCREEN_BOTTOM_HEIGHT - 8.0f, CLR_CARD);
 
-    size_t total = m_filterOptions.size();
-    std::string header = "Select Filter (" + std::to_string(total > 0 ? (m_selectedFilterPickerIndex + 1) : 0) +
-                         "/" + std::to_string(total) + ")";
-    C2D_Text titleText;
-    C2D_TextParse(&titleText, m_textBuf, header.c_str());
-    C2D_TextOptimize(&titleText);
-    C2D_DrawText(&titleText, C2D_WithColor, 16.0f, 9.0f, 0.5f, 0.48f, 0.48f, CLR_TEXT_WHITE);
+  size_t total = m_filterOptions.size();
+  std::string header =
+      "Select Filter (" +
+      std::to_string(total > 0 ? (m_selectedFilterPickerIndex + 1) : 0) + "/" +
+      std::to_string(total) + ")";
+  C2D_Text titleText;
+  C2D_TextParse(&titleText, m_textBuf, header.c_str());
+  C2D_TextOptimize(&titleText);
+  C2D_DrawText(&titleText, C2D_WithColor, 16.0f, 9.0f, 0.5f, 0.48f, 0.48f,
+               CLR_TEXT_WHITE);
 
-    size_t pageOffset = (m_selectedFilterPickerIndex / 5) * 5;
-    for (size_t i = 0; i < 5 && (pageOffset + i) < total; ++i) {
-        size_t idx = pageOffset + i;
-        const auto& opt = m_filterOptions[idx];
-        bool selected = (idx == m_selectedFilterPickerIndex);
-        bool active = (opt.mode == m_localFilterMode &&
-                       (opt.mode != LocalFilterMode::CONSOLE || strcasecmp(opt.console.c_str(), m_localFilterConsole.c_str()) == 0));
+  size_t pageOffset = (m_selectedFilterPickerIndex / 5) * 5;
+  for (size_t i = 0; i < 5 && (pageOffset + i) < total; ++i) {
+    size_t idx = pageOffset + i;
+    const auto &opt = m_filterOptions[idx];
+    bool selected = (idx == m_selectedFilterPickerIndex);
+    bool active =
+        (opt.mode == m_localFilterMode &&
+         (opt.mode != LocalFilterMode::CONSOLE ||
+          strcasecmp(opt.console.c_str(), m_localFilterConsole.c_str()) == 0));
 
-        float y = 36.0f + static_cast<float>(i * 30.0f);
-        u32 rowBg = selected ? CLR_HEADER : CLR_INPUT_BG;
-        u32 borderColor = selected ? CLR_ACCENT : CLR_BORDER_OFF;
+    float y = 36.0f + static_cast<float>(i * 30.0f);
+    u32 rowBg = selected ? CLR_HEADER : CLR_INPUT_BG;
+    u32 borderColor = selected ? CLR_ACCENT : CLR_BORDER_OFF;
 
-        C2D_DrawRectSolid(16.0f, y, 0.5f, 288.0f, 26.0f, borderColor);
-        C2D_DrawRectSolid(17.5f, y + 1.5f, 0.5f, 285.0f, 23.0f, rowBg);
+    C2D_DrawRectSolid(16.0f, y, 0.5f, 288.0f, 26.0f, borderColor);
+    C2D_DrawRectSolid(17.5f, y + 1.5f, 0.5f, 285.0f, 23.0f, rowBg);
 
-        u32 dotColor = active ? CLR_GREEN : (selected ? CLR_YELLOW : CLR_BORDER_OFF);
-        C2D_DrawRectSolid(24.0f, y + 8.0f, 0.5f, 8.0f, 8.0f, dotColor);
+    u32 dotColor =
+        active ? CLR_GREEN : (selected ? CLR_YELLOW : CLR_BORDER_OFF);
+    C2D_DrawRectSolid(24.0f, y + 8.0f, 0.5f, 8.0f, 8.0f, dotColor);
 
-        C2D_Text rowText;
-        C2D_TextParse(&rowText, m_textBuf, opt.label.c_str());
-        C2D_TextOptimize(&rowText);
-        C2D_DrawText(&rowText, C2D_WithColor, 38.0f, y + 5.0f, 0.5f, 0.44f, 0.44f, CLR_TEXT_WHITE);
-    }
+    C2D_Text rowText;
+    C2D_TextParse(&rowText, m_textBuf, opt.label.c_str());
+    C2D_TextOptimize(&rowText);
+    C2D_DrawText(&rowText, C2D_WithColor, 38.0f, y + 5.0f, 0.5f, 0.44f, 0.44f,
+                 CLR_TEXT_WHITE);
+  }
 
-    drawButton(16.0f, 194.0f, 138.0f, 30.0f, "[ Apply (A) ]", false);
-    drawButton(166.0f, 194.0f, 138.0f, 30.0f, "[ Back (B) ]", false);
+  drawButton(16.0f, 194.0f, 138.0f, 30.0f, "[ Apply (A) ]", false);
+  drawButton(166.0f, 194.0f, 138.0f, 30.0f, "[ Back (B) ]", false);
 }
 
 void UIManager::renderSortPickerTop() {
-    C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 42.0f, CLR_HEADER);
-    C2D_DrawRectSolid(0.0f, 40.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f, CLR_ACCENT);
+  C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 42.0f,
+                    CLR_HEADER);
+  C2D_DrawRectSolid(0.0f, 40.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f,
+                    CLR_ACCENT);
 
-    C2D_Text headerText;
-    C2D_TextParse(&headerText, m_textBuf, "romm3ds - Sort Local Library");
-    C2D_TextOptimize(&headerText);
-    C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 10.0f, 0.5f, 0.72f, 0.72f, CLR_TEXT_WHITE);
+  C2D_Text headerText;
+  C2D_TextParse(&headerText, m_textBuf, "romm3ds - Sort Local Library");
+  C2D_TextOptimize(&headerText);
+  C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 10.0f, 0.5f, 0.72f, 0.72f,
+               CLR_TEXT_WHITE);
 
-    std::string guide = "Active Sort: " + std::string(getSortModeName(m_localSortMode)) + "\n\n"
-                        "Select a sort option on the bottom screen:\n"
-                        "  (A) / Tap Option: Apply Selected Sort\n"
-                        "  (B) / Back: Cancel & Return to Library";
-    C2D_Text guideText;
-    C2D_TextParse(&guideText, m_textBuf, guide.c_str());
-    C2D_TextOptimize(&guideText);
-    C2D_DrawText(&guideText, C2D_WithColor, 16.0f, 56.0f, 0.5f, 0.48f, 0.48f, CLR_TEXT_WHITE);
+  std::string guide =
+      "Active Sort: " + std::string(getSortModeName(m_localSortMode)) +
+      "\n\n"
+      "Select a sort option on the bottom screen:\n"
+      "  (A) / Tap Option: Apply Selected Sort\n"
+      "  (B) / Back: Cancel & Return to Library";
+  C2D_Text guideText;
+  C2D_TextParse(&guideText, m_textBuf, guide.c_str());
+  C2D_TextOptimize(&guideText);
+  C2D_DrawText(&guideText, C2D_WithColor, 16.0f, 56.0f, 0.5f, 0.48f, 0.48f,
+               CLR_TEXT_WHITE);
 }
 
 void UIManager::renderSortPickerBottom() {
-    C2D_DrawRectSolid(8.0f, 4.0f, 0.5f, RomM3DS::SCREEN_BOTTOM_WIDTH - 16.0f, RomM3DS::SCREEN_BOTTOM_HEIGHT - 8.0f, CLR_CARD);
+  C2D_DrawRectSolid(8.0f, 4.0f, 0.5f, RomM3DS::SCREEN_BOTTOM_WIDTH - 16.0f,
+                    RomM3DS::SCREEN_BOTTOM_HEIGHT - 8.0f, CLR_CARD);
 
-    size_t total = m_sortOptions.size();
-    std::string header = "Select Sort (" + std::to_string(total > 0 ? (m_selectedSortPickerIndex + 1) : 0) +
-                         "/" + std::to_string(total) + ")";
-    C2D_Text titleText;
-    C2D_TextParse(&titleText, m_textBuf, header.c_str());
-    C2D_TextOptimize(&titleText);
-    C2D_DrawText(&titleText, C2D_WithColor, 16.0f, 9.0f, 0.5f, 0.48f, 0.48f, CLR_TEXT_WHITE);
+  size_t total = m_sortOptions.size();
+  std::string header =
+      "Select Sort (" +
+      std::to_string(total > 0 ? (m_selectedSortPickerIndex + 1) : 0) + "/" +
+      std::to_string(total) + ")";
+  C2D_Text titleText;
+  C2D_TextParse(&titleText, m_textBuf, header.c_str());
+  C2D_TextOptimize(&titleText);
+  C2D_DrawText(&titleText, C2D_WithColor, 16.0f, 9.0f, 0.5f, 0.48f, 0.48f,
+               CLR_TEXT_WHITE);
 
-    size_t pageOffset = (m_selectedSortPickerIndex / 5) * 5;
-    for (size_t i = 0; i < 5 && (pageOffset + i) < total; ++i) {
-        size_t idx = pageOffset + i;
-        const auto& opt = m_sortOptions[idx];
-        bool selected = (idx == m_selectedSortPickerIndex);
-        bool active = (opt.mode == m_localSortMode);
+  size_t pageOffset = (m_selectedSortPickerIndex / 5) * 5;
+  for (size_t i = 0; i < 5 && (pageOffset + i) < total; ++i) {
+    size_t idx = pageOffset + i;
+    const auto &opt = m_sortOptions[idx];
+    bool selected = (idx == m_selectedSortPickerIndex);
+    bool active = (opt.mode == m_localSortMode);
 
-        float y = 36.0f + static_cast<float>(i * 30.0f);
-        u32 rowBg = selected ? CLR_HEADER : CLR_INPUT_BG;
-        u32 borderColor = selected ? CLR_ACCENT : CLR_BORDER_OFF;
+    float y = 36.0f + static_cast<float>(i * 30.0f);
+    u32 rowBg = selected ? CLR_HEADER : CLR_INPUT_BG;
+    u32 borderColor = selected ? CLR_ACCENT : CLR_BORDER_OFF;
 
-        C2D_DrawRectSolid(16.0f, y, 0.5f, 288.0f, 26.0f, borderColor);
-        C2D_DrawRectSolid(17.5f, y + 1.5f, 0.5f, 285.0f, 23.0f, rowBg);
+    C2D_DrawRectSolid(16.0f, y, 0.5f, 288.0f, 26.0f, borderColor);
+    C2D_DrawRectSolid(17.5f, y + 1.5f, 0.5f, 285.0f, 23.0f, rowBg);
 
-        u32 dotColor = active ? CLR_GREEN : (selected ? CLR_YELLOW : CLR_BORDER_OFF);
-        C2D_DrawRectSolid(24.0f, y + 8.0f, 0.5f, 8.0f, 8.0f, dotColor);
+    u32 dotColor =
+        active ? CLR_GREEN : (selected ? CLR_YELLOW : CLR_BORDER_OFF);
+    C2D_DrawRectSolid(24.0f, y + 8.0f, 0.5f, 8.0f, 8.0f, dotColor);
 
-        C2D_Text rowText;
-        C2D_TextParse(&rowText, m_textBuf, opt.label.c_str());
-        C2D_TextOptimize(&rowText);
-        C2D_DrawText(&rowText, C2D_WithColor, 38.0f, y + 5.0f, 0.5f, 0.44f, 0.44f, CLR_TEXT_WHITE);
-    }
+    C2D_Text rowText;
+    C2D_TextParse(&rowText, m_textBuf, opt.label.c_str());
+    C2D_TextOptimize(&rowText);
+    C2D_DrawText(&rowText, C2D_WithColor, 38.0f, y + 5.0f, 0.5f, 0.44f, 0.44f,
+                 CLR_TEXT_WHITE);
+  }
 
-    drawButton(16.0f, 194.0f, 138.0f, 30.0f, "[ Apply (A) ]", false);
-    drawButton(166.0f, 194.0f, 138.0f, 30.0f, "[ Back (B) ]", false);
+  drawButton(16.0f, 194.0f, 138.0f, 30.0f, "[ Apply (A) ]", false);
+  drawButton(166.0f, 194.0f, 138.0f, 30.0f, "[ Back (B) ]", false);
 }
 
 void UIManager::freeGameLogo() {
-    if (m_hasLogo) {
-        C3D_TexDelete(&m_logoTex);
-        m_hasLogo = false;
-    }
-    m_currentLogoKey.clear();
+  if (m_hasLogo) {
+    C3D_TexDelete(&m_logoTex);
+    m_hasLogo = false;
+  }
+  m_currentLogoKey.clear();
 }
 
-void UIManager::updateGameLogo(const InstalledTitle& title) {
-    std::string key = title.titleIdHex + ":" + title.romPath + ":" + title.savePath;
-    if (key == m_currentLogoKey) {
-        return;
+void UIManager::updateGameLogo(const InstalledTitle &title) {
+  std::string key =
+      title.titleIdHex + ":" + title.romPath + ":" + title.savePath;
+  if (key == m_currentLogoKey) {
+    return;
+  }
+
+  freeGameLogo();
+  m_currentLogoKey = key;
+
+  std::vector<uint8_t> iconData;
+  if (!SaveManager::getTitleIcon(title, iconData) || iconData.size() < 0x1200) {
+    return;
+  }
+
+  if (C3D_TexInit(&m_logoTex, 64, 64, GPU_RGB565)) {
+    std::memset(m_logoTex.data, 0, 64 * 64 * 2);
+    const uint8_t *src = iconData.data();
+    uint8_t *dst = static_cast<uint8_t *>(m_logoTex.data);
+    for (int ty = 0; ty < 6; ++ty) {
+      for (int tx = 0; tx < 6; ++tx) {
+        std::memcpy(dst + (ty * 8 + tx) * 128, src + (ty * 6 + tx) * 128, 128);
+      }
     }
+    C3D_TexFlush(&m_logoTex);
 
-    freeGameLogo();
-    m_currentLogoKey = key;
+    m_logoSubTex.width = 48;
+    m_logoSubTex.height = 48;
+    m_logoSubTex.left = 0.0f;
+    m_logoSubTex.top = 1.0f;
+    m_logoSubTex.right = 48.0f / 64.0f;
+    m_logoSubTex.bottom = 1.0f - (48.0f / 64.0f);
 
-    std::vector<uint8_t> iconData;
-    if (!SaveManager::getTitleIcon(title, iconData) || iconData.size() < 0x1200) {
-        return;
-    }
-
-    if (C3D_TexInit(&m_logoTex, 64, 64, GPU_RGB565)) {
-        std::memset(m_logoTex.data, 0, 64 * 64 * 2);
-        const uint8_t* src = iconData.data();
-        uint8_t* dst = static_cast<uint8_t*>(m_logoTex.data);
-        for (int ty = 0; ty < 6; ++ty) {
-            for (int tx = 0; tx < 6; ++tx) {
-                std::memcpy(dst + (ty * 8 + tx) * 128, src + (ty * 6 + tx) * 128, 128);
-            }
-        }
-        C3D_TexFlush(&m_logoTex);
-
-        m_logoSubTex.width = 48;
-        m_logoSubTex.height = 48;
-        m_logoSubTex.left = 0.0f;
-        m_logoSubTex.top = 1.0f;
-        m_logoSubTex.right = 48.0f / 64.0f;
-        m_logoSubTex.bottom = 1.0f - (48.0f / 64.0f);
-
-        m_logoImage.tex = &m_logoTex;
-        m_logoImage.subtex = &m_logoSubTex;
-        m_hasLogo = true;
-    }
+    m_logoImage.tex = &m_logoTex;
+    m_logoImage.subtex = &m_logoSubTex;
+    m_hasLogo = true;
+  }
 }
 
 } // namespace RomM3DS
-

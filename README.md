@@ -53,6 +53,7 @@ It automatically detects installed Nintendo 3DS and CIA games (SD/Cartridge/NAND
   - **`[ Match ]`**: Manually link or change the linked RomM library entry (or refresh the remote console library).
   - **`[ Save Path ]`**: Browse the SD card to select or override the local save file path for the highlighted title.
   - **`[ Hide ]` / `[ Unhide ]`**: Exclude or re-include the highlighted title from the main list and batch sync.
+  - **`[ Cfg ]`**: Re-open the RomM Server Settings screen to edit your Server Endpoint or API Key.
 
 ---
 
