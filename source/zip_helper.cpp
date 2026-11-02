@@ -155,6 +155,34 @@ bool ZipHelper::extractZip(const std::string& zipFilePath, const std::string& de
             if (c == '\\') c = '/';
         }
 
+        // Strip leading slashes
+        while (!entryName.empty() && entryName.front() == '/') {
+            entryName.erase(0, 1);
+        }
+        if (entryName.empty()) continue;
+
+        // Zip-Slip / Path-Traversal guard: reject drive prefixes or '..' path segments
+        bool isUnsafePath = (entryName.find(':') != std::string::npos);
+        if (!isUnsafePath) {
+            size_t segStart = 0;
+            while (segStart < entryName.size()) {
+                size_t slashPos = entryName.find('/', segStart);
+                std::string segment = (slashPos == std::string::npos)
+                    ? entryName.substr(segStart)
+                    : entryName.substr(segStart, slashPos - segStart);
+                if (segment == "..") {
+                    isUnsafePath = true;
+                    break;
+                }
+                if (slashPos == std::string::npos) break;
+                segStart = slashPos + 1;
+            }
+        }
+        if (isUnsafePath) {
+            emit("[WARN] Skipping unsafe zip entry path: " + entryName);
+            continue;
+        }
+
         // Skip macOS metadata files inside zip archives
         if (entryName.find("__MACOSX/") != std::string::npos ||
             entryName.find("/._") != std::string::npos ||
