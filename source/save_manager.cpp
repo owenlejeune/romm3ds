@@ -1,4 +1,5 @@
 #include "save_manager.hpp"
+#include "common.hpp"
 #include "config_manager.hpp"
 #include "zip_helper.hpp"
 
@@ -120,7 +121,7 @@ struct TimestampCacheEntry {
 static std::map<std::string, TimestampCacheEntry> s_timestampCache;
 static bool s_timestampCacheLoaded = false;
 static bool s_timestampCacheDirty = false;
-static const std::string s_timestampCachePath = "sdmc:/3ds/romm3ds/timestamp_cache.json";
+static const std::string s_legacyTimestampCachePath = "sdmc:/3ds/romm3ds/timestamp_cache.json";
 
 struct TitleMetadataEntry {
     std::string name;
@@ -129,149 +130,163 @@ struct TitleMetadataEntry {
 static std::map<std::string, TitleMetadataEntry> s_metadataCache;
 static bool s_metadataCacheLoaded = false;
 static bool s_metadataCacheDirty = false;
-static const std::string s_metadataCachePath = "sdmc:/3ds/romm3ds/title_metadata_cache.json";
+static const std::string s_legacyMetadataCachePath = "sdmc:/3ds/romm3ds/title_metadata_cache.json";
 
-static void loadMetadataCache() {
-    if (s_metadataCacheLoaded) return;
+static void parseTimestampsObject(const nlohmann::json& j) {
+    if (!j.is_object()) return;
+    for (auto it = j.begin(); it != j.end(); ++it) {
+        if (it.value().is_number()) {
+            s_timestampCache[it.key()] = { it.value().get<time_t>(), 0 };
+        } else if (it.value().is_object()) {
+            const auto& obj = it.value();
+            time_t st = (obj.contains("save_time") && obj["save_time"].is_number()) ? obj["save_time"].get<time_t>() : 0;
+            time_t fm = (obj.contains("fs_mtime") && obj["fs_mtime"].is_number()) ? obj["fs_mtime"].get<time_t>() : 0;
+            s_timestampCache[it.key()] = { st, fm };
+        }
+    }
+}
+
+static void parseMetadataObject(const nlohmann::json& j) {
+    if (!j.is_object()) return;
+    for (auto it = j.begin(); it != j.end(); ++it) {
+        if (it.value().is_object()) {
+            TitleMetadataEntry entry;
+            const auto& obj = it.value();
+            if (obj.contains("name") && obj["name"].is_string()) {
+                entry.name = obj["name"].get<std::string>();
+            }
+            if (obj.contains("product_code") && obj["product_code"].is_string()) {
+                entry.productCode = obj["product_code"].get<std::string>();
+            }
+            s_metadataCache[it.key()] = entry;
+        }
+    }
+}
+
+static void loadUnifiedLocalCaches(const std::string& customPath = "") {
+    const std::string& cacheFile = customPath.empty() ? RomM3DS::CACHE_PATH : customPath;
+    s_timestampCache.clear();
     s_metadataCache.clear();
+    s_timestampCacheLoaded = true;
     s_metadataCacheLoaded = true;
+    s_timestampCacheDirty = false;
     s_metadataCacheDirty = false;
 
-    auto parseJson = [](std::ifstream& stream) {
-        nlohmann::json j = nlohmann::json::parse(stream, nullptr, false);
-        if (j.is_object()) {
-            for (auto it = j.begin(); it != j.end(); ++it) {
-                if (it.value().is_object()) {
-                    TitleMetadataEntry entry;
-                    const auto& obj = it.value();
-                    if (obj.contains("name") && obj["name"].is_string()) {
-                        entry.name = obj["name"].get<std::string>();
-                    }
-                    if (obj.contains("product_code") && obj["product_code"].is_string()) {
-                        entry.productCode = obj["product_code"].get<std::string>();
-                    }
-                    s_metadataCache[it.key()] = entry;
-                }
-            }
-        }
-    };
-
-    std::ifstream f(s_metadataCachePath);
+    std::ifstream f(cacheFile, std::ios::binary);
     if (f.is_open()) {
-        parseJson(f);
-        return;
-    }
-    std::ifstream fLocal("./title_metadata_cache.json");
-    if (fLocal.is_open()) {
-        parseJson(fLocal);
-    }
-}
-
-static void saveMetadataCache() {
-    if (!s_metadataCacheLoaded || !s_metadataCacheDirty) {
-        return;
-    }
-    ConfigManager::ensureDirectories(s_metadataCachePath);
-
-    nlohmann::json j = nlohmann::json::object();
-    for (const auto& pair : s_metadataCache) {
-        j[pair.first] = {
-            {"name", pair.second.name},
-            {"product_code", pair.second.productCode}
-        };
-    }
-
-    std::ofstream f(s_metadataCachePath);
-    if (f.is_open()) {
-        f << j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
-        s_metadataCacheDirty = false;
-        return;
-    }
-    std::ofstream fLocal("./title_metadata_cache.json");
-    if (fLocal.is_open()) {
-        fLocal << j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
-        s_metadataCacheDirty = false;
-    }
-}
-
-SaveManager::SaveManager() {
-    loadTimestampCache();
-    loadMetadataCache();
-}
-
-SaveManager::~SaveManager() {
-    saveTimestampCache();
-    saveMetadataCache();
-}
-
-void SaveManager::loadTimestampCache(const std::string& path) {
-    std::string filePath = path.empty() ? s_timestampCachePath : path;
-    s_timestampCache.clear();
-    s_timestampCacheLoaded = true;
-    s_timestampCacheDirty = false;
-
-    auto parseJson = [](std::ifstream& stream) {
-        nlohmann::json j = nlohmann::json::parse(stream, nullptr, false);
-        if (j.is_object()) {
-            for (auto it = j.begin(); it != j.end(); ++it) {
-                if (it.value().is_number()) {
-                    s_timestampCache[it.key()] = { it.value().get<time_t>(), 0 };
-                } else if (it.value().is_object()) {
-                    const auto& obj = it.value();
-                    time_t st = (obj.contains("save_time") && obj["save_time"].is_number()) ? obj["save_time"].get<time_t>() : 0;
-                    time_t fm = (obj.contains("fs_mtime") && obj["fs_mtime"].is_number()) ? obj["fs_mtime"].get<time_t>() : 0;
-                    s_timestampCache[it.key()] = { st, fm };
-                }
+        nlohmann::json root = nlohmann::json::from_cbor(f, true, false);
+        f.close();
+        if (!root.is_discarded() && root.is_object()) {
+            if (root.contains("timestamps")) {
+                parseTimestampsObject(root["timestamps"]);
+            }
+            if (root.contains("metadata")) {
+                parseMetadataObject(root["metadata"]);
             }
         }
-    };
-
-    std::ifstream f(filePath);
-    if (!f.is_open()) {
-        if (filePath == s_timestampCachePath) {
-            std::ifstream fLocal("./timestamp_cache.json");
-            if (fLocal.is_open()) {
-                parseJson(fLocal);
-            }
-        }
-        return;
     }
 
-    parseJson(f);
+    if (customPath.empty()) {
+        // Migrate legacy timestamp_cache.json if present
+        std::ifstream fTs(s_legacyTimestampCachePath);
+        if (fTs.is_open()) {
+            nlohmann::json jTs = nlohmann::json::parse(fTs, nullptr, false);
+            fTs.close();
+            if (!jTs.is_discarded()) {
+                parseTimestampsObject(jTs);
+                s_timestampCacheDirty = true;
+            }
+            remove(s_legacyTimestampCachePath.c_str());
+        }
+
+        // Migrate legacy title_metadata_cache.json if present
+        std::ifstream fMeta(s_legacyMetadataCachePath);
+        if (fMeta.is_open()) {
+            nlohmann::json jMeta = nlohmann::json::parse(fMeta, nullptr, false);
+            fMeta.close();
+            if (!jMeta.is_discarded()) {
+                parseMetadataObject(jMeta);
+                s_metadataCacheDirty = true;
+            }
+            remove(s_legacyMetadataCachePath.c_str());
+        }
+    }
 }
 
-void SaveManager::saveTimestampCache(const std::string& path) {
-    if (!s_timestampCacheLoaded) {
+static void saveUnifiedLocalCaches(const std::string& customPath = "") {
+    if (!s_timestampCacheLoaded && !s_metadataCacheLoaded) {
         return;
     }
-    if (path.empty() && !s_timestampCacheDirty) {
+    if (customPath.empty() && !s_timestampCacheDirty && !s_metadataCacheDirty) {
         return;
     }
-    std::string filePath = path.empty() ? s_timestampCachePath : path;
-    ConfigManager::ensureDirectories(filePath);
 
-    nlohmann::json j = nlohmann::json::object();
+    const std::string& cacheFile = customPath.empty() ? RomM3DS::CACHE_PATH : customPath;
+    ConfigManager::ensureDirectories(cacheFile);
+
+    nlohmann::json root = nlohmann::json::object();
+    {
+        std::ifstream existingFile(cacheFile, std::ios::binary);
+        if (existingFile.is_open()) {
+            nlohmann::json parsed = nlohmann::json::from_cbor(existingFile, true, false);
+            if (!parsed.is_discarded() && parsed.is_object()) {
+                root = std::move(parsed);
+            }
+        }
+    }
+
+    nlohmann::json jTs = nlohmann::json::object();
     for (const auto& pair : s_timestampCache) {
-        j[pair.first] = {
+        jTs[pair.first] = {
             {"save_time", pair.second.saveTime},
             {"fs_mtime", pair.second.fsMtime}
         };
     }
+    root["timestamps"] = std::move(jTs);
 
-    std::ofstream f(filePath);
-    if (!f.is_open()) {
-        if (filePath == s_timestampCachePath) {
-            std::ofstream fLocal("./timestamp_cache.json");
-            if (fLocal.is_open()) {
-                fLocal << j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
-                s_timestampCacheDirty = false;
-            }
-        }
-        return;
+    nlohmann::json jMeta = nlohmann::json::object();
+    for (const auto& pair : s_metadataCache) {
+        jMeta[pair.first] = {
+            {"name", pair.second.name},
+            {"product_code", pair.second.productCode}
+        };
     }
+    root["metadata"] = std::move(jMeta);
 
-    f << j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
-    s_timestampCacheDirty = false;
+    std::vector<std::uint8_t> cborData = nlohmann::json::to_cbor(root);
+    std::ofstream out(cacheFile, std::ios::binary | std::ios::trunc);
+    if (out.is_open()) {
+        out.write(reinterpret_cast<const char*>(cborData.data()), static_cast<std::streamsize>(cborData.size()));
+        if (out.good()) {
+            s_timestampCacheDirty = false;
+            s_metadataCacheDirty = false;
+        }
+    }
+}
+
+static void loadMetadataCache() {
+    if (s_metadataCacheLoaded) return;
+    loadUnifiedLocalCaches();
+}
+
+static void saveMetadataCache() {
+    saveUnifiedLocalCaches();
+}
+
+SaveManager::SaveManager() {
+    loadUnifiedLocalCaches();
+}
+
+SaveManager::~SaveManager() {
+    saveUnifiedLocalCaches();
+}
+
+void SaveManager::loadTimestampCache(const std::string& path) {
+    loadUnifiedLocalCaches(path);
+}
+
+void SaveManager::saveTimestampCache(const std::string& path) {
+    saveUnifiedLocalCaches(path);
 }
 
 time_t SaveManager::getCachedSaveTime(const std::string& titleIdHex) {

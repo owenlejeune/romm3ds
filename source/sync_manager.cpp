@@ -472,9 +472,15 @@ bool SyncManager::saveLibraryCache(const std::string& path) {
     const std::string& filePath = path.empty() ? RomM3DS::CACHE_PATH : path;
     ConfigManager::ensureDirectories(filePath);
 
-    std::ofstream file(filePath);
-    if (!file.is_open()) {
-        return false;
+    json root = json::object();
+    {
+        std::ifstream existingFile(filePath, std::ios::binary);
+        if (existingFile.is_open()) {
+            json parsed = json::from_cbor(existingFile, true, false);
+            if (!parsed.is_discarded() && parsed.is_object()) {
+                root = std::move(parsed);
+            }
+        }
     }
 
     json jPlatforms = json::array();
@@ -505,24 +511,47 @@ bool SyncManager::saveLibraryCache(const std::string& path) {
         jLoaded.push_back(lp);
     }
 
-    json root = {
-        {"platforms", jPlatforms},
-        {"games", jGames},
-        {"loaded_platforms", jLoaded}
-    };
+    root["platforms"] = std::move(jPlatforms);
+    root["games"] = std::move(jGames);
+    root["loaded_platforms"] = std::move(jLoaded);
 
-    file << root.dump(-1, ' ', false, json::error_handler_t::replace);
+    std::vector<std::uint8_t> cborData = json::to_cbor(root);
+    std::ofstream file(filePath, std::ios::binary | std::ios::trunc);
+    if (!file.is_open()) {
+        return false;
+    }
+
+    file.write(reinterpret_cast<const char*>(cborData.data()), static_cast<std::streamsize>(cborData.size()));
     return file.good();
 }
 
 bool SyncManager::loadLibraryCache(const std::string& path) {
     const std::string& filePath = path.empty() ? RomM3DS::CACHE_PATH : path;
-    std::ifstream file(filePath);
-    if (!file.is_open()) {
-        return false;
+
+    json root = json::object();
+    bool loadedFromLegacy = false;
+
+    std::ifstream file(filePath, std::ios::binary);
+    if (file.is_open()) {
+        root = json::from_cbor(file, true, false);
+        file.close();
     }
 
-    json root = json::parse(file, nullptr, false);
+    // If library sections are not yet in cache.bin, check for legacy cache.json migration
+    if (path.empty() && (root.is_discarded() || !root.is_object() ||
+                         (!root.contains("platforms") && !root.contains("games")))) {
+        std::ifstream legacyFile(RomM3DS::LEGACY_CACHE_PATH);
+        if (legacyFile.is_open()) {
+            json legacyRoot = json::parse(legacyFile, nullptr, false);
+            legacyFile.close();
+            if (!legacyRoot.is_discarded() && legacyRoot.is_object()) {
+                root = std::move(legacyRoot);
+                loadedFromLegacy = true;
+            }
+            remove(RomM3DS::LEGACY_CACHE_PATH);
+        }
+    }
+
     if (root.is_discarded() || !root.is_object()) {
         return false;
     }
@@ -578,12 +607,38 @@ bool SyncManager::loadLibraryCache(const std::string& path) {
         }
     }
 
+    if (loadedFromLegacy) {
+        saveLibraryCache();
+    }
+
     return (!m_platforms.empty() || !m_remoteGames.empty());
 }
 
 void SyncManager::clearLibraryCache() {
     m_loadedPlatforms.clear();
-    remove(RomM3DS::CACHE_PATH);
+    remove(RomM3DS::LEGACY_CACHE_PATH);
+
+    std::ifstream existingFile(RomM3DS::CACHE_PATH, std::ios::binary);
+    if (!existingFile.is_open()) {
+        return;
+    }
+    json root = json::from_cbor(existingFile, true, false);
+    existingFile.close();
+
+    if (root.is_discarded() || !root.is_object()) {
+        remove(RomM3DS::CACHE_PATH);
+        return;
+    }
+
+    root.erase("platforms");
+    root.erase("games");
+    root.erase("loaded_platforms");
+
+    std::vector<std::uint8_t> cborData = json::to_cbor(root);
+    std::ofstream outFile(RomM3DS::CACHE_PATH, std::ios::binary | std::ios::trunc);
+    if (outFile.is_open()) {
+        outFile.write(reinterpret_cast<const char*>(cborData.data()), static_cast<std::streamsize>(cborData.size()));
+    }
 }
 
 bool SyncManager::refresh(bool forceFullRemoteRefresh) {

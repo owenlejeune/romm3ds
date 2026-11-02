@@ -76,7 +76,7 @@ When a save exists both locally and remotely:
 For custom CIA forwarders (such as an installed forwarder that runs a 3DSX located in `/3ds/emerald3ds/` alongside its `.sav` file):
 1. Select the title in the list and tap **`[ Save Path ]`**.
 2. Navigate the SD card browser to locate your save file (`.sav`, `.srm`, `.dsv`, etc.).
-3. Confirm the selection to permanently bind that save path to the title in `sdmc:/3ds/romm3ds/mapping.json`.
+3. Confirm the selection to permanently bind that save path to the title in `sdmc:/3ds/romm3ds/config.json`.
 
 ---
 
@@ -264,9 +264,13 @@ When you play Nintendo DS games on your 3DS and save in-game, you may notice tha
 
 ---
 
-### Security & Self-Hosting Notes
+### Security, Storage & Self-Hosting Notes
 
-- **SD Card Configuration**: Your RomM endpoint URL and API key are stored locally on your 3DS SD card at `sdmc:/3ds/romm3ds/config.json`. Treat this file as sensitive and avoid sharing it when posting logs or SD card backups.
+- **Console-Bound API Key Encryption (`config.json`)**: Your RomM API key is encrypted using **AES-256-GCM** keyed to your 3DS console's unique hardware identifiers (`CFGU_GenHashConsoleUnique` and `AM_GetDeviceId`) and stored as `"api_key_enc"` inside `sdmc:/3ds/romm3ds/config.json`. Even if your SD card is read on another computer or shared, the ciphertext cannot be decrypted outside your physical 3DS.
+  - *Tip:* If you prefer to configure your API key by editing `sdmc:/3ds/romm3ds/config.json` on a PC, you can add `"api_key": "your-token-here"`. On the next launch, `romm3ds` will automatically encrypt it into `"api_key_enc"` and remove the plaintext field.
+- **Consolidated Storage (`config.json` & `cache.bin`)**:
+  - `sdmc:/3ds/romm3ds/config.json` holds your server endpoint, encrypted API key, ignored titles, custom ROM directories, and game/save-path mappings.
+  - `sdmc:/3ds/romm3ds/cache.bin` is a compact binary CBOR cache storing remote library metadata, local SMDH title metadata, and save timestamps in a single file.
 - **TLS / HTTPS Certificates**: Because the Nintendo 3DS system firmware does not include an up-to-date CA certificate bundle for modern authorities (such as Let's Encrypt) or self-signed homelab certificates, `romm3ds` disables strict TLS peer verification (`CURLOPT_SSL_VERIFYPEER = 0L`) so HTTPS reverse-proxy endpoints work out of the box.
 
 ---
