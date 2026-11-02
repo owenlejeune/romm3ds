@@ -1,0 +1,84 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Optional tag to create/update a GitHub Release (e.g. v0.1.0). Leave empty for a build-only run.'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build 3DSX & CIA
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install bannertool and makerom
+        run: |
+          mkdir -p "${HOME}/.local/bin"
+          export PATH="${HOME}/.local/bin:${PATH}"
+
+          # Install makerom
+          curl -fsSL -o /tmp/makerom.zip \
+            "https://github.com/3DSGuy/Project_CTR/releases/download/makerom-v0.18.4/makerom-v0.18.4-ubuntu_x86_64.zip"
+          unzip -q -o /tmp/makerom.zip -d "${HOME}/.local/bin"
+          chmod +x "${HOME}/.local/bin/makerom"
+
+          # Install bannertool (prebuilt binary with source fallback)
+          if ! curl -fsSL -o "${HOME}/.local/bin/bannertool" \
+            "https://github.com/CaramelKat/bannertool/releases/download/1.2.0/bannertool.linux-x86_64"; then
+            git config --global url."https://github.com/".insteadOf git://github.com/
+            git clone --recursive https://github.com/Epicpkmn11/bannertool.git /tmp/bannertool
+            make -C /tmp/bannertool -j"$(nproc)"
+            cp /tmp/bannertool/output/linux-x86_64/bannertool "${HOME}/.local/bin/bannertool"
+          fi
+          chmod +x "${HOME}/.local/bin/bannertool"
+
+          makerom -version || true
+          bannertool || true
+
+      - name: Build romm3ds (.3dsx, .smdh, and forwarder .cia)
+        run: |
+          ./scripts/build-cia.sh
+
+      - name: Package SD card bundle (.zip)
+        run: |
+          mkdir -p dist/3ds/romm3ds dist/cias
+          cp outputs/romm3ds.3dsx dist/3ds/romm3ds/romm3ds.3dsx
+          cp outputs/romm3ds.smdh dist/3ds/romm3ds/romm3ds.smdh
+          cp outputs/romm3ds.cia dist/cias/romm3ds.cia
+          (cd dist && zip -r ../outputs/romm3ds-sd-bundle.zip 3ds cias)
+          ls -lh outputs/
+
+      - name: Upload workflow build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: romm3ds-build-artifacts
+          path: |
+            outputs/romm3ds.3dsx
+            outputs/romm3ds.cia
+            outputs/romm3ds.smdh
+            outputs/romm3ds-sd-bundle.zip
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.release_tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.release_tag != '' && github.event.inputs.release_tag || github.ref_name }}
+          generate_release_notes: true
+          files: |
+            outputs/romm3ds.3dsx
+            outputs/romm3ds.cia
+            outputs/romm3ds.smdh
+            outputs/romm3ds-sd-bundle.zip
+

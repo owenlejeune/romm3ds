@@ -166,7 +166,7 @@ else
 
 $(OUTPUT).3dsx	:	$(OUTPUT).elf $(_3DSXDEPS)
 
-$(TOPDIR)/$(OUTPUT_DIR)/forwarder.elf: $(TOPDIR)/$(CIA_DIR)/forwarder/main.c
+$(TOPDIR)/$(OUTPUT_DIR)/forwarder.elf: $(CIA_DIR)/forwarder/main.c
 	@mkdir -p $(TOPDIR)/$(OUTPUT_DIR)
 	$(CC) $(ARCH) -O2 -Wall -Wextra -ffunction-sections -fdata-sections -D__3DS__ -I$(CTRULIB)/include -specs=3dsx.specs -Wl,--gc-sections -L$(CTRULIB)/lib $< -lctru -o $@
 
