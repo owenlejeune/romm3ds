@@ -50,6 +50,7 @@ It automatically detects installed Nintendo 3DS and CIA games (SD/Cartridge/NAND
   - **Search Bar & `[ Clr ]`**: Filter visible games by title substring.
   - **`[ Sync (A) ]`**: Initiates synchronization for the highlighted game.
   - **`[ Sync All (X) ]`**: Queues and batch-synchronizes all matched games in the **currently filtered list**.
+  - **`[ Refresh ]`**: Re-scans installed titles/SD ROMs and refreshes remote RomM library/save state.
   - **`[ Match ]`**: Manually link or change the linked RomM library entry (or refresh the remote console library).
   - **`[ Save Path ]`**: Browse the SD card to select or override the local save file path for the highlighted title.
   - **`[ Hide ]` / `[ Unhide ]`**: Exclude or re-include the highlighted title from the main list and batch sync.

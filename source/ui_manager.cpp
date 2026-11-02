@@ -874,11 +874,9 @@ void UIManager::handleInput(u32 kDown, const touchPosition &touch) {
     int numOptions = canCancel ? 4 : 3;
 
     if (kDown & KEY_UP) {
-      m_setupSelectedIndex = (m_setupSelectedIndex - 1 + 3) % 3;
       m_setupSelectedIndex =
           (m_setupSelectedIndex - 1 + numOptions) % numOptions;
     } else if (kDown & KEY_DOWN) {
-      m_setupSelectedIndex = (m_setupSelectedIndex + 1) % 3;
       m_setupSelectedIndex = (m_setupSelectedIndex + 1) % numOptions;
     } else if (canCancel && (kDown & (KEY_LEFT | KEY_RIGHT)) &&
                m_setupSelectedIndex >= 2) {
@@ -994,17 +992,16 @@ void UIManager::handleInput(u32 kDown, const touchPosition &touch) {
           m_localFilterText.clear();
           updateLocalFilteredList();
         }
-      } else if (isTouchInside(touch, 16.0f, 163.0f, 138.0f, 26.0f)) {
+      } else if (isTouchInside(touch, 16.0f, 163.0f, 92.0f, 26.0f)) {
         syncSelectedGame();
-      } else if (isTouchInside(touch, 166.0f, 163.0f, 138.0f, 26.0f)) {
+      } else if (isTouchInside(touch, 114.0f, 163.0f, 104.0f, 26.0f)) {
         syncAllGames();
-      } else if (isTouchInside(touch, 16.0f, 193.0f, 90.0f, 26.0f)) {
+      } else if (isTouchInside(touch, 224.0f, 163.0f, 80.0f, 26.0f)) {
+        runLibraryRefresh(true);
       } else if (isTouchInside(touch, 16.0f, 193.0f, 68.0f, 26.0f)) {
         openManualMatch();
-      } else if (isTouchInside(touch, 114.0f, 193.0f, 92.0f, 26.0f)) {
       } else if (isTouchInside(touch, 90.0f, 193.0f, 74.0f, 26.0f)) {
         openSavePicker();
-      } else if (isTouchInside(touch, 214.0f, 193.0f, 90.0f, 26.0f)) {
       } else if (isTouchInside(touch, 170.0f, 193.0f, 64.0f, 26.0f)) {
         toggleIgnoreSelected();
       } else if (isTouchInside(touch, 240.0f, 193.0f, 64.0f, 26.0f)) {
@@ -1476,7 +1473,6 @@ void UIManager::renderFirstLaunchTop() {
                     CLR_ACCENT);
 
   C2D_Text headerText;
-  C2D_TextParse(&headerText, m_textBuf, "romm3ds - Initial Setup");
   C2D_TextParse(&headerText, m_textBuf,
                 canCancel ? "romm3ds - Server Settings"
                           : "romm3ds - Initial Setup");
@@ -1496,7 +1492,6 @@ void UIManager::renderFirstLaunchTop() {
                CLR_TEXT_MUTED);
 
   C2D_Text promptText;
-  C2D_TextParse(&promptText, m_textBuf, "Press START to exit");
   C2D_TextParse(&promptText, m_textBuf,
                 canCancel ? "Press (B) to cancel & return, or START to exit"
                           : "Press START to exit");
@@ -1520,8 +1515,6 @@ void UIManager::renderFirstLaunchBottom() {
   drawInputBox(16.0f, 96.0f, 288.0f, 32.0f, "API Key / Credentials:", maskedKey,
                m_setupSelectedIndex == 1);
 
-  drawButton(16.0f, 148.0f, 288.0f, 34.0f, "[ Save Configuration ]",
-             m_setupSelectedIndex == 2);
   if (canCancel) {
     drawButton(16.0f, 148.0f, 186.0f, 34.0f, "[ Save Configuration ]",
                m_setupSelectedIndex == 2);
@@ -1699,8 +1692,7 @@ void UIManager::renderMainMenuTop() {
         "  (A) Sync Selected       (X) Batch Sync All\n"
         "  (L) Force Upload Save   (R) Force Download Save\n"
         "  (SELECT) Match Title    (Y) Search Filter\n"
-        "  Tap [Match], [Save Path], [Hide], or [Sort]/[Filter]";
-    "  Tap [Match], [Save Path], [Hide], [Cfg], or [Sort]/[Filter]";
+        "  Tap [Refresh], [Match], [Save Path], [Hide], or [Cfg]";
     C2D_Text ctrlText;
     C2D_TextParse(&ctrlText, m_textBuf, controls.c_str());
     C2D_TextOptimize(&ctrlText);
@@ -1850,11 +1842,10 @@ void UIManager::renderMainMenuBottom() {
                  textScale, CLR_TEXT_WHITE);
   }
 
-  drawButton(16.0f, 163.0f, 138.0f, 26.0f, "[ Sync (A) ]", false);
-  drawButton(166.0f, 163.0f, 138.0f, 26.0f, "[ Sync All (X) ]", false);
+  drawButton(16.0f, 163.0f, 92.0f, 26.0f, "[ Sync (A) ]", false);
+  drawButton(114.0f, 163.0f, 104.0f, 26.0f, "[ Sync All (X) ]", false);
+  drawButton(224.0f, 163.0f, 80.0f, 26.0f, "[ Refresh ]", false);
 
-  drawButton(16.0f, 193.0f, 90.0f, 26.0f, "[ Match ]", false);
-  drawButton(114.0f, 193.0f, 92.0f, 26.0f, "[ Save Path ]", false);
   drawButton(16.0f, 193.0f, 68.0f, 26.0f, "[ Match ]", false);
   drawButton(90.0f, 193.0f, 74.0f, 26.0f, "[ Save Path ]", false);
 
@@ -1865,7 +1856,6 @@ void UIManager::renderMainMenuBottom() {
            .isIgnored);
   const char *ignoreLabel = isCurrentlyIgnored ? "[ Unhide ]" : "[ Hide ]";
   u32 ignoreAccent = isCurrentlyIgnored ? CLR_GREEN : 0;
-  drawButton(214.0f, 193.0f, 90.0f, 26.0f, ignoreLabel, false, ignoreAccent);
   drawButton(170.0f, 193.0f, 64.0f, 26.0f, ignoreLabel, false, ignoreAccent);
   drawButton(240.0f, 193.0f, 64.0f, 26.0f, "[ Cfg ]", false);
 

@@ -700,16 +700,14 @@ bool SyncManager::refresh(bool forceFullRemoteRefresh) {
             }
         }
 
-        if (forceFullRemoteRefresh || (!loadedFromCache && hasUnmatchedLocal)) {
+        if (hasUnmatchedLocal && (forceFullRemoteRefresh || !loadedFromCache)) {
             if (!m_platforms.empty()) {
                 for (const auto& p : m_platforms) {
-                    bool needed = forceFullRemoteRefresh;
-                    if (!needed) {
-                        for (const auto& lc : unmatchedLocalConsoles) {
-                            if (isPlatformCompatible(lc, p.slug)) {
-                                needed = true;
-                                break;
-                            }
+                    bool needed = false;
+                    for (const auto& lc : unmatchedLocalConsoles) {
+                        if (isPlatformCompatible(lc, p.slug)) {
+                            needed = true;
+                            break;
                         }
                     }
                     if (needed && (forceFullRemoteRefresh || !isPlatformLoaded(p.id, p.slug))) {
