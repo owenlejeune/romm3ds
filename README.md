@@ -18,7 +18,8 @@ It automatically detects installed Nintendo 3DS and CIA games (SD/Cartridge/NAND
 - **Custom Save Location Overrides**: Set a custom save file path for any title (ideal for custom 3DSX forwarders and multi-path emulators).
 - **Manual RomM Matching**: Manually search and link local games to specific RomM library entries if auto-matching needs adjustment.
 - **Conflict Resolution Dialog**: Visual side-by-side comparison of local vs. remote timestamps with user-selected resolution strategies.
-- **Batch Sync Queue**: Sync multiple games with a single tap.
+- **Filter & Sort Pickers**: Filter your local library by status (`All`, `Matched`, `Has Saves`, `Outdated (Remote Newer)`, `Updated (Local Newer)`, `Hidden`), by console type (`3DS`, `DS`, `GBA`, etc.), or by text search, and sort by `Name`, `Has Save`, or `Matched`.
+- **Filtered Batch Sync**: Synchronize all games in your currently active filter/view with a single tap or button press.
 - **Real-Time Operation Log**: Live onscreen log window displaying sync progress and network requests with soft word-wrapping.
 
 ---
@@ -28,14 +29,11 @@ It automatically detects installed Nintendo 3DS and CIA games (SD/Cartridge/NAND
 ### 1. Initial Setup & Configuration
 
 1. Launch **romm3ds** on your 3DS (via the Homebrew Launcher or the installed HOME Menu forwarder).
-2. Tap **`[ Settings ]`** on the touch screen or press **(X)** to open the Settings menu.
-3. Configure your RomM connection:
-   - **Server URL**: Your RomM server address (e.g., `http://192.168.1.100:8080`). If using a reverse proxy with a subpath, include it (e.g., `https://romm.example.com/romm`).
-   - **Username / Password**: Your RomM login credentials.
-   - **Custom ROM Directories**: Add any custom paths where you store ROMs (separated by semicolons, e.g. `sdmc:/roms;sdmc:/pokedaisy/roms`).
-   - **Conflict Resolution**: Choose your preferred automatic behavior (`Newer Wins`, `Always Ask`, `Local Always`, or `Remote Always`).
-   - **Auto-Sync on Startup**: Toggle automatic synchronization when the app launches.
-4. Tap **`[ Save & Close ]`** to save your preferences to `sdmc:/3ds/romm3ds/config.json`.
+2. On first launch, you will be prompted to configure your RomM connection:
+   - **RomM Server Endpoint**: Your RomM server address (e.g., `http://192.168.1.100:8080`). If using a reverse proxy with a subpath, include it (e.g., `https://romm.example.com/romm`).
+   - **API Key / Credentials**: Your RomM API Key / Personal Access Token (generated in the RomM web dashboard under your user profile / API tokens).
+3. Tap **`[ Save Configuration ]`** to test the connection and save your settings to `sdmc:/3ds/romm3ds/config.json`.
+4. *(Optional)* To scan additional custom ROM directories on your SD card, add a `"rom_directories"` array in `sdmc:/3ds/romm3ds/config.json` (e.g. `["sdmc:/roms", "sdmc:/custom/roms"]`).
 
 ---
 
@@ -44,38 +42,41 @@ It automatically detects installed Nintendo 3DS and CIA games (SD/Cartridge/NAND
 - **Top Screen**: Shows detailed information for the currently selected game:
   - Game logo / boxart banner on the left.
   - Game Title, Platform badge (e.g. `[3DS]`, `[GBA]`, `[DS]`), and RomM Match status.
-  - Save file locations (local path and remote filename).
+  - Title ID or full SD card ROM path and active local save file path.
   - Save timestamps and relative age indicators (`*REMOTE IS NEWER*`, `*LOCAL IS NEWER*`, or `*IN SYNC*`).
-- **Bottom Screen**: Scrollable list of all detected local games and ROMs, plus action buttons:
-  - **`[ Sync Selected ]`**: Initiates synchronization for the highlighted game.
-  - **`[ Match ]`**: Manually link or change the linked RomM library entry.
-  - **`[ Custom Save ]`**: Select or override the local save file path.
-  - **`[ Sync All ]`**: Queues and synchronizes all matched games.
-  - **`[ Settings ]`**: Opens configuration settings.
+- **Bottom Screen**: Scrollable list of detected local games and ROMs, filter/sort controls, and action buttons:
+  - **Sort Button (`[Sort: ...]`)**: Opens the Sort Picker (`Name`, `Has Save`, `Matched`).
+  - **Filter Button (`[Filter: ...]`)**: Opens the Filter Picker (`All (Unhidden)`, `Has Saves`, `Matched`, `Outdated (Remote Newer)`, `Updated (Local Newer)`, available console filters, and `Hidden / Ignored`).
+  - **Search Bar & `[ Clr ]`**: Filter visible games by title substring.
+  - **`[ Sync (A) ]`**: Initiates synchronization for the highlighted game.
+  - **`[ Sync All (X) ]`**: Queues and batch-synchronizes all matched games in the **currently filtered list**.
+  - **`[ Match ]`**: Manually link or change the linked RomM library entry (or refresh the remote console library).
+  - **`[ Save Path ]`**: Browse the SD card to select or override the local save file path for the highlighted title.
+  - **`[ Hide ]` / `[ Unhide ]`**: Exclude or re-include the highlighted title from the main list and batch sync.
 
 ---
 
 ### 3. Syncing Saves & Conflict Resolution
 
-#### Single Game Sync
-Highlight a game and press **(A)** or tap **`[ Sync Selected ]`**.
-- If the remote save is newer, `romm3ds` downloads and writes the save to the appropriate 3DS location.
-- If your local save is newer, `romm3ds` uploads the local save to your RomM server.
-- If both timestamps match or the files are identical, no unnecessary transfer occurs.
+#### Single Game & Batch Sync
+Highlight a game and press **(A)** or tap **`[ Sync (A) ]`** (or press **(X)** / tap **`[ Sync All (X) ]`** to batch sync all games in the current filter):
+- If a save exists only on the server, `romm3ds` downloads and injects it locally.
+- If a save exists only locally, `romm3ds` uploads it to your RomM server.
+- You can also force an immediate upload with **(L)** or force an immediate download with **(R)** from the main list.
 
 #### Conflict Resolution
-If a save exists both locally and remotely with conflicting or unverified timestamps:
-1. A dialog displays the **Local Save Date** and **Remote Save Date** side by side.
+When a save exists both locally and remotely:
+1. A dialog displays the **Local Save Date** and **Remote Save Date** side by side and highlights which save is newer.
 2. Select your choice:
-   - **`[ Upload Save (Use Local Save) ]`**: Uploads your 3DS save to the server.
    - **`[ Download Save (Overwrite Local) ]`**: Downloads the server save to your 3DS.
+   - **`[ Upload Save (Use Local Save) ]`**: Uploads your 3DS save to the server.
    - **`[ Skip ]`**: Skips synchronization for this game.
 
 #### Custom Save Path Overrides
 For custom CIA forwarders (such as an installed forwarder that runs a 3DSX located in `/3ds/emerald3ds/` alongside its `.sav` file):
-1. Select the title in the list and tap **`[ Custom Save ]`**.
+1. Select the title in the list and tap **`[ Save Path ]`**.
 2. Navigate the SD card browser to locate your save file (`.sav`, `.srm`, `.dsv`, etc.).
-3. Confirm the selection to permanently bind that save path to the title.
+3. Confirm the selection to permanently bind that save path to the title in `sdmc:/3ds/romm3ds/mapping.json`.
 
 ---
 
@@ -83,13 +84,16 @@ For custom CIA forwarders (such as an installed forwarder that runs a 3DSX locat
 
 | Button / Action | Function |
 |---|---|
-| **D-Pad Up / Down** or **Circle Pad** | Navigate game list |
+| **D-Pad Up / Down** | Navigate game list / menu options |
 | **D-Pad Left / Right** | Page Up / Page Down through the list |
-| **(A)** | Sync highlighted game / Confirm action |
+| **(A)** | Sync highlighted game / Confirm selection |
 | **(B)** | Cancel dialog / Go back / Dismiss log |
-| **(X)** | Open Settings screen |
-| **(Y)** | Refresh and rescan library |
-| **Touch Screen** | Tap buttons, scroll game list, select options |
+| **(X)** | Batch sync all matched games in the current filter |
+| **(Y)** | Search / filter games by title |
+| **(L)** | Force upload local save for highlighted game |
+| **(R)** | Force download remote save for highlighted game |
+| **(SELECT)** | Open Manual RomM Match screen for highlighted game |
+| **Touch Screen** | Tap buttons, pickers, search bar, or game list rows |
 | **(START)** | Exit `romm3ds` to Homebrew Launcher / HOME Menu |
 
 ---
@@ -260,6 +264,19 @@ When you play Nintendo DS games on your 3DS and save in-game, you may notice tha
 
 ---
 
+### Security & Self-Hosting Notes
+
+- **SD Card Configuration**: Your RomM endpoint URL and API key are stored locally on your 3DS SD card at `sdmc:/3ds/romm3ds/config.json`. Treat this file as sensitive and avoid sharing it when posting logs or SD card backups.
+- **TLS / HTTPS Certificates**: Because the Nintendo 3DS system firmware does not include an up-to-date CA certificate bundle for modern authorities (such as Let's Encrypt) or self-signed homelab certificates, `romm3ds` disables strict TLS peer verification (`CURLOPT_SSL_VERIFYPEER = 0L`) so HTTPS reverse-proxy endpoints work out of the box.
+
+---
+
 ## AI Disclaimer
 
 This project was developed and maintained with the assistance of Generative AI tools (including Google Antigravity and Gemini). While I am a professional software developer and have some familiarity with C++, I am by no means an expert. While all code has been tested, reviewed, and verified on real Nintendo 3DS hardware and clean build environments, community contributions, bug reports, and feedback are always welcome.
+
+---
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
