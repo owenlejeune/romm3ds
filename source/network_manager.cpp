@@ -1,4 +1,5 @@
 #include "network_manager.hpp"
+#include "common.hpp"
 #include "config_manager.hpp"
 #include "sync_manager.hpp"
 
@@ -25,6 +26,11 @@ static u32* s_socBuffer = nullptr;
 static constexpr size_t SOC_BUFFERSIZE = 0x100000;
 #endif
 static bool s_networkInitialized = false;
+
+const char* getUserAgent() {
+    static const std::string s_userAgent = std::string("romm3ds/") + APP_VERSION;
+    return s_userAgent.c_str();
+}
 
 size_t headerCallback(char* buffer, size_t size, size_t nmemb, void* userp) {
     (void)userp;
@@ -235,7 +241,7 @@ NetworkResult NetworkManager::testConnection() {
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "romm3ds/0.1.0");
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, getUserAgent());
 
     CURLcode res = curl_easy_perform(curl);
     if (res == CURLE_OK) {
@@ -293,7 +299,7 @@ NetworkResult NetworkManager::fetchPlatforms(std::vector<RommPlatform>& outPlatf
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "romm3ds/0.1.0");
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, getUserAgent());
 
     CURLcode res = curl_easy_perform(curl);
     if (res == CURLE_OK) {
@@ -407,7 +413,7 @@ NetworkResult NetworkManager::fetchLibrary(std::vector<RommGame>& outGames, uint
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
-        curl_easy_setopt(curl, CURLOPT_USERAGENT, "romm3ds/0.1.0");
+        curl_easy_setopt(curl, CURLOPT_USERAGENT, getUserAgent());
 
         CURLcode res = curl_easy_perform(curl);
         if (res != CURLE_OK) {
@@ -508,7 +514,7 @@ NetworkResult NetworkManager::fetchSaves(std::vector<RommSave>& outSaves, uint64
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "romm3ds/0.1.0");
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, getUserAgent());
 
     CURLcode res = curl_easy_perform(curl);
     if (res == CURLE_OK) {
@@ -628,7 +634,7 @@ NetworkResult NetworkManager::uploadSave(uint64_t gameId, const std::string& fil
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "romm3ds/0.1.0");
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, getUserAgent());
 
     CURLcode res = curl_easy_perform(curl);
     if (res == CURLE_OK) {
@@ -704,7 +710,7 @@ NetworkResult NetworkManager::downloadSaveById(uint64_t saveId, const std::strin
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "romm3ds/0.1.0");
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, getUserAgent());
 
     CURLcode res = curl_easy_perform(curl);
     fclose(fp);
