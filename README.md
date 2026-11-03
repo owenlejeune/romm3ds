@@ -10,16 +10,21 @@ It automatically detects installed Nintendo 3DS and CIA games (SD/Cartridge/NAND
 
 - **Installed Title & ROM Directory Scanning**: Detects all installed 3DS and CIA games (SD, Game Card, and NAND), along with ROMs and saves in any ROM directories and subdirectories on your SD card (such as `/roms`, `/roms/gba`, `/files/roms`, `/mGBA/`, and user-configured paths).
 - **Smart Save Priority**: Checks the ROM's immediate folder and local emulator subdirectories first before falling back to global searches.
-- **Top Screen Game Details & Logos**: Displays game metadata and icons/logos:
+- **Top Screen Hero Inspector**: Displays detailed game metadata and icons/logos:
   - **3DS**: Embedded SMDH banners and icons.
   - **Nintendo DS**: Embedded 4bpp banner icons extracted directly from `.nds` ROM headers.
   - **Game Boy Advance**: Cover art (`/mGBA/covers/`, `/_nds/TWiLightMenu/boxart/`, adjacent `.png` files), forwarder SMDH icons, or retro cartridge badges.
-- **Bidirectional Syncing**: Upload local saves to RomM or download newer remote saves.
+  - **Metadata & Full Paths**: Displays title, platform badge (`[3DS]`, `[GBA]`, `[DS]`), RomM match badge, Title ID or full SD ROM path, save file path, and timestamps with relative age indicators (`*REMOTE IS NEWER*`, `*LOCAL IS NEWER*`, or `*IN SYNC*`).
+- **Tactile Bottom Screen Workspace & Physics**: 5-row card workspace (`32 px` rows) featuring resistive touch-flick scrolling with inertial damping decay (`0.88f`), touch press visual feedback, and D-Pad / Circle Pad hold-to-repeat navigation.
+- **Slide-Up Bottom Sheets**: Cleanly manages contextual actions without obscuring the Top Screen Hero Inspector:
+  - **Game Actions Sheet** (`SELECT` / `[ Actions (SEL) ]`): Contextual sync, force upload/download, manual match, custom save path, and hide/unhide options.
+  - **Library & Settings Sheet** (`X` / `[ Menu (X) ]`): Batch sync all filtered games, library refresh, and server settings.
+  - **Sort & Filter Sheets**: Slide-up sheets with active radio dots, status pills, and sliding window scrollbars for console and status filters.
+- **Bidirectional Syncing with Safe Guards**: Upload local saves to RomM or download newer remote saves. Sync, force upload, and force download actions are dynamically guarded and disabled when no relevant save files exist.
+- **Filtered Batch Sync**: Synchronize all games in your currently active filter/view with a single tap or button press, automatically skipping titles that lack local and remote saves.
+- **Destructive Action Guarding (NSA Pattern C)**: Overwrite operations (conflicts, force uploads, force downloads) feature danger highlight indicators (`CLR_DANGER`), human-readable timestamp deltas (e.g. `Local save is 2h 15m newer than Remote`), safe Cancel defaults, and automatic local rollback backups (`sdmc:/3ds/romm3ds/backups/<TitleID>/`).
 - **Custom Save Location Overrides**: Set a custom save file path for any title (ideal for custom 3DSX forwarders and multi-path emulators).
 - **Manual RomM Matching**: Manually search and link local games to specific RomM library entries if auto-matching needs adjustment.
-- **Conflict Resolution Dialog**: Visual side-by-side comparison of local vs. remote timestamps with user-selected resolution strategies.
-- **Filter & Sort Pickers**: Filter your local library by status (`All`, `Matched`, `Has Saves`, `Outdated (Remote Newer)`, `Updated (Local Newer)`, `Hidden`), by console type (`3DS`, `DS`, `GBA`, etc.), or by text search, and sort by `Name`, `Has Save`, or `Matched`.
-- **Filtered Batch Sync**: Synchronize all games in your currently active filter/view with a single tap or button press.
 - **Real-Time Operation Log**: Live onscreen log window displaying sync progress and network requests with soft word-wrapping.
 
 ---
@@ -39,63 +44,81 @@ It automatically detects installed Nintendo 3DS and CIA games (SD/Cartridge/NAND
 
 ### 2. Navigating Your Library
 
-- **Top Screen**: Shows detailed information for the currently selected game:
-  - Game logo / boxart banner on the left.
-  - Game Title, Platform badge (e.g. `[3DS]`, `[GBA]`, `[DS]`), and RomM Match status.
-  - Title ID or full SD card ROM path and active local save file path.
-  - Save timestamps and relative age indicators (`*REMOTE IS NEWER*`, `*LOCAL IS NEWER*`, or `*IN SYNC*`).
-- **Bottom Screen**: Scrollable list of detected local games and ROMs, filter/sort controls, and action buttons:
-  - **Sort Button (`[Sort: ...]`)**: Opens the Sort Picker (`Name`, `Has Save`, `Matched`).
-  - **Filter Button (`[Filter: ...]`)**: Opens the Filter Picker (`All (Unhidden)`, `Has Saves`, `Matched`, `Outdated (Remote Newer)`, `Updated (Local Newer)`, available console filters, and `Hidden / Ignored`).
-  - **Search Bar & `[ Clr ]`**: Filter visible games by title substring.
-  - **`[ Sync (A) ]`**: Initiates synchronization for the highlighted game.
-  - **`[ Sync All (X) ]`**: Queues and batch-synchronizes all matched games in the **currently filtered list**.
-  - **`[ Refresh ]`**: Re-scans installed titles/SD ROMs and refreshes remote RomM library/save state.
-  - **`[ Match ]`**: Manually link or change the linked RomM library entry (or refresh the remote console library).
-  - **`[ Save Path ]`**: Browse the SD card to select or override the local save file path for the highlighted title.
-  - **`[ Hide ]` / `[ Unhide ]`**: Exclude or re-include the highlighted title from the main list and batch sync.
-  - **`[ Cfg ]`**: Re-open the RomM Server Settings screen to edit your Server Endpoint or API Key.
+- **Top Screen Hero Inspector**:
+  - **Left Column**: High-resolution game logo / boxart banner with a platform pill badge (e.g. `[3DS]`, `[GBA]`, `[DS]`).
+  - **Right Column**: Game Title, RomM Match status pill (`[ MATCHED ]` / `[ UNMATCHED ]`), Title ID or full SD card ROM path, and active local save path.
+  - **Save Comparison**: Local and remote timestamps with relative age indicators (`*REMOTE IS NEWER*`, `*LOCAL IS NEWER*`, or `*IN SYNC*`).
+  - **Footer HUD**: Compact context key guide (`(A) Sync  (SEL) Actions  (X) Menu  (L/R) Up/Down  (Y) Search`).
+- **Bottom Screen Workspace**:
+  - **Top Navigation Bar**:
+    - **Filter Button (`[Filter: ...]`)**: Opens the slide-up Filter Sheet (`All`, `Has Saves`, `Matched`, `Outdated`, `Updated`, console filters, `Hidden / Ignored`) with scrollbar support.
+    - **Sort Button (`[Sort: ...]`)**: Opens the slide-up Sort Sheet (`Name`, `Has Save`, `Matched`).
+    - **Search Bar & `[ Clr ]`**: Filter visible titles by typing on the 3DS software keyboard.
+  - **5-Row Game List Viewport**: Each 32px card row features color-coded status badges, console pill tags, touch-drag/flick scrolling with inertial decay, and hold-to-repeat D-Pad navigation.
+  - **Bottom Action Deck**:
+    - **`[ Sync (A) ]`**: Syncs the highlighted title. Automatically dimmed and disabled when neither a local nor remote save file exists.
+    - **`[ Actions (SEL) ]`**: Slides up the **Game Actions** bottom sheet for title-specific operations.
+    - **`[ Menu (X) ]`**: Slides up the **Library & Settings** bottom sheet for global operations.
 
 ---
 
-### 3. Syncing Saves & Conflict Resolution
+### 3. Context Menus & Bottom Sheets
 
-#### Single Game & Batch Sync
-Highlight a game and press **(A)** or tap **`[ Sync (A) ]`** (or press **(X)** / tap **`[ Sync All (X) ]`** to batch sync all games in the current filter):
+To maximize screen clarity while keeping the Top Screen Hero Inspector continuously visible, all secondary actions and selection dialogs slide upward from the bottom of the screen:
+
+#### Game Actions Sheet (`SELECT` or `[ Actions (SEL) ]`)
+- **`Sync Save Now (A)`**: Bidirectionally syncs the selected game (disabled if no local and remote saves exist).
+- **`Force Upload Local Save (L)`**: Forces an upload of the local 3DS save to RomM (disabled if no local save exists).
+- **`Force Download Remote Save (R)`**: Downloads and applies the RomM server save (disabled if no local save or no remote save exists).
+- **`Manual Match with RomM (SEL)`**: Search and bind the local game to a specific RomM library title.
+- **`Set Custom Save Path`**: Browse the SD card to select or override the save file location for the title.
+- **`Hide / Unhide Title`**: Toggle whether the game appears in the main library and batch sync.
+
+#### Library & Settings Sheet (`(X)` or `[ Menu (X) ]`)
+- **`Batch Sync All Filtered (X)`**: Queues and synchronizes all games in your active filter. Automatically skips any games that have no saves on either side.
+- **`Refresh Library & Saves`**: Re-scans SD card ROMs and installed titles and fetches the latest metadata from RomM.
+- **`Server Settings (Endpoint & API Key)`**: Re-opens the connection setup screen to modify your server endpoint or token.
+
+---
+
+### 4. Syncing Saves & Destructive Action Guarding
+
+#### Standard Sync
+Highlight a game and press **(A)** or tap **`[ Sync (A) ]`**:
 - If a save exists only on the server, `romm3ds` downloads and injects it locally.
 - If a save exists only locally, `romm3ds` uploads it to your RomM server.
-- You can also force an immediate upload with **(L)** or force an immediate download with **(R)** from the main list.
+- If no saves exist on either side, the sync button is disabled to prevent unnecessary API overhead.
 
-#### Conflict Resolution
-When a save exists both locally and remotely:
-1. A dialog displays the **Local Save Date** and **Remote Save Date** side by side and highlights which save is newer.
-2. Select your choice:
-   - **`[ Download Save (Overwrite Local) ]`**: Downloads the server save to your 3DS.
-   - **`[ Upload Save (Use Local Save) ]`**: Uploads your 3DS save to the server.
-   - **`[ Skip ]`**: Skips synchronization for this game.
+#### Destructive Action Guarding (NSA Pattern C)
+When overwriting an existing save (during a timestamp conflict, manual Force Upload, or manual Force Download):
+1. The **Top Screen** displays a side-by-side comparison of local and remote timestamps, along with a human-readable delta badge (e.g. `Remote is 2h 15m newer than Local (3DS)`).
+2. An automatic rollback backup of the local save is saved to `sdmc:/3ds/romm3ds/backups/<TitleID>/`.
+3. The **Bottom Screen** prompts for confirmation:
+   - Destructive options (`Overwrite Local Save` or `Overwrite Remote Save`) are clearly styled with danger red highlights (`CLR_DANGER`).
+   - The cursor defaults to safe **`[ Skip This Game (Cancel) ]`**, and pressing **(B)** immediately cancels the operation without modifying any files.
 
 #### Custom Save Path Overrides
-For custom CIA forwarders (such as an installed forwarder that runs a 3DSX located in `/3ds/emerald3ds/` alongside its `.sav` file):
-1. Select the title in the list and tap **`[ Save Path ]`**.
+For custom CIA forwarders (such as an installed forwarder running a 3DSX in `/3ds/emerald3ds/` alongside its `.sav` file):
+1. Select the title in the list and open **Game Actions (`SELECT`) -> `Set Custom Save Path`**.
 2. Navigate the SD card browser to locate your save file (`.sav`, `.srm`, `.dsv`, etc.).
 3. Confirm the selection to permanently bind that save path to the title in `sdmc:/3ds/romm3ds/config.json`.
 
 ---
 
-### 4. Controls Reference
+### 5. Controls Reference
 
 | Button / Action | Function |
 |---|---|
-| **D-Pad Up / Down** | Navigate game list / menu options |
+| **D-Pad Up / Down** | Navigate game list / menu options (hold to auto-repeat scroll) |
 | **D-Pad Left / Right** | Page Up / Page Down through the list |
-| **(A)** | Sync highlighted game / Confirm selection |
-| **(B)** | Cancel dialog / Go back / Dismiss log |
-| **(X)** | Batch sync all matched games in the current filter |
-| **(Y)** | Search / filter games by title |
-| **(L)** | Force upload local save for highlighted game |
-| **(R)** | Force download remote save for highlighted game |
-| **(SELECT)** | Open Manual RomM Match screen for highlighted game |
-| **Touch Screen** | Tap buttons, pickers, search bar, or game list rows |
+| **(A)** | Sync highlighted game (if saves exist) / Confirm selection |
+| **(B)** | Dismiss active bottom sheet / Cancel dialog / Go back |
+| **(X)** | Open Library & Settings bottom sheet |
+| **(Y)** | Open software keyboard to search / filter games by title |
+| **(L)** | Force upload local save for highlighted game (disabled if no local save) |
+| **(R)** | Force download remote save for highlighted game (disabled if no local save) |
+| **(SELECT)** | Open Game Actions bottom sheet for highlighted game |
+| **Touch Screen** | Tap buttons, rows, and sheets; vertically drag/flick to scroll with inertial decay |
 | **(START)** | Exit `romm3ds` to Homebrew Launcher / HOME Menu |
 
 ---
