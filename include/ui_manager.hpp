@@ -119,7 +119,7 @@ private:
     void freeGameLogo();
 
     void drawInputBox(float x, float y, float w, float h, const char* label, const std::string& value, bool selected);
-    void drawButton(float x, float y, float w, float h, const char* label, bool selected, u32 accentColor = 0, float z = 0.5f);
+    void drawButton(float x, float y, float w, float h, const char* label, bool selected, u32 accentColor = 0, float z = 0.5f, bool disabled = false);
     float drawPillBadge(float x, float y, const char* text, u32 bgColor, u32 textColor, float scale = 0.38f, float z = 0.5f);
     void drawLoadingOverlay(const std::string& message);
     void openOperationLog(const std::string& title);
@@ -130,7 +130,9 @@ private:
     enum class ActiveSheet {
         NONE,
         GAME_ACTIONS,
-        APP_MENU
+        APP_MENU,
+        SORT,
+        FILTER
     };
 
     ActiveSheet m_activeSheet = ActiveSheet::NONE;

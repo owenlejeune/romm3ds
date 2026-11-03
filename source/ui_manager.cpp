@@ -423,7 +423,9 @@ void UIManager::openFilterPicker() {
     }
   }
 
-  m_state = UIState::FILTER_PICKER;
+  m_activeSheet = ActiveSheet::FILTER;
+  m_sheetSelectedIndex = static_cast<int>(m_selectedFilterPickerIndex);
+  m_sheetTargetY = 56.0f;
 }
 
 void UIManager::openSortPicker() {
@@ -439,7 +441,9 @@ void UIManager::openSortPicker() {
     }
   }
 
-  m_state = UIState::SORT_PICKER;
+  m_activeSheet = ActiveSheet::SORT;
+  m_sheetSelectedIndex = static_cast<int>(m_selectedSortPickerIndex);
+  m_sheetTargetY = 130.0f;
 }
 
 void UIManager::cycleLocalFilterMode() { openFilterPicker(); }
@@ -546,6 +550,11 @@ void UIManager::syncSelectedGame() {
     return;
   }
 
+  if (!item.localTitle.hasSave && !item.remoteHasSave) {
+    m_statusMessage = "Cannot sync: No local or remote save exists.";
+    return;
+  }
+
   SyncAction action = m_syncMgr->evaluateItem(item);
   if (action == SyncAction::CONFLICT) {
     m_conflictGameIndex = actualIdx;
@@ -580,14 +589,29 @@ void UIManager::syncAllGames() {
     return;
   }
 
-  m_batchSyncTargetIndices = m_filteredLocalIndices;
+  m_batchSyncTargetIndices.clear();
+  for (size_t idx : m_filteredLocalIndices) {
+    if (idx < m_syncMgr->getItems().size()) {
+      const auto &item = m_syncMgr->getItems()[idx];
+      if (!item.isIgnored && item.isMatched &&
+          (item.localTitle.hasSave || item.remoteHasSave)) {
+        m_batchSyncTargetIndices.push_back(idx);
+      }
+    }
+  }
+
+  if (m_batchSyncTargetIndices.empty()) {
+    m_statusMessage = "No titles with saves to batch sync.";
+    return;
+  }
+
   m_batchSyncActive = true;
   m_batchSyncIndex = 0;
   m_batchSyncSuccessCount = 0;
 
   openOperationLog("Batch Sync (" +
                    std::to_string(m_batchSyncTargetIndices.size()) +
-                   " filtered titles)");
+                   " titles with saves)");
   processBatchSync();
 }
 
@@ -606,7 +630,8 @@ void UIManager::processBatchSync() {
     }
 
     SyncItem &item = m_syncMgr->getItems()[actualIdx];
-    if (item.isIgnored || !item.isMatched) {
+    if (item.isIgnored || !item.isMatched ||
+        (!item.localTitle.hasSave && !item.remoteHasSave)) {
       m_batchSyncIndex++;
       continue;
     }
@@ -665,6 +690,24 @@ void UIManager::forceUploadSelected() {
   size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
   SyncItem &item = m_syncMgr->getItems()[actualIdx];
 
+  if (!item.isMatched) {
+    m_statusMessage = "Cannot upload: Unmatched game.";
+    return;
+  }
+  if (!item.localTitle.hasSave) {
+    m_statusMessage = "Cannot upload: No local save file found.";
+    return;
+  }
+
+  // Destructive Action Guarding (NSA Pattern C):
+  // Overwriting a remote save is a destructive operation.
+  if (item.remoteHasSave) {
+    m_conflictGameIndex = actualIdx;
+    m_conflictChoiceIndex = 2; // Default to safe Cancel / Skip
+    m_state = UIState::CONFLICT_PROMPT;
+    return;
+  }
+
   openOperationLog("Upload Save: " + item.localTitle.name);
   auto logger = [this](const std::string &msg) { addOperationLog(msg); };
 
@@ -682,6 +725,28 @@ void UIManager::forceDownloadSelected() {
 
   size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
   SyncItem &item = m_syncMgr->getItems()[actualIdx];
+
+  if (!item.isMatched) {
+    m_statusMessage = "Cannot download: Unmatched game.";
+    return;
+  }
+  if (!item.localTitle.hasSave) {
+    m_statusMessage = "Cannot download: No local save file found.";
+    return;
+  }
+  if (!item.remoteHasSave) {
+    m_statusMessage = "Cannot download: No cloud save found on RomM.";
+    return;
+  }
+
+  // Destructive Action Guarding (NSA Pattern C):
+  // Overwriting a local save is a destructive operation.
+  if (item.localTitle.hasSave) {
+    m_conflictGameIndex = actualIdx;
+    m_conflictChoiceIndex = 2; // Default to safe Cancel / Skip
+    m_state = UIState::CONFLICT_PROMPT;
+    return;
+  }
 
   openOperationLog("Download Save: " + item.localTitle.name);
   auto logger = [this](const std::string &msg) { addOperationLog(msg); };
@@ -881,7 +946,21 @@ bool UIManager::handleSheetInput(u32 kDown, const touchPosition &touch) {
     return false;
   }
 
-  int numOptions = (m_activeSheet == ActiveSheet::GAME_ACTIONS) ? 6 : 3;
+  int numOptions = 0;
+  if (m_activeSheet == ActiveSheet::GAME_ACTIONS) {
+    numOptions = 6;
+  } else if (m_activeSheet == ActiveSheet::APP_MENU) {
+    numOptions = 3;
+  } else if (m_activeSheet == ActiveSheet::SORT) {
+    numOptions = static_cast<int>(m_sortOptions.size());
+  } else if (m_activeSheet == ActiveSheet::FILTER) {
+    numOptions = static_cast<int>(m_filterOptions.size());
+  }
+
+  if (numOptions <= 0) {
+    closeSheet();
+    return true;
+  }
 
   if (kDown & (KEY_B | KEY_START)) {
     closeSheet();
@@ -902,15 +981,62 @@ bool UIManager::handleSheetInput(u32 kDown, const touchPosition &touch) {
   auto executeGameAction = [this](int index) {
     closeSheet();
     switch (index) {
-    case 0:
-      syncSelectedGame();
+    case 0: {
+      bool canSync = false;
+      if (m_syncMgr && !m_filteredLocalIndices.empty() &&
+          m_selectedGameIndex < m_filteredLocalIndices.size()) {
+        const auto &item =
+            m_syncMgr->getItems()[m_filteredLocalIndices[m_selectedGameIndex]];
+        canSync = !item.isIgnored && item.isMatched &&
+                  (item.localTitle.hasSave || item.remoteHasSave);
+      }
+      if (canSync) {
+        syncSelectedGame();
+      } else {
+        m_statusMessage = "Cannot sync: No local or remote save exists.";
+      }
       break;
-    case 1:
-      forceUploadSelected();
+    }
+    case 1: {
+      bool canUpload = false;
+      if (m_syncMgr && !m_filteredLocalIndices.empty() &&
+          m_selectedGameIndex < m_filteredLocalIndices.size()) {
+        const auto &item =
+            m_syncMgr->getItems()[m_filteredLocalIndices[m_selectedGameIndex]];
+        canUpload = !item.isIgnored && item.isMatched && item.localTitle.hasSave;
+      }
+      if (canUpload) {
+        forceUploadSelected();
+      } else {
+        m_statusMessage = "Cannot upload: No local save file found.";
+      }
       break;
-    case 2:
-      forceDownloadSelected();
+    }
+    case 2: {
+      bool canDownload = false;
+      if (m_syncMgr && !m_filteredLocalIndices.empty() &&
+          m_selectedGameIndex < m_filteredLocalIndices.size()) {
+        const auto &item =
+            m_syncMgr->getItems()[m_filteredLocalIndices[m_selectedGameIndex]];
+        canDownload = !item.isIgnored && item.isMatched &&
+                      item.localTitle.hasSave && item.remoteHasSave;
+      }
+      if (canDownload) {
+        forceDownloadSelected();
+      } else {
+        if (m_syncMgr && !m_filteredLocalIndices.empty() &&
+            m_selectedGameIndex < m_filteredLocalIndices.size()) {
+          const auto &item =
+              m_syncMgr->getItems()[m_filteredLocalIndices[m_selectedGameIndex]];
+          if (!item.localTitle.hasSave) {
+            m_statusMessage = "Cannot download: No local save file found.";
+          } else {
+            m_statusMessage = "Cannot download: No cloud save found on RomM.";
+          }
+        }
+      }
       break;
+    }
     case 3:
       openManualMatch();
       break;
@@ -938,11 +1064,32 @@ bool UIManager::handleSheetInput(u32 kDown, const touchPosition &touch) {
     }
   };
 
+  auto executeSortAction = [this](int index) {
+    closeSheet();
+    if (index >= 0 && index < static_cast<int>(m_sortOptions.size())) {
+      m_localSortMode = m_sortOptions[index].mode;
+      updateLocalFilteredList();
+    }
+  };
+
+  auto executeFilterAction = [this](int index) {
+    closeSheet();
+    if (index >= 0 && index < static_cast<int>(m_filterOptions.size())) {
+      m_localFilterMode = m_filterOptions[index].mode;
+      m_localFilterConsole = m_filterOptions[index].console;
+      updateLocalFilteredList();
+    }
+  };
+
   if (kDown & KEY_A) {
     if (m_activeSheet == ActiveSheet::GAME_ACTIONS) {
       executeGameAction(m_sheetSelectedIndex);
-    } else {
+    } else if (m_activeSheet == ActiveSheet::APP_MENU) {
       executeAppMenuAction(m_sheetSelectedIndex);
+    } else if (m_activeSheet == ActiveSheet::SORT) {
+      executeSortAction(m_sheetSelectedIndex);
+    } else if (m_activeSheet == ActiveSheet::FILTER) {
+      executeFilterAction(m_sheetSelectedIndex);
     }
     return true;
   }
@@ -953,18 +1100,50 @@ bool UIManager::handleSheetInput(u32 kDown, const touchPosition &touch) {
       return true;
     }
 
-    float startY = m_sheetCurrentY + 28.0f;
-    float rowH = (m_activeSheet == ActiveSheet::GAME_ACTIONS) ? 26.0f : 28.0f;
-    for (int i = 0; i < numOptions; ++i) {
-      float itemY = startY + static_cast<float>(i) * rowH;
-      if (isTouchInside(touch, 12.0f, itemY, 296.0f, rowH)) {
-        m_sheetSelectedIndex = i;
-        if (m_activeSheet == ActiveSheet::GAME_ACTIONS) {
+    if (m_activeSheet == ActiveSheet::GAME_ACTIONS) {
+      float startY = m_sheetCurrentY + 28.0f;
+      for (int i = 0; i < numOptions; ++i) {
+        float itemY = startY + static_cast<float>(i) * 26.0f;
+        if (isTouchInside(touch, 12.0f, itemY, 296.0f, 24.0f)) {
+          m_sheetSelectedIndex = i;
           executeGameAction(i);
-        } else {
-          executeAppMenuAction(i);
+          return true;
         }
-        return true;
+      }
+    } else if (m_activeSheet == ActiveSheet::APP_MENU) {
+      float startY = m_sheetCurrentY + 30.0f;
+      for (int i = 0; i < numOptions; ++i) {
+        float itemY = startY + static_cast<float>(i) * 28.0f;
+        if (isTouchInside(touch, 12.0f, itemY, 296.0f, 26.0f)) {
+          m_sheetSelectedIndex = i;
+          executeAppMenuAction(i);
+          return true;
+        }
+      }
+    } else if (m_activeSheet == ActiveSheet::SORT) {
+      float startY = m_sheetCurrentY + 30.0f;
+      for (int i = 0; i < numOptions; ++i) {
+        float itemY = startY + static_cast<float>(i) * 28.0f;
+        if (isTouchInside(touch, 12.0f, itemY, 296.0f, 26.0f)) {
+          m_sheetSelectedIndex = i;
+          executeSortAction(i);
+          return true;
+        }
+      }
+    } else if (m_activeSheet == ActiveSheet::FILTER) {
+      int windowStart = 0;
+      if (m_sheetSelectedIndex >= 5) {
+        windowStart = m_sheetSelectedIndex - 4;
+      }
+      int visibleCount = std::min(5, numOptions - windowStart);
+      float startY = m_sheetCurrentY + 28.0f;
+      for (int i = 0; i < visibleCount; ++i) {
+        float itemY = startY + static_cast<float>(i) * 26.0f;
+        if (isTouchInside(touch, 12.0f, itemY, 296.0f, 24.0f)) {
+          m_sheetSelectedIndex = windowStart + i;
+          executeFilterAction(m_sheetSelectedIndex);
+          return true;
+        }
       }
     }
   }
@@ -1016,6 +1195,19 @@ void UIManager::renderBottomSheet() {
                       m_syncMgr->getItems()[m_filteredLocalIndices[m_selectedGameIndex]]
                           .isIgnored);
 
+    bool hasSaves = false;
+    bool hasLocalSave = false;
+    bool hasRemoteSave = false;
+    if (m_syncMgr && !m_filteredLocalIndices.empty() &&
+        m_selectedGameIndex < m_filteredLocalIndices.size()) {
+      const auto &item =
+          m_syncMgr->getItems()[m_filteredLocalIndices[m_selectedGameIndex]];
+      hasLocalSave = !item.isIgnored && item.isMatched && item.localTitle.hasSave;
+      hasRemoteSave = !item.isIgnored && item.isMatched && item.remoteHasSave;
+      hasSaves = !item.isIgnored && item.isMatched &&
+                 (item.localTitle.hasSave || item.remoteHasSave);
+    }
+
     const char *options[6] = {
         "Sync Save Now (A)",
         "Force Upload Local Save (L)",
@@ -1028,9 +1220,24 @@ void UIManager::renderBottomSheet() {
     for (int i = 0; i < 6; ++i) {
       float itemY = startY + static_cast<float>(i) * 26.0f;
       bool selected = (i == m_sheetSelectedIndex);
+      bool isOptionDisabled = false;
+      if (i == 0 && !hasSaves) {
+        isOptionDisabled = true;
+      } else if (i == 1 && !hasLocalSave) {
+        isOptionDisabled = true;
+      } else if (i == 2 && (!hasLocalSave || !hasRemoteSave)) {
+        isOptionDisabled = true;
+      }
+
       u32 bg = selected ? CLR_SURFACE_ELEVATED : CLR_SURFACE_ALT;
       u32 border = selected ? CLR_ACCENT_PRIMARY : CLR_BORDER_SUBTLE;
       u32 textColor = selected ? CLR_TEXT_PRIMARY : CLR_TEXT_SECONDARY;
+      if (isOptionDisabled) {
+        textColor = CLR_TEXT_DIM;
+        if (!selected) {
+          bg = CLR_SURFACE_ALT;
+        }
+      }
 
       C2D_DrawRectSolid(12.0f, itemY, 0.84f, 296.0f, 24.0f, border);
       C2D_DrawRectSolid(13.0f, itemY + 1.0f, 0.85f, 294.0f, 22.0f, bg);
@@ -1076,6 +1283,107 @@ void UIManager::renderBottomSheet() {
       C2D_TextOptimize(&optTxt);
       C2D_DrawText(&optTxt, C2D_WithColor, 22.0f, itemY + 6.0f, 0.87f, 0.40f,
                    0.40f, textColor);
+    }
+  } else if (m_activeSheet == ActiveSheet::SORT) {
+    C2D_Text titleTxt;
+    C2D_TextParse(&titleTxt, m_textBuf, "Sort Installed Games");
+    C2D_TextOptimize(&titleTxt);
+    C2D_DrawText(&titleTxt, C2D_WithColor, 16.0f, m_sheetCurrentY + 11.0f,
+                 0.85f, 0.44f, 0.44f, CLR_ACCENT_PRIMARY);
+
+    float startY = m_sheetCurrentY + 30.0f;
+    for (size_t i = 0; i < m_sortOptions.size(); ++i) {
+      float itemY = startY + static_cast<float>(i) * 28.0f;
+      bool selected = (static_cast<int>(i) == m_sheetSelectedIndex);
+      bool active = (m_sortOptions[i].mode == m_localSortMode);
+      u32 bg = selected ? CLR_SURFACE_ELEVATED : CLR_SURFACE_ALT;
+      u32 border = selected ? CLR_ACCENT_PRIMARY : CLR_BORDER_SUBTLE;
+      u32 textColor = selected ? CLR_TEXT_PRIMARY : CLR_TEXT_SECONDARY;
+
+      C2D_DrawRectSolid(12.0f, itemY, 0.84f, 296.0f, 26.0f, border);
+      C2D_DrawRectSolid(13.0f, itemY + 1.0f, 0.85f, 294.0f, 24.0f, bg);
+      if (selected) {
+        C2D_DrawRectSolid(12.0f, itemY, 0.86f, 3.0f, 26.0f,
+                          CLR_ACCENT_PRIMARY);
+      }
+
+      u32 dotColor = active ? CLR_GREEN : CLR_BORDER_SUBTLE;
+      C2D_DrawRectSolid(20.0f, itemY + 10.0f, 0.86f, 6.0f, 6.0f, dotColor);
+
+      C2D_Text optTxt;
+      C2D_TextParse(&optTxt, m_textBuf, m_sortOptions[i].label.c_str());
+      C2D_TextOptimize(&optTxt);
+      C2D_DrawText(&optTxt, C2D_WithColor, 32.0f, itemY + 6.0f, 0.87f, 0.40f,
+                   0.40f, textColor);
+
+      if (active) {
+        drawPillBadge(248.0f, itemY + 6.0f, "ACTIVE", CLR_SURFACE_HEADER,
+                      CLR_GREEN, 0.34f, 0.87f);
+      }
+    }
+  } else if (m_activeSheet == ActiveSheet::FILTER) {
+    std::string titleStr = "Filter Library (" +
+                           std::to_string(m_filterOptions.size()) +
+                           " options)";
+    C2D_Text titleTxt;
+    C2D_TextParse(&titleTxt, m_textBuf, titleStr.c_str());
+    C2D_TextOptimize(&titleTxt);
+    C2D_DrawText(&titleTxt, C2D_WithColor, 16.0f, m_sheetCurrentY + 11.0f,
+                 0.85f, 0.44f, 0.44f, CLR_ACCENT_PRIMARY);
+
+    int windowStart = 0;
+    if (m_sheetSelectedIndex >= 5) {
+      windowStart = m_sheetSelectedIndex - 4;
+    }
+    int visibleCount =
+        std::min(5, static_cast<int>(m_filterOptions.size()) - windowStart);
+
+    float startY = m_sheetCurrentY + 28.0f;
+    for (int i = 0; i < visibleCount; ++i) {
+      int idx = windowStart + i;
+      const auto &opt = m_filterOptions[idx];
+      float itemY = startY + static_cast<float>(i) * 26.0f;
+      bool selected = (idx == m_sheetSelectedIndex);
+      bool active =
+          (opt.mode == m_localFilterMode &&
+           (opt.mode != LocalFilterMode::CONSOLE ||
+            strcasecmp(opt.console.c_str(), m_localFilterConsole.c_str()) == 0));
+
+      u32 bg = selected ? CLR_SURFACE_ELEVATED : CLR_SURFACE_ALT;
+      u32 border = selected ? CLR_ACCENT_PRIMARY : CLR_BORDER_SUBTLE;
+      u32 textColor = selected ? CLR_TEXT_PRIMARY : CLR_TEXT_SECONDARY;
+
+      C2D_DrawRectSolid(12.0f, itemY, 0.84f, 296.0f, 24.0f, border);
+      C2D_DrawRectSolid(13.0f, itemY + 1.0f, 0.85f, 294.0f, 22.0f, bg);
+      if (selected) {
+        C2D_DrawRectSolid(12.0f, itemY, 0.86f, 3.0f, 24.0f,
+                          CLR_ACCENT_PRIMARY);
+      }
+
+      u32 dotColor = active ? CLR_GREEN : CLR_BORDER_SUBTLE;
+      C2D_DrawRectSolid(20.0f, itemY + 9.0f, 0.86f, 6.0f, 6.0f, dotColor);
+
+      C2D_Text optTxt;
+      C2D_TextParse(&optTxt, m_textBuf, opt.label.c_str());
+      C2D_TextOptimize(&optTxt);
+      C2D_DrawText(&optTxt, C2D_WithColor, 32.0f, itemY + 5.0f, 0.87f, 0.38f,
+                   0.38f, textColor);
+
+      if (active) {
+        drawPillBadge(248.0f, itemY + 5.0f, "ACTIVE", CLR_SURFACE_HEADER,
+                      CLR_GREEN, 0.32f, 0.87f);
+      }
+    }
+
+    if (m_filterOptions.size() > 5) {
+      float scrollH = 130.0f;
+      float thumbH = std::max(
+          16.0f, scrollH * (5.0f / static_cast<float>(m_filterOptions.size())));
+      float maxOffset = static_cast<float>(m_filterOptions.size() - 5);
+      float thumbY =
+          startY + (scrollH - thumbH) * (static_cast<float>(windowStart) / maxOffset);
+      C2D_DrawRectSolid(311.0f, startY, 0.86f, 2.0f, scrollH, CLR_BORDER_SUBTLE);
+      C2D_DrawRectSolid(310.0f, thumbY, 0.88f, 3.0f, thumbH, CLR_ACCENT_PRIMARY);
     }
   }
 }
@@ -1244,8 +1552,21 @@ void UIManager::handleInput(u32 kDown, u32 kHeld, u32 kUp, const touchPosition &
       }
     }
 
+    bool canSyncSelected = false;
+    if (m_syncMgr && !m_filteredLocalIndices.empty() &&
+        m_selectedGameIndex < m_filteredLocalIndices.size()) {
+      size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
+      const auto &item = m_syncMgr->getItems()[actualIdx];
+      canSyncSelected = !item.isIgnored && item.isMatched &&
+                        (item.localTitle.hasSave || item.remoteHasSave);
+    }
+
     if (kDown & KEY_A) {
-      syncSelectedGame();
+      if (canSyncSelected) {
+        syncSelectedGame();
+      } else {
+        m_statusMessage = "Cannot sync: No local or remote save exists.";
+      }
     } else if (kDown & KEY_SELECT) {
       openGameActionsSheet();
     } else if (kDown & KEY_X) {
@@ -1289,7 +1610,11 @@ void UIManager::handleInput(u32 kDown, u32 kHeld, u32 kUp, const touchPosition &
         m_localFilterText.clear();
         updateLocalFilteredList();
       } else if (isTouchInside(touch, 8.0f, 203.0f, 96.0f, 32.0f)) {
-        syncSelectedGame();
+        if (canSyncSelected) {
+          syncSelectedGame();
+        } else {
+          m_statusMessage = "Cannot sync: No local or remote save exists.";
+        }
       } else if (isTouchInside(touch, 108.0f, 203.0f, 104.0f, 32.0f)) {
         openGameActionsSheet();
       } else if (isTouchInside(touch, 216.0f, 203.0f, 96.0f, 32.0f)) {
@@ -1537,7 +1862,31 @@ void UIManager::drawInputBox(float x, float y, float w, float h,
 
 void UIManager::drawButton(float x, float y, float w, float h,
                            const char *label, bool selected, u32 accentColor,
-                           float z) {
+                           float z, bool disabled) {
+  if (disabled) {
+    C2D_DrawRectSolid(x, y, z, w, h, CLR_BORDER_SUBTLE);
+    C2D_DrawRectSolid(x + 1.5f, y + 1.5f, z, w - 3.0f, h - 3.0f, CLR_SURFACE_ALT);
+
+    C2D_Text btnText;
+    C2D_TextParse(&btnText, m_textBuf, label);
+    C2D_TextOptimize(&btnText);
+
+    float scale = (h <= 22.0f) ? 0.38f : (h <= 28.0f ? 0.42f : 0.46f);
+    float textW = 0.0f, textH = 0.0f;
+    C2D_TextGetDimensions(&btnText, scale, scale, &textW, &textH);
+
+    if (textW > w - 8.0f && textW > 0.0f) {
+      scale *= (w - 8.0f) / textW;
+      C2D_TextGetDimensions(&btnText, scale, scale, &textW, &textH);
+    }
+
+    float textX = x + (w - textW) / 2.0f;
+    float textY = y + (h - textH) / 2.0f;
+    C2D_DrawText(&btnText, C2D_WithColor, textX, textY, z + 0.01f, scale, scale,
+                 CLR_TEXT_DIM);
+    return;
+  }
+
   bool isPressed = m_touchHeld && isTouchInside(m_activeTouch, x, y, w, h);
   u32 baseAccent = (accentColor != 0) ? accentColor : CLR_ACCENT_PRIMARY;
 
@@ -2114,14 +2463,10 @@ void UIManager::renderMainMenuTop() {
     C2D_DrawText(&nameText, C2D_WithColor, contentX, rightY + 6.0f, 0.5f,
                  nameScale, nameScale, nameColor);
 
-    // Subtitle: Title ID / Product Code or ROM filename
+    // Subtitle: Title ID / Product Code or full ROM path
     std::string subLine;
     if (item.localTitle.isFileRom) {
-      size_t slash = item.localTitle.romPath.find_last_of("/\\");
-      std::string romFile = (slash != std::string::npos)
-                                ? item.localTitle.romPath.substr(slash + 1)
-                                : item.localTitle.romPath;
-      subLine = "File: " + romFile;
+      subLine = "Path: " + item.localTitle.romPath;
     } else {
       subLine = "ID: " + item.localTitle.titleIdHex;
       if (!item.localTitle.productCode.empty()) {
@@ -2135,7 +2480,27 @@ void UIManager::renderMainMenuTop() {
     float subW = 0.0f, subH = 0.0f;
     C2D_TextGetDimensions(&subText, subScale, subScale, &subW, &subH);
     if (subW > maxContentW && subW > 0.0f) {
-      subScale *= (maxContentW / subW);
+      float fitScale = subScale * (maxContentW / subW);
+      if (fitScale >= 0.30f) {
+        subScale = fitScale;
+      } else {
+        subScale = 0.30f;
+        std::string full = subLine;
+        while (full.length() > 20) {
+          full = full.substr(0, full.length() - 4) + "..";
+          C2D_Text t;
+          C2D_TextParse(&t, m_textBuf, full.c_str());
+          C2D_TextOptimize(&t);
+          float curW = 0.0f, curH = 0.0f;
+          C2D_TextGetDimensions(&t, subScale, subScale, &curW, &curH);
+          if (curW <= maxContentW) {
+            subLine = full;
+            C2D_TextParse(&subText, m_textBuf, subLine.c_str());
+            C2D_TextOptimize(&subText);
+            break;
+          }
+        }
+      }
     }
     C2D_DrawText(&subText, C2D_WithColor, contentX, rightY + 26.0f, 0.5f,
                  subScale, subScale, CLR_TEXT_SECONDARY);
@@ -2253,7 +2618,7 @@ void UIManager::renderMainMenuTop() {
     if (!m_localFilterText.empty()) {
       msg += "- Search Query:  \"" + m_localFilterText + "\"\n";
     }
-    msg += "\nTap [Clr], [Sort], [Filter], or [Refresh] on the bottom screen.";
+    msg += "\nTap [Clr], [Sort], [Filter], or [ Menu ] on the bottom screen.";
 
     C2D_Text emptyText;
     C2D_TextParse(&emptyText, m_textBuf, msg.c_str());
@@ -2271,7 +2636,7 @@ void UIManager::renderMainMenuTop() {
   C2D_Text hudText;
   C2D_TextParse(
       &hudText, m_textBuf,
-      "(A) Sync  (X) Batch Sync  (L/R) Force Up/Down  (SEL) Match  (Y) Search");
+      "(A) Sync  (SEL) Actions  (X) Menu  (L/R) Up/Down  (Y) Search");
   C2D_TextOptimize(&hudText);
   C2D_DrawText(&hudText, C2D_WithColor, 10.0f, 221.0f, 0.5f, 0.38f, 0.38f,
                CLR_TEXT_SECONDARY);
@@ -2485,7 +2850,16 @@ void UIManager::renderMainMenuBottom() {
   C2D_DrawRectSolid(0.0f, 198.0f, 0.52f, RomM3DS::SCREEN_BOTTOM_WIDTH, 1.0f,
                     CLR_BORDER_SUBTLE);
 
-  drawButton(8.0f, 203.0f, 96.0f, 32.0f, "[ Sync (A) ]", false, CLR_ACCENT_PRIMARY, 0.55f);
+  bool canSync = false;
+  if (m_syncMgr && !m_filteredLocalIndices.empty() &&
+      m_selectedGameIndex < m_filteredLocalIndices.size()) {
+    size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
+    const auto &item = m_syncMgr->getItems()[actualIdx];
+    canSync = !item.isIgnored && item.isMatched &&
+              (item.localTitle.hasSave || item.remoteHasSave);
+  }
+
+  drawButton(8.0f, 203.0f, 96.0f, 32.0f, "[ Sync (A) ]", false, CLR_ACCENT_PRIMARY, 0.55f, !canSync);
   drawButton(108.0f, 203.0f, 104.0f, 32.0f, "[ Actions (SEL) ]", false, 0, 0.55f);
   drawButton(216.0f, 203.0f, 96.0f, 32.0f, "[ Menu (X) ]", false, 0, 0.55f);
 
@@ -2924,31 +3298,46 @@ void UIManager::renderConflictTop() {
   drawPillBadge(300.0f, card2Y + 14.0f, remoteTag, CLR_SURFACE_ALT,
                 remoteIsNewer ? CLR_GREEN : CLR_TEXT_SECONDARY, 0.40f);
 
-  // Recommendation & Automatic Backup Notice
+  // Recommendation & Automatic Backup Notice (NSA Pattern C)
+  time_t diff = (localTime > remoteTime) ? (localTime - remoteTime) : (remoteTime - localTime);
+  std::string deltaStr;
+  if (diff < 60) {
+    deltaStr = "< 1 minute";
+  } else if (diff < 3600) {
+    deltaStr = std::to_string(diff / 60) + "m";
+  } else if (diff < 86400) {
+    long h = diff / 3600;
+    long m = (diff % 3600) / 60;
+    deltaStr = std::to_string(h) + "h " + std::to_string(m) + "m";
+  } else {
+    long d = diff / 86400;
+    long h = (diff % 86400) / 3600;
+    deltaStr = std::to_string(d) + "d " + std::to_string(h) + "h";
+  }
+
   std::string summary;
   u32 summaryColor = CLR_TEXT_PRIMARY;
   if (remoteIsNewer) {
-    summary = "-> Recommended: Download Save (Remote is newer)";
+    summary = "Remote is " + deltaStr + " newer than Local (3DS)";
     summaryColor = CLR_GREEN;
   } else if (localIsNewer) {
-    summary = "-> Recommended: Upload Save (Local 3DS is newer)";
+    summary = "Local (3DS) is " + deltaStr + " newer than Remote";
     summaryColor = CLR_YELLOW;
   } else {
-    summary = "Saves have identical timestamps.";
+    summary = "Saves have identical timestamps";
     summaryColor = CLR_TEXT_SECONDARY;
   }
 
-  C2D_Text summaryText;
-  C2D_TextParse(&summaryText, m_textBuf, summary.c_str());
-  C2D_TextOptimize(&summaryText);
-  C2D_DrawText(&summaryText, C2D_WithColor, 14.0f, 168.0f, 0.5f, 0.43f, 0.43f,
-               summaryColor);
+  drawPillBadge(14.0f, 166.0f, summary.c_str(), CLR_SURFACE_ALT,
+                summaryColor, 0.40f);
 
+  std::string bkpMsg =
+      "Automatic backup will be created in sdmc:/3ds/romm3ds/backups/" +
+      item.localTitle.titleIdHex + "/";
   C2D_Text backupNote;
-  C2D_TextParse(&backupNote, m_textBuf,
-                "Note: Existing local saves are backed up to /3ds/romm3ds/backups/ before overwrite.");
+  C2D_TextParse(&backupNote, m_textBuf, bkpMsg.c_str());
   C2D_TextOptimize(&backupNote);
-  C2D_DrawText(&backupNote, C2D_WithColor, 14.0f, 190.0f, 0.5f, 0.35f, 0.35f,
+  C2D_DrawText(&backupNote, C2D_WithColor, 14.0f, 192.0f, 0.5f, 0.35f, 0.35f,
                CLR_TEXT_DIM);
 
   // Footer HUD Bar
@@ -2997,14 +3386,20 @@ void UIManager::renderConflictBottom() {
   std::string btnRemote = localIsNewer ? "[ Upload Save (Use Local Save) * ]"
                                        : "[ Upload Save (Use Local Save) ]";
   std::string btnSkip = m_batchSyncActive ? "[ Skip & Continue Batch Sync ]"
-                                          : "[ Skip This Game ]";
+                                          : "[ Skip This Game (Cancel) ]";
 
-  drawButton(16.0f, 44.0f, 288.0f, 32.0f, btnLocal.c_str(),
-             m_conflictChoiceIndex == 0);
-  drawButton(16.0f, 84.0f, 288.0f, 32.0f, btnRemote.c_str(),
-             m_conflictChoiceIndex == 1);
-  drawButton(16.0f, 124.0f, 288.0f, 32.0f, btnSkip.c_str(),
-             m_conflictChoiceIndex == 2);
+  bool sel0 = (m_conflictChoiceIndex == 0);
+  bool sel1 = (m_conflictChoiceIndex == 1);
+  bool sel2 = (m_conflictChoiceIndex == 2);
+
+  // NSA Pattern C: Destructive overwrites highlight with CLR_DANGER (#E11D48) left indicator bar & border
+  u32 accent0 = sel0 ? CLR_DANGER : 0;
+  u32 accent1 = sel1 ? CLR_DANGER : 0;
+  u32 accent2 = sel2 ? CLR_ACCENT_PRIMARY : 0;
+
+  drawButton(16.0f, 44.0f, 288.0f, 32.0f, btnLocal.c_str(), sel0, accent0);
+  drawButton(16.0f, 84.0f, 288.0f, 32.0f, btnRemote.c_str(), sel1, accent1);
+  drawButton(16.0f, 124.0f, 288.0f, 32.0f, btnSkip.c_str(), sel2, accent2);
 
   C2D_Text guideText;
   C2D_TextParse(&guideText, m_textBuf,
