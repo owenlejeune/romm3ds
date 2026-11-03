@@ -300,6 +300,7 @@ void UIManager::updateLocalFilteredList() {
     m_selectedGameIndex =
         m_filteredLocalIndices.empty() ? 0 : m_filteredLocalIndices.size() - 1;
   }
+  ensureSelectedVisible();
 }
 
 void UIManager::updateRemoteFilteredList() {
@@ -842,10 +843,253 @@ void UIManager::resolveConflict(int choice) {
   updateLocalFilteredList();
 }
 
-void UIManager::handleInput(u32 kDown, const touchPosition &touch) {
-  m_touchHeld = (hidKeysHeld() & KEY_TOUCH) != 0;
+void UIManager::ensureSelectedVisible() {
+  if (m_filteredLocalIndices.empty())
+    return;
+  float targetTop = static_cast<float>(m_selectedGameIndex) * 32.0f;
+  float maxScroll =
+      std::max(0.0f, static_cast<float>(m_filteredLocalIndices.size()) * 32.0f -
+                         160.0f);
+  if (targetTop < m_targetScrollY) {
+    m_targetScrollY = targetTop;
+  } else if (targetTop + 32.0f > m_targetScrollY + 160.0f) {
+    m_targetScrollY = targetTop + 32.0f - 160.0f;
+  }
+  m_targetScrollY = std::clamp(m_targetScrollY, 0.0f, maxScroll);
+}
+
+void UIManager::openGameActionsSheet() {
+  if (m_filteredLocalIndices.empty())
+    return;
+  m_activeSheet = ActiveSheet::GAME_ACTIONS;
+  m_sheetSelectedIndex = 0;
+  m_sheetTargetY = 48.0f;
+}
+
+void UIManager::openAppMenuSheet() {
+  m_activeSheet = ActiveSheet::APP_MENU;
+  m_sheetSelectedIndex = 0;
+  m_sheetTargetY = 120.0f;
+}
+
+void UIManager::closeSheet() {
+  m_sheetTargetY = 240.0f;
+}
+
+bool UIManager::handleSheetInput(u32 kDown, const touchPosition &touch) {
+  if (m_activeSheet == ActiveSheet::NONE) {
+    return false;
+  }
+
+  int numOptions = (m_activeSheet == ActiveSheet::GAME_ACTIONS) ? 6 : 3;
+
+  if (kDown & (KEY_B | KEY_START)) {
+    closeSheet();
+    return true;
+  }
+
+  if (kDown & (KEY_UP | KEY_CPAD_UP)) {
+    m_sheetSelectedIndex =
+        (m_sheetSelectedIndex > 0) ? (m_sheetSelectedIndex - 1) : (numOptions - 1);
+    return true;
+  }
+  if (kDown & (KEY_DOWN | KEY_CPAD_DOWN)) {
+    m_sheetSelectedIndex =
+        (m_sheetSelectedIndex + 1 < numOptions) ? (m_sheetSelectedIndex + 1) : 0;
+    return true;
+  }
+
+  auto executeGameAction = [this](int index) {
+    closeSheet();
+    switch (index) {
+    case 0:
+      syncSelectedGame();
+      break;
+    case 1:
+      forceUploadSelected();
+      break;
+    case 2:
+      forceDownloadSelected();
+      break;
+    case 3:
+      openManualMatch();
+      break;
+    case 4:
+      openSavePicker();
+      break;
+    case 5:
+      toggleIgnoreSelected();
+      break;
+    }
+  };
+
+  auto executeAppMenuAction = [this](int index) {
+    closeSheet();
+    switch (index) {
+    case 0:
+      syncAllGames();
+      break;
+    case 1:
+      runLibraryRefresh(true);
+      break;
+    case 2:
+      openServerSettings();
+      break;
+    }
+  };
+
+  if (kDown & KEY_A) {
+    if (m_activeSheet == ActiveSheet::GAME_ACTIONS) {
+      executeGameAction(m_sheetSelectedIndex);
+    } else {
+      executeAppMenuAction(m_sheetSelectedIndex);
+    }
+    return true;
+  }
+
+  if (kDown & KEY_TOUCH) {
+    if (touch.py < m_sheetCurrentY) {
+      closeSheet();
+      return true;
+    }
+
+    float startY = m_sheetCurrentY + 28.0f;
+    float rowH = (m_activeSheet == ActiveSheet::GAME_ACTIONS) ? 26.0f : 28.0f;
+    for (int i = 0; i < numOptions; ++i) {
+      float itemY = startY + static_cast<float>(i) * rowH;
+      if (isTouchInside(touch, 12.0f, itemY, 296.0f, rowH)) {
+        m_sheetSelectedIndex = i;
+        if (m_activeSheet == ActiveSheet::GAME_ACTIONS) {
+          executeGameAction(i);
+        } else {
+          executeAppMenuAction(i);
+        }
+        return true;
+      }
+    }
+  }
+
+  return true;
+}
+
+void UIManager::renderBottomSheet() {
+  if (m_activeSheet == ActiveSheet::NONE && m_sheetCurrentY >= 239.0f) {
+    return;
+  }
+
+  // Backdrop dim overlay
+  C2D_DrawRectSolid(0.0f, 0.0f, 0.75f, RomM3DS::SCREEN_BOTTOM_WIDTH,
+                    RomM3DS::SCREEN_BOTTOM_HEIGHT, CLR_DIM_OVERLAY);
+
+  float sheetH = 240.0f - m_sheetCurrentY;
+  if (sheetH <= 0.0f)
+    return;
+
+  // Bottom sheet card
+  C2D_DrawRectSolid(0.0f, m_sheetCurrentY, 0.80f,
+                    RomM3DS::SCREEN_BOTTOM_WIDTH, sheetH, CLR_SURFACE_CARD);
+  // Purple top accent bar
+  C2D_DrawRectSolid(0.0f, m_sheetCurrentY, 0.82f,
+                    RomM3DS::SCREEN_BOTTOM_WIDTH, 2.0f, CLR_ACCENT_PRIMARY);
+  // Center grab handle pill
+  C2D_DrawRectSolid(144.0f, m_sheetCurrentY + 5.0f, 0.84f, 32.0f, 3.0f,
+                    CLR_BORDER_SUBTLE);
+
+  if (m_activeSheet == ActiveSheet::GAME_ACTIONS) {
+    std::string titleStr = "Game Actions";
+    if (!m_filteredLocalIndices.empty() &&
+        m_selectedGameIndex < m_filteredLocalIndices.size()) {
+      size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
+      titleStr = m_syncMgr->getItems()[actualIdx].localTitle.name;
+      if (titleStr.length() > 32) {
+        titleStr = titleStr.substr(0, 30) + "..";
+      }
+    }
+    C2D_Text titleTxt;
+    C2D_TextParse(&titleTxt, m_textBuf, titleStr.c_str());
+    C2D_TextOptimize(&titleTxt);
+    C2D_DrawText(&titleTxt, C2D_WithColor, 16.0f, m_sheetCurrentY + 11.0f,
+                 0.85f, 0.42f, 0.42f, CLR_ACCENT_PRIMARY);
+
+    bool isIgnored = (!m_filteredLocalIndices.empty() &&
+                      m_selectedGameIndex < m_filteredLocalIndices.size() &&
+                      m_syncMgr->getItems()[m_filteredLocalIndices[m_selectedGameIndex]]
+                          .isIgnored);
+
+    const char *options[6] = {
+        "Sync Save Now (A)",
+        "Force Upload Local Save (L)",
+        "Force Download Remote Save (R)",
+        "Manual Match with RomM (SEL)",
+        "Set Custom Save Path",
+        isIgnored ? "Unhide Title" : "Hide Title"};
+
+    float startY = m_sheetCurrentY + 28.0f;
+    for (int i = 0; i < 6; ++i) {
+      float itemY = startY + static_cast<float>(i) * 26.0f;
+      bool selected = (i == m_sheetSelectedIndex);
+      u32 bg = selected ? CLR_SURFACE_ELEVATED : CLR_SURFACE_ALT;
+      u32 border = selected ? CLR_ACCENT_PRIMARY : CLR_BORDER_SUBTLE;
+      u32 textColor = selected ? CLR_TEXT_PRIMARY : CLR_TEXT_SECONDARY;
+
+      C2D_DrawRectSolid(12.0f, itemY, 0.84f, 296.0f, 24.0f, border);
+      C2D_DrawRectSolid(13.0f, itemY + 1.0f, 0.85f, 294.0f, 22.0f, bg);
+      if (selected) {
+        C2D_DrawRectSolid(12.0f, itemY, 0.86f, 3.0f, 24.0f,
+                          CLR_ACCENT_PRIMARY);
+      }
+
+      C2D_Text optTxt;
+      C2D_TextParse(&optTxt, m_textBuf, options[i]);
+      C2D_TextOptimize(&optTxt);
+      C2D_DrawText(&optTxt, C2D_WithColor, 22.0f, itemY + 5.0f, 0.87f, 0.38f,
+                   0.38f, textColor);
+    }
+  } else if (m_activeSheet == ActiveSheet::APP_MENU) {
+    C2D_Text titleTxt;
+    C2D_TextParse(&titleTxt, m_textBuf, "Library & Settings");
+    C2D_TextOptimize(&titleTxt);
+    C2D_DrawText(&titleTxt, C2D_WithColor, 16.0f, m_sheetCurrentY + 11.0f,
+                 0.85f, 0.44f, 0.44f, CLR_ACCENT_PRIMARY);
+
+    const char *options[3] = {"Batch Sync All Filtered (X)",
+                              "Refresh Library & Saves",
+                              "Server Settings (Endpoint & API Key)"};
+
+    float startY = m_sheetCurrentY + 30.0f;
+    for (int i = 0; i < 3; ++i) {
+      float itemY = startY + static_cast<float>(i) * 28.0f;
+      bool selected = (i == m_sheetSelectedIndex);
+      u32 bg = selected ? CLR_SURFACE_ELEVATED : CLR_SURFACE_ALT;
+      u32 border = selected ? CLR_ACCENT_PRIMARY : CLR_BORDER_SUBTLE;
+      u32 textColor = selected ? CLR_TEXT_PRIMARY : CLR_TEXT_SECONDARY;
+
+      C2D_DrawRectSolid(12.0f, itemY, 0.84f, 296.0f, 26.0f, border);
+      C2D_DrawRectSolid(13.0f, itemY + 1.0f, 0.85f, 294.0f, 24.0f, bg);
+      if (selected) {
+        C2D_DrawRectSolid(12.0f, itemY, 0.86f, 3.0f, 26.0f,
+                          CLR_ACCENT_PRIMARY);
+      }
+
+      C2D_Text optTxt;
+      C2D_TextParse(&optTxt, m_textBuf, options[i]);
+      C2D_TextOptimize(&optTxt);
+      C2D_DrawText(&optTxt, C2D_WithColor, 22.0f, itemY + 6.0f, 0.87f, 0.40f,
+                   0.40f, textColor);
+    }
+  }
+}
+
+void UIManager::handleInput(u32 kDown, u32 kHeld, u32 kUp, const touchPosition &touch) {
+  m_touchHeld = (kHeld & KEY_TOUCH) != 0;
   if (m_touchHeld || (kDown & KEY_TOUCH)) {
     m_activeTouch = touch;
+  }
+
+  if (m_activeSheet != ActiveSheet::NONE) {
+    if (handleSheetInput(kDown, touch)) {
+      return;
+    }
   }
 
   if (m_showLogDialog) {
@@ -962,32 +1206,54 @@ void UIManager::handleInput(u32 kDown, const touchPosition &touch) {
     size_t total = m_filteredLocalIndices.size();
 
     if (total > 0) {
-      if (kDown & KEY_UP) {
+      if (kDown & (KEY_UP | KEY_CPAD_UP)) {
         m_selectedGameIndex =
             (m_selectedGameIndex > 0) ? (m_selectedGameIndex - 1) : (total - 1);
-      } else if (kDown & KEY_DOWN) {
+        m_holdRepeatTimer = 0;
+        ensureSelectedVisible();
+      } else if (kDown & (KEY_DOWN | KEY_CPAD_DOWN)) {
         m_selectedGameIndex =
             (m_selectedGameIndex + 1 < total) ? (m_selectedGameIndex + 1) : 0;
-      } else if (kDown & KEY_LEFT) {
+        m_holdRepeatTimer = 0;
+        ensureSelectedVisible();
+      } else if (kHeld & (KEY_UP | KEY_CPAD_UP | KEY_DOWN | KEY_CPAD_DOWN)) {
+        m_holdRepeatTimer++;
+        if (m_holdRepeatTimer >= 18 && ((m_holdRepeatTimer - 18) % 4 == 0)) {
+          if (kHeld & (KEY_UP | KEY_CPAD_UP)) {
+            m_selectedGameIndex =
+                (m_selectedGameIndex > 0) ? (m_selectedGameIndex - 1) : (total - 1);
+          } else {
+            m_selectedGameIndex =
+                (m_selectedGameIndex + 1 < total) ? (m_selectedGameIndex + 1) : 0;
+          }
+          ensureSelectedVisible();
+        }
+      } else {
+        m_holdRepeatTimer = 0;
+      }
+
+      if (kDown & (KEY_LEFT | KEY_CPAD_LEFT)) {
         m_selectedGameIndex =
-            (m_selectedGameIndex >= 4) ? (m_selectedGameIndex - 4) : 0;
-      } else if (kDown & KEY_RIGHT) {
-        m_selectedGameIndex = (m_selectedGameIndex + 4 < total)
-                                  ? (m_selectedGameIndex + 4)
+            (m_selectedGameIndex >= 5) ? (m_selectedGameIndex - 5) : 0;
+        ensureSelectedVisible();
+      } else if (kDown & (KEY_RIGHT | KEY_CPAD_RIGHT)) {
+        m_selectedGameIndex = (m_selectedGameIndex + 5 < total)
+                                  ? (m_selectedGameIndex + 5)
                                   : (total - 1);
+        ensureSelectedVisible();
       }
     }
 
     if (kDown & KEY_A) {
       syncSelectedGame();
+    } else if (kDown & KEY_SELECT) {
+      openGameActionsSheet();
     } else if (kDown & KEY_X) {
-      syncAllGames();
+      openAppMenuSheet();
     } else if (kDown & KEY_L) {
       forceUploadSelected();
     } else if (kDown & KEY_R) {
       forceDownloadSelected();
-    } else if (kDown & KEY_SELECT) {
-      openManualMatch();
     } else if (kDown & KEY_Y) {
       std::string q =
           launchKeyboard("Search installed games...", m_localFilterText, 64);
@@ -998,46 +1264,77 @@ void UIManager::handleInput(u32 kDown, const touchPosition &touch) {
     }
 
     if (kDown & KEY_TOUCH) {
-      if (isTouchInside(touch, 124.0f, 7.0f, 84.0f, 20.0f)) {
+      if (isTouchInside(touch, 8.0f, 4.0f, 92.0f, 30.0f)) {
         openSortPicker();
-      } else if (isTouchInside(touch, 212.0f, 7.0f, 92.0f, 20.0f)) {
+      } else if (isTouchInside(touch, 104.0f, 4.0f, 114.0f, 30.0f)) {
         openFilterPicker();
-      } else if (isTouchInside(touch, 16.0f, 30.0f, 230.0f, 22.0f)) {
+      } else if (m_localFilterText.empty() &&
+                 isTouchInside(touch, 222.0f, 4.0f, 90.0f, 30.0f)) {
         std::string q =
             launchKeyboard("Search installed games...", m_localFilterText, 64);
         if (q != m_localFilterText) {
           m_localFilterText = q;
           updateLocalFilteredList();
         }
-      } else if (isTouchInside(touch, 252.0f, 30.0f, 52.0f, 22.0f)) {
-        if (!m_localFilterText.empty()) {
-          m_localFilterText.clear();
+      } else if (!m_localFilterText.empty() &&
+                 isTouchInside(touch, 222.0f, 4.0f, 62.0f, 30.0f)) {
+        std::string q =
+            launchKeyboard("Search installed games...", m_localFilterText, 64);
+        if (q != m_localFilterText) {
+          m_localFilterText = q;
           updateLocalFilteredList();
         }
-      } else if (isTouchInside(touch, 16.0f, 163.0f, 92.0f, 26.0f)) {
+      } else if (!m_localFilterText.empty() &&
+                 isTouchInside(touch, 286.0f, 4.0f, 26.0f, 30.0f)) {
+        m_localFilterText.clear();
+        updateLocalFilteredList();
+      } else if (isTouchInside(touch, 8.0f, 203.0f, 96.0f, 32.0f)) {
         syncSelectedGame();
-      } else if (isTouchInside(touch, 114.0f, 163.0f, 104.0f, 26.0f)) {
-        syncAllGames();
-      } else if (isTouchInside(touch, 224.0f, 163.0f, 80.0f, 26.0f)) {
-        runLibraryRefresh(true);
-      } else if (isTouchInside(touch, 16.0f, 193.0f, 68.0f, 26.0f)) {
-        openManualMatch();
-      } else if (isTouchInside(touch, 90.0f, 193.0f, 74.0f, 26.0f)) {
-        openSavePicker();
-      } else if (isTouchInside(touch, 170.0f, 193.0f, 64.0f, 26.0f)) {
-        toggleIgnoreSelected();
-      } else if (isTouchInside(touch, 240.0f, 193.0f, 64.0f, 26.0f)) {
-        openServerSettings();
-      } else {
-        for (size_t i = 0; i < 4 && i < total; ++i) {
-          float rowY = 56.0f + static_cast<float>(i * 26.0f);
-          if (isTouchInside(touch, 16.0f, rowY, 288.0f, 24.0f)) {
-            size_t pageOffset = (m_selectedGameIndex / 4) * 4;
-            size_t target = pageOffset + i;
-            if (target < total) {
-              m_selectedGameIndex = target;
-            }
-            break;
+      } else if (isTouchInside(touch, 108.0f, 203.0f, 104.0f, 32.0f)) {
+        openGameActionsSheet();
+      } else if (isTouchInside(touch, 216.0f, 203.0f, 96.0f, 32.0f)) {
+        openAppMenuSheet();
+      } else if (touch.py >= 38 && touch.py < 198) {
+        m_touchStartY = touch.py;
+        m_lastTouchY = touch.py;
+        m_isDragging = false;
+        m_velocityY = 0.0f;
+      }
+    }
+
+    if (kHeld & KEY_TOUCH) {
+      if (touch.py >= 38 && touch.py < 198) {
+        float dy = static_cast<float>(touch.py) - m_lastTouchY;
+        if (!m_isDragging &&
+            std::abs(static_cast<float>(touch.py) - m_touchStartY) > 5.0f) {
+          m_isDragging = true;
+        }
+        if (m_isDragging) {
+          float maxScroll =
+              std::max(0.0f, static_cast<float>(total) * 32.0f - 160.0f);
+          m_targetScrollY =
+              std::clamp(m_targetScrollY - dy, 0.0f, maxScroll);
+          m_scrollY = m_targetScrollY;
+          m_velocityY = -dy;
+          m_lastTouchY = touch.py;
+        }
+      }
+    }
+
+    if (kUp & KEY_TOUCH) {
+      if (m_isDragging) {
+        m_isDragging = false;
+      } else if (touch.py >= 38 && touch.py < 198 && touch.px >= 8 &&
+                 touch.px <= 312) {
+        float tappedListY =
+            static_cast<float>(touch.py) - 38.0f + m_scrollY;
+        int tappedRow = static_cast<int>(tappedListY / 32.0f);
+        if (tappedRow >= 0 && tappedRow < static_cast<int>(total)) {
+          if (m_selectedGameIndex == static_cast<size_t>(tappedRow)) {
+            openGameActionsSheet();
+          } else {
+            m_selectedGameIndex = static_cast<size_t>(tappedRow);
+            ensureSelectedVisible();
           }
         }
       }
@@ -1239,7 +1536,8 @@ void UIManager::drawInputBox(float x, float y, float w, float h,
 }
 
 void UIManager::drawButton(float x, float y, float w, float h,
-                           const char *label, bool selected, u32 accentColor) {
+                           const char *label, bool selected, u32 accentColor,
+                           float z) {
   bool isPressed = m_touchHeld && isTouchInside(m_activeTouch, x, y, w, h);
   u32 baseAccent = (accentColor != 0) ? accentColor : CLR_ACCENT_PRIMARY;
 
@@ -1253,10 +1551,10 @@ void UIManager::drawButton(float x, float y, float w, float h,
     borderColor = baseAccent;
   }
 
-  C2D_DrawRectSolid(x, y, 0.5f, w, h, borderColor);
-  C2D_DrawRectSolid(x + 1.5f, y + 1.5f, 0.5f, w - 3.0f, h - 3.0f, btnBg);
+  C2D_DrawRectSolid(x, y, z, w, h, borderColor);
+  C2D_DrawRectSolid(x + 1.5f, y + 1.5f, z, w - 3.0f, h - 3.0f, btnBg);
   if (selected || isPressed) {
-    C2D_DrawRectSolid(x, y, 0.5f, 3.0f, h,
+    C2D_DrawRectSolid(x, y, z, 3.0f, h,
                       isPressed ? CLR_ACCENT_SOFT : baseAccent);
   }
 
@@ -1275,12 +1573,12 @@ void UIManager::drawButton(float x, float y, float w, float h,
 
   float textX = x + (w - textW) / 2.0f;
   float textY = y + (h - textH) / 2.0f + (isPressed ? 1.0f : 0.0f);
-  C2D_DrawText(&btnText, C2D_WithColor, textX, textY, 0.5f, scale, scale,
+  C2D_DrawText(&btnText, C2D_WithColor, textX, textY, z + 0.01f, scale, scale,
                CLR_TEXT_PRIMARY);
 }
 
 float UIManager::drawPillBadge(float x, float y, const char *text, u32 bgColor,
-                               u32 textColor, float scale) {
+                               u32 textColor, float scale, float z) {
   C2D_Text pillText;
   C2D_TextParse(&pillText, m_textBuf, text);
   C2D_TextOptimize(&pillText);
@@ -1293,10 +1591,10 @@ float UIManager::drawPillBadge(float x, float y, const char *text, u32 bgColor,
   float pillW = textW + padX * 2.0f;
   float pillH = textH + padY * 2.0f;
 
-  C2D_DrawRectSolid(x, y, 0.5f, pillW, pillH, CLR_BORDER_SUBTLE);
-  C2D_DrawRectSolid(x + 1.0f, y + 1.0f, 0.5f, pillW - 2.0f, pillH - 2.0f,
+  C2D_DrawRectSolid(x, y, z, pillW, pillH, CLR_BORDER_SUBTLE);
+  C2D_DrawRectSolid(x + 1.0f, y + 1.0f, z, pillW - 2.0f, pillH - 2.0f,
                     bgColor);
-  C2D_DrawText(&pillText, C2D_WithColor, x + padX, y + padY, 0.5f, scale, scale,
+  C2D_DrawText(&pillText, C2D_WithColor, x + padX, y + padY, z + 0.01f, scale, scale,
                textColor);
   return pillW;
 }
@@ -1532,37 +1830,65 @@ void UIManager::renderOperationLogOverlay() {
 void UIManager::renderFirstLaunchTop() {
   bool canCancel = (m_configMgr && m_configMgr->hasValidConfig());
 
-  C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 42.0f,
-                    CLR_HEADER);
-  C2D_DrawRectSolid(0.0f, 40.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f,
-                    CLR_ACCENT);
+  // Top Header Bar
+  C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 32.0f,
+                    CLR_SURFACE_HEADER);
+  C2D_DrawRectSolid(0.0f, 30.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f,
+                    CLR_ACCENT_PRIMARY);
 
   C2D_Text headerText;
   C2D_TextParse(&headerText, m_textBuf,
                 canCancel ? "romm3ds - Server Settings"
                           : "romm3ds - Initial Setup");
   C2D_TextOptimize(&headerText);
-  C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 10.0f, 0.5f, 0.75f, 0.75f,
-               CLR_TEXT_WHITE);
+  C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 7.0f, 0.5f, 0.58f, 0.58f,
+               CLR_TEXT_PRIMARY);
+
+  std::string verTag = std::string("v") + RomM3DS::APP_VERSION;
+  drawPillBadge(334.0f, 7.0f, verTag.c_str(), CLR_SURFACE_ELEVATED,
+                CLR_ACCENT_SOFT, 0.38f);
+
+  // Main Inspector Card
+  C2D_DrawRectSolid(12.0f, 40.0f, 0.5f, 376.0f, 168.0f, CLR_BORDER_SUBTLE);
+  C2D_DrawRectSolid(13.0f, 41.0f, 0.5f, 374.0f, 166.0f, CLR_SURFACE_CARD);
+  C2D_DrawRectSolid(12.0f, 40.0f, 0.5f, 4.0f, 168.0f, CLR_ACCENT_PRIMARY);
+
+  C2D_Text cardTitle;
+  C2D_TextParse(&cardTitle, m_textBuf,
+                canCancel ? "Update RomM Server Connection"
+                          : "Connect to Your Self-Hosted RomM Instance");
+  C2D_TextOptimize(&cardTitle);
+  C2D_DrawText(&cardTitle, C2D_WithColor, 26.0f, 48.0f, 0.5f, 0.50f, 0.50f,
+               CLR_ACCENT_SOFT);
+
+  C2D_DrawRectSolid(26.0f, 70.0f, 0.5f, 348.0f, 1.0f, CLR_BORDER_SUBTLE);
 
   C2D_Text descText;
   C2D_TextParse(&descText, m_textBuf,
-                "Connect to your self-hosted RomM instance.\n\n"
-                "- RomM Endpoint: http(s)://your-server:port\n"
-                "- API Key / Token: generated in RomM dashboard\n\n"
-                "Use D-Pad Up/Down to navigate, (A) to edit fields.\n"
-                "Touch screen keyboard input is supported.");
+                "- Server Endpoint: http(s)://your-romm-server:port\n"
+                "- API Key / Token: Generate in RomM Profile -> API Tokens\n"
+                "- Required Scopes: roms.read, platforms.read,\n"
+                "  saves.read, and saves.write\n\n"
+                "Your API Key is encrypted on disk using your 3DS hardware\n"
+                "console ID (AES-256-GCM) after saving.");
   C2D_TextOptimize(&descText);
-  C2D_DrawText(&descText, C2D_WithColor, 16.0f, 56.0f, 0.5f, 0.48f, 0.48f,
-               CLR_TEXT_MUTED);
+  C2D_DrawText(&descText, C2D_WithColor, 26.0f, 78.0f, 0.5f, 0.41f, 0.41f,
+               CLR_TEXT_SECONDARY);
+
+  // Footer HUD Bar
+  C2D_DrawRectSolid(0.0f, 216.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 24.0f,
+                    CLR_SURFACE_HEADER);
+  C2D_DrawRectSolid(0.0f, 216.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 1.0f,
+                    CLR_BORDER_SUBTLE);
 
   C2D_Text promptText;
   C2D_TextParse(&promptText, m_textBuf,
-                canCancel ? "Press (B) to cancel & return, or START to exit"
-                          : "Press START to exit");
+                canCancel
+                    ? "(Up/Down) Navigate   (A) Edit / Save   (B) Cancel   (START) Exit"
+                    : "(Up/Down) Navigate   (A) Edit / Save   (START) Exit");
   C2D_TextOptimize(&promptText);
-  C2D_DrawText(&promptText, C2D_WithColor, 16.0f, 212.0f, 0.5f, 0.45f, 0.45f,
-               CLR_TEXT_MUTED);
+  C2D_DrawText(&promptText, C2D_WithColor, 12.0f, 221.0f, 0.5f, 0.40f, 0.40f,
+               CLR_TEXT_SECONDARY);
 }
 
 void UIManager::renderFirstLaunchBottom() {
@@ -1602,16 +1928,32 @@ void UIManager::renderFirstLaunchBottom() {
 }
 
 void UIManager::renderMainMenuTop() {
-  C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 42.0f,
-                    CLR_HEADER);
-  C2D_DrawRectSolid(0.0f, 40.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f,
-                    CLR_ACCENT);
+  // Top Header Bar (32px)
+  C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 32.0f,
+                    CLR_SURFACE_HEADER);
+  C2D_DrawRectSolid(0.0f, 30.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f,
+                    CLR_ACCENT_PRIMARY);
 
+  std::string headerTitle =
+      std::string("romm3ds v") + RomM3DS::APP_VERSION + "  •  Inspector";
   C2D_Text headerText;
-  C2D_TextParse(&headerText, m_textBuf, "romm3ds - Save Synchronization");
+  C2D_TextParse(&headerText, m_textBuf, headerTitle.c_str());
   C2D_TextOptimize(&headerText);
-  C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 10.0f, 0.5f, 0.75f, 0.75f,
-               CLR_TEXT_WHITE);
+  C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 7.0f, 0.5f, 0.56f, 0.56f,
+               CLR_TEXT_PRIMARY);
+
+  // Active Filter Pill on Top-Right Header
+  std::string filterBadge = "Filter: " + getActiveFilterButtonLabel();
+  C2D_Text fbMeasure;
+  C2D_TextParse(&fbMeasure, m_textBuf, filterBadge.c_str());
+  C2D_TextOptimize(&fbMeasure);
+  float fbW = 0.0f, fbH = 0.0f;
+  C2D_TextGetDimensions(&fbMeasure, 0.37f, 0.37f, &fbW, &fbH);
+  float pillX = RomM3DS::SCREEN_TOP_WIDTH - (fbW + 12.0f) - 10.0f;
+  drawPillBadge(pillX, 6.0f, filterBadge.c_str(), CLR_SURFACE_ELEVATED,
+                (m_localFilterMode == LocalFilterMode::HIDDEN) ? CLR_YELLOW
+                                                               : CLR_ACCENT_SOFT,
+                0.37f);
 
   if (m_syncMgr && !m_filteredLocalIndices.empty() &&
       m_selectedGameIndex < m_filteredLocalIndices.size()) {
@@ -1619,75 +1961,6 @@ void UIManager::renderMainMenuTop() {
     const auto &item = m_syncMgr->getItems()[actualIdx];
 
     updateGameLogo(item.localTitle);
-
-    float textX = 16.0f;
-    float maxTextW = 368.0f;
-
-    if (m_hasLogo) {
-      C2D_DrawRectSolid(14.0f, 46.0f, 0.5f, 52.0f, 52.0f, CLR_CARD);
-      C2D_DrawRectSolid(15.0f, 47.0f, 0.5f, 50.0f, 50.0f, CLR_BORDER_OFF);
-      C2D_DrawImageAt(m_logoImage, 16.0f, 48.0f, 0.5f);
-
-      textX = 74.0f;
-      maxTextW = 310.0f;
-    }
-
-    std::string displayName =
-        item.localTitle.name + "  [" + item.localTitle.console + "]";
-    if (item.isIgnored) {
-      displayName += " [IGNORED / HIDDEN]";
-    }
-    C2D_Text nameText;
-    C2D_TextParse(&nameText, m_textBuf, displayName.c_str());
-    C2D_TextOptimize(&nameText);
-    u32 nameColor = item.isIgnored ? CLR_TEXT_MUTED : CLR_TEXT_WHITE;
-    float nameScale = 0.58f;
-    float nameW = 0.0f, nameH = 0.0f;
-    C2D_TextGetDimensions(&nameText, nameScale, nameScale, &nameW, &nameH);
-    if (nameW > maxTextW && nameW > 0.0f) {
-      nameScale *= (maxTextW / nameW);
-    }
-    C2D_DrawText(&nameText, C2D_WithColor, textX, 48.0f, 0.5f, nameScale,
-                 nameScale, nameColor);
-
-    std::string matchDesc =
-        item.isIgnored ? "Status: Ignored / Excluded from Sync"
-                       : (item.isMatched ? ("Matched: " + item.remoteTitle)
-                                         : "Unmatched (Press SELECT to match)");
-    u32 matchColor = item.isIgnored ? CLR_TEXT_MUTED
-                                    : (item.isMatched ? CLR_GREEN : CLR_YELLOW);
-    C2D_Text matchText;
-    C2D_TextParse(&matchText, m_textBuf, matchDesc.c_str());
-    C2D_TextOptimize(&matchText);
-    float matchScale = 0.45f;
-    float matchW = 0.0f, matchH = 0.0f;
-    C2D_TextGetDimensions(&matchText, matchScale, matchScale, &matchW, &matchH);
-    if (matchW > maxTextW && matchW > 0.0f) {
-      matchScale *= (maxTextW / matchW);
-    }
-    C2D_DrawText(&matchText, C2D_WithColor, textX, 70.0f, 0.5f, matchScale,
-                 matchScale, matchColor);
-
-    std::string romOrTid = item.localTitle.isFileRom
-                               ? ("ROM: " + item.localTitle.romPath)
-                               : ("Title ID: " + item.localTitle.titleIdHex);
-
-    std::string detailLine1 = "Console: " + item.localTitle.console + "  |  " +
-                              romOrTid +
-                              (!item.localTitle.productCode.empty()
-                                   ? (" (" + item.localTitle.productCode + ")")
-                                   : "");
-    C2D_Text detailText1;
-    C2D_TextParse(&detailText1, m_textBuf, detailLine1.c_str());
-    C2D_TextOptimize(&detailText1);
-    float d1Scale = 0.40f;
-    float d1W = 0.0f, d1H = 0.0f;
-    C2D_TextGetDimensions(&detailText1, d1Scale, d1Scale, &d1W, &d1H);
-    if (d1W > 368.0f && d1W > 0.0f) {
-      d1Scale *= (368.0f / d1W);
-    }
-    C2D_DrawText(&detailText1, C2D_WithColor, 16.0f, 102.0f, 0.5f, d1Scale,
-                 d1Scale, CLR_TEXT_MUTED);
 
     time_t localTime = item.localTitle.saveTime;
     time_t remoteTime =
@@ -1699,240 +1972,527 @@ void UIManager::renderMainMenuTop() {
     bool localIsNewer =
         (localTime > 0 && (remoteTime == 0 || localTime > remoteTime + 5));
 
-    std::string detailLine2 =
-        "Local: " + std::string(item.localTitle.hasSave ? "YES" : "NO") +
-        "  |  Remote: " + std::string(item.remoteHasSave ? "YES" : "NO");
-    if (item.remoteHasSave && !item.remoteSaveUpdatedAt.empty()) {
-      std::string formattedRemote =
-          SyncManager::formatIsoTimestamp(item.remoteSaveUpdatedAt);
-      detailLine2 += " (" + formattedRemote.substr(0, 10) + ")";
+    // =========================================================================
+    // LEFT COLUMN (x = 10..106, w = 96px, h = 168px): Icon & Status Pills
+    // =========================================================================
+    constexpr float leftX = 10.0f;
+    constexpr float leftY = 40.0f;
+    constexpr float leftW = 96.0f;
+    constexpr float leftH = 168.0f;
+
+    u32 leftAccent = item.isIgnored
+                         ? CLR_TEXT_DIM
+                         : (item.isMatched ? CLR_GREEN : CLR_YELLOW);
+    C2D_DrawRectSolid(leftX, leftY, 0.5f, leftW, leftH, CLR_BORDER_SUBTLE);
+    C2D_DrawRectSolid(leftX + 1.0f, leftY + 1.0f, 0.5f, leftW - 2.0f,
+                      leftH - 2.0f, CLR_SURFACE_CARD);
+    C2D_DrawRectSolid(leftX, leftY, 0.5f, leftW, 3.0f, leftAccent);
+
+    // 60x60 Elevated Icon Frame centered in Left Column
+    constexpr float iconBoxW = 60.0f;
+    constexpr float iconBoxH = 60.0f;
+    constexpr float iconBoxX = leftX + (leftW - iconBoxW) / 2.0f;
+    constexpr float iconBoxY = leftY + 10.0f;
+    C2D_DrawRectSolid(iconBoxX, iconBoxY, 0.5f, iconBoxW, iconBoxH,
+                      CLR_BORDER_SUBTLE);
+    C2D_DrawRectSolid(iconBoxX + 1.0f, iconBoxY + 1.0f, 0.5f, iconBoxW - 2.0f,
+                      iconBoxH - 2.0f, CLR_SURFACE_ALT);
+
+    if (m_hasLogo) {
+      C2D_DrawImageAt(m_logoImage, iconBoxX + 6.0f, iconBoxY + 6.0f, 0.5f);
+    } else {
+      std::string consoleFallback =
+          item.localTitle.console.empty() ? "ROM" : item.localTitle.console;
+      C2D_Text cTxt;
+      C2D_TextParse(&cTxt, m_textBuf, consoleFallback.c_str());
+      C2D_TextOptimize(&cTxt);
+      float cScale = 0.52f;
+      float cW = 0.0f, cH = 0.0f;
+      C2D_TextGetDimensions(&cTxt, cScale, cScale, &cW, &cH);
+      if (cW > iconBoxW - 8.0f && cW > 0.0f) {
+        cScale *= (iconBoxW - 8.0f) / cW;
+        C2D_TextGetDimensions(&cTxt, cScale, cScale, &cW, &cH);
+      }
+      C2D_DrawText(&cTxt, C2D_WithColor, iconBoxX + (iconBoxW - cW) / 2.0f,
+                   iconBoxY + (iconBoxH - cH) / 2.0f, 0.5f, cScale, cScale,
+                   CLR_ACCENT_SOFT);
     }
+
+    // Helper to center a pill badge horizontally in the left column
+    auto drawCenteredLeftPill = [&](float py, const char *label, u32 bg,
+                                    u32 fg) {
+      C2D_Text mTxt;
+      C2D_TextParse(&mTxt, m_textBuf, label);
+      C2D_TextOptimize(&mTxt);
+      float tw = 0.0f, th = 0.0f;
+      C2D_TextGetDimensions(&mTxt, 0.36f, 0.36f, &tw, &th);
+      float pw = tw + 12.0f;
+      float px = leftX + (leftW - pw) / 2.0f;
+      drawPillBadge(px, py, label, bg, fg, 0.36f);
+    };
+
+    // Pill 1: Console Badge
+    std::string consoleBadge =
+        item.localTitle.console.empty() ? "ROM" : item.localTitle.console;
+    drawCenteredLeftPill(leftY + 78.0f, consoleBadge.c_str(),
+                         CLR_SURFACE_ELEVATED, CLR_ACCENT_SOFT);
+
+    // Pill 2: Match / Ignored Badge
+    if (item.isIgnored) {
+      drawCenteredLeftPill(leftY + 102.0f, "HIDDEN", CLR_SURFACE_ALT,
+                           CLR_TEXT_SECONDARY);
+    } else if (item.isMatched) {
+      drawCenteredLeftPill(leftY + 102.0f, "MATCHED", CLR_SURFACE_ALT,
+                           CLR_GREEN);
+    } else {
+      drawCenteredLeftPill(leftY + 102.0f, "UNMATCHED", CLR_SURFACE_ALT,
+                           CLR_YELLOW);
+    }
+
+    // Pill 3: Sync / Save Status Badge
+    const char *syncBadge = "NO SAVES";
+    u32 syncFg = CLR_TEXT_DIM;
     if (item.localTitle.hasSave && item.remoteHasSave) {
       if (remoteIsNewer) {
-        detailLine2 += "  *REMOTE IS NEWER*";
+        syncBadge = "OUTDATED [v]";
+        syncFg = CLR_GREEN;
       } else if (localIsNewer) {
-        detailLine2 += "  *LOCAL IS NEWER*";
+        syncBadge = "UPDATED [^]";
+        syncFg = CLR_YELLOW;
       } else {
-        detailLine2 += "  *IN SYNC*";
+        syncBadge = "IN SYNC [=]";
+        syncFg = CLR_TEXT_SECONDARY;
+      }
+    } else if (item.localTitle.hasSave) {
+      syncBadge = "LOCAL SAVE";
+      syncFg = CLR_YELLOW;
+    } else if (item.remoteHasSave) {
+      syncBadge = "CLOUD SAVE";
+      syncFg = CLR_GREEN;
+    }
+    drawCenteredLeftPill(leftY + 126.0f, syncBadge, CLR_SURFACE_ALT, syncFg);
+
+    // Storage type caption at bottom of Left Column
+    const char *storageLbl =
+        item.localTitle.isFileRom
+            ? "SD Card ROM"
+            : (item.localTitle.console == "GBA" ? "NAND VC" : "3DS Title");
+    C2D_Text stTypeTxt;
+    C2D_TextParse(&stTypeTxt, m_textBuf, storageLbl);
+    C2D_TextOptimize(&stTypeTxt);
+    float stW = 0.0f, stH = 0.0f;
+    C2D_TextGetDimensions(&stTypeTxt, 0.34f, 0.34f, &stW, &stH);
+    C2D_DrawText(&stTypeTxt, C2D_WithColor, leftX + (leftW - stW) / 2.0f,
+                 leftY + 150.0f, 0.5f, 0.34f, 0.34f, CLR_TEXT_DIM);
+
+    // =========================================================================
+    // RIGHT COLUMN (x = 112..390, w = 278px, h = 168px): Structured Inspector
+    // =========================================================================
+    constexpr float rightX = 112.0f;
+    constexpr float rightY = 40.0f;
+    constexpr float rightW = 278.0f;
+    constexpr float rightH = 168.0f;
+    constexpr float contentX = rightX + 10.0f;
+    constexpr float maxContentW = rightW - 18.0f;
+
+    C2D_DrawRectSolid(rightX, rightY, 0.5f, rightW, rightH, CLR_BORDER_SUBTLE);
+    C2D_DrawRectSolid(rightX + 1.0f, rightY + 1.0f, 0.5f, rightW - 2.0f,
+                      rightH - 2.0f, CLR_SURFACE_CARD);
+    C2D_DrawRectSolid(rightX, rightY, 0.5f, 3.0f, rightH, CLR_ACCENT_PRIMARY);
+
+    // Game Title
+    C2D_Text nameText;
+    C2D_TextParse(&nameText, m_textBuf, item.localTitle.name.c_str());
+    C2D_TextOptimize(&nameText);
+    u32 nameColor = item.isIgnored ? CLR_TEXT_SECONDARY : CLR_TEXT_PRIMARY;
+    float nameScale = 0.54f;
+    float nameW = 0.0f, nameH = 0.0f;
+    C2D_TextGetDimensions(&nameText, nameScale, nameScale, &nameW, &nameH);
+    if (nameW > maxContentW && nameW > 0.0f) {
+      nameScale *= (maxContentW / nameW);
+    }
+    C2D_DrawText(&nameText, C2D_WithColor, contentX, rightY + 6.0f, 0.5f,
+                 nameScale, nameScale, nameColor);
+
+    // Subtitle: Title ID / Product Code or ROM filename
+    std::string subLine;
+    if (item.localTitle.isFileRom) {
+      size_t slash = item.localTitle.romPath.find_last_of("/\\");
+      std::string romFile = (slash != std::string::npos)
+                                ? item.localTitle.romPath.substr(slash + 1)
+                                : item.localTitle.romPath;
+      subLine = "File: " + romFile;
+    } else {
+      subLine = "ID: " + item.localTitle.titleIdHex;
+      if (!item.localTitle.productCode.empty()) {
+        subLine += "  •  " + item.localTitle.productCode;
       }
     }
-    C2D_Text detailText2;
-    C2D_TextParse(&detailText2, m_textBuf, detailLine2.c_str());
-    C2D_TextOptimize(&detailText2);
-    float d2Scale = 0.42f;
-    float d2W = 0.0f, d2H = 0.0f;
-    C2D_TextGetDimensions(&detailText2, d2Scale, d2Scale, &d2W, &d2H);
-    if (d2W > 368.0f && d2W > 0.0f) {
-      d2Scale *= (368.0f / d2W);
+    C2D_Text subText;
+    C2D_TextParse(&subText, m_textBuf, subLine.c_str());
+    C2D_TextOptimize(&subText);
+    float subScale = 0.38f;
+    float subW = 0.0f, subH = 0.0f;
+    C2D_TextGetDimensions(&subText, subScale, subScale, &subW, &subH);
+    if (subW > maxContentW && subW > 0.0f) {
+      subScale *= (maxContentW / subW);
     }
-    u32 saveColor =
-        remoteIsNewer
-            ? CLR_GREEN
-            : (localIsNewer ? CLR_YELLOW
-                            : ((item.localTitle.hasSave || item.remoteHasSave)
-                                   ? CLR_TEXT_WHITE
-                                   : CLR_TEXT_MUTED));
-    C2D_DrawText(&detailText2, C2D_WithColor, 16.0f, 118.0f, 0.5f, d2Scale,
-                 d2Scale, saveColor);
+    C2D_DrawText(&subText, C2D_WithColor, contentX, rightY + 26.0f, 0.5f,
+                 subScale, subScale, CLR_TEXT_SECONDARY);
 
-    std::string detailLine3;
-    if (!item.localTitle.savePath.empty()) {
-      detailLine3 = "Save Path: " + item.localTitle.savePath;
-      C2D_Text detailText3;
-      C2D_TextParse(&detailText3, m_textBuf, detailLine3.c_str());
-      C2D_TextOptimize(&detailText3);
-      float d3Scale = 0.38f;
-      float d3W = 0.0f, d3H = 0.0f;
-      C2D_TextGetDimensions(&detailText3, d3Scale, d3Scale, &d3W, &d3H);
-      if (d3W > 368.0f && d3W > 0.0f) {
-        d3Scale *= (368.0f / d3W);
+    // Divider line
+    C2D_DrawRectSolid(contentX, rightY + 43.0f, 0.5f, maxContentW, 1.0f,
+                      CLR_BORDER_SUBTLE);
+
+    // Helper for key-value metadata rows
+    auto drawMetaRow = [&](float rowY, const char *key, const std::string &val,
+                           u32 valColor) {
+      C2D_Text kTxt;
+      C2D_TextParse(&kTxt, m_textBuf, key);
+      C2D_TextOptimize(&kTxt);
+      C2D_DrawText(&kTxt, C2D_WithColor, contentX, rowY, 0.5f, 0.39f, 0.39f,
+                   CLR_TEXT_DIM);
+
+      constexpr float valOffset = 68.0f;
+      constexpr float maxValW = maxContentW - valOffset;
+      C2D_Text vTxt;
+      C2D_TextParse(&vTxt, m_textBuf, val.c_str());
+      C2D_TextOptimize(&vTxt);
+      float vScale = 0.40f;
+      float vW = 0.0f, vH = 0.0f;
+      C2D_TextGetDimensions(&vTxt, vScale, vScale, &vW, &vH);
+      if (vW > maxValW && vW > 0.0f) {
+        vScale *= (maxValW / vW);
       }
-      C2D_DrawText(&detailText3, C2D_WithColor, 16.0f, 134.0f, 0.5f, d3Scale,
-                   d3Scale, CLR_TEXT_MUTED);
-    }
+      C2D_DrawText(&vTxt, C2D_WithColor, contentX + valOffset, rowY, 0.5f,
+                   vScale, vScale, valColor);
+    };
 
-    float ctrlY = detailLine3.empty() ? 138.0f : 150.0f;
-    std::string controls =
-        "Controls:\n"
-        "  (A) Sync Selected       (X) Batch Sync All\n"
-        "  (L) Force Upload Save   (R) Force Download Save\n"
-        "  (SELECT) Match Title    (Y) Search Filter\n"
-        "  Tap [Refresh], [Match], [Save Path], [Hide], or [Cfg]";
-    C2D_Text ctrlText;
-    C2D_TextParse(&ctrlText, m_textBuf, controls.c_str());
-    C2D_TextOptimize(&ctrlText);
-    C2D_DrawText(&ctrlText, C2D_WithColor, 16.0f, ctrlY, 0.5f, 0.42f, 0.42f,
-                 CLR_TEXT_WHITE);
+    // Row 1: RomM Match
+    std::string matchVal =
+        item.isIgnored
+            ? "Excluded from sync (Hidden)"
+            : (item.isMatched ? item.remoteTitle
+                              : "Unmatched (Press SELECT or [Match])");
+    u32 matchColor = item.isIgnored
+                         ? CLR_TEXT_SECONDARY
+                         : (item.isMatched ? CLR_GREEN : CLR_YELLOW);
+    drawMetaRow(rightY + 50.0f, "RomM Game:", matchVal, matchColor);
+
+    // Row 2: Local Save Timestamp
+    std::string localVal =
+        item.localTitle.hasSave
+            ? SyncManager::formatTimestamp(item.localTitle.saveTime)
+            : "No local save found";
+    if (item.localTitle.hasSave && item.remoteHasSave && localIsNewer) {
+      localVal += "  [NEWER]";
+    }
+    u32 localColor =
+        !item.localTitle.hasSave
+            ? CLR_TEXT_DIM
+            : (localIsNewer ? CLR_YELLOW : CLR_TEXT_PRIMARY);
+    drawMetaRow(rightY + 72.0f, "Local Save:", localVal, localColor);
+
+    // Row 3: Remote Save Timestamp
+    std::string remoteVal =
+        item.remoteHasSave
+            ? SyncManager::formatIsoTimestamp(item.remoteSaveUpdatedAt)
+            : "No remote save on RomM";
+    if (item.localTitle.hasSave && item.remoteHasSave && remoteIsNewer) {
+      remoteVal += "  [NEWER]";
+    }
+    u32 remoteColor =
+        !item.remoteHasSave
+            ? CLR_TEXT_DIM
+            : (remoteIsNewer ? CLR_GREEN : CLR_TEXT_PRIMARY);
+    drawMetaRow(rightY + 94.0f, "Cloud Save:", remoteVal, remoteColor);
+
+    // Divider before Save Path
+    C2D_DrawRectSolid(contentX, rightY + 116.0f, 0.5f, maxContentW, 1.0f,
+                      CLR_BORDER_SUBTLE);
+
+    // Row 4: Save Path
+    C2D_Text pathLbl;
+    C2D_TextParse(&pathLbl, m_textBuf, "Active Local Save Path:");
+    C2D_TextOptimize(&pathLbl);
+    C2D_DrawText(&pathLbl, C2D_WithColor, contentX, rightY + 122.0f, 0.5f,
+                 0.36f, 0.36f, CLR_TEXT_DIM);
+
+    std::string savePathStr = item.localTitle.savePath.empty()
+                                  ? "(Auto-detect default location)"
+                                  : item.localTitle.savePath;
+    C2D_Text pathVal;
+    C2D_TextParse(&pathVal, m_textBuf, savePathStr.c_str());
+    C2D_TextOptimize(&pathVal);
+    float pScale = 0.38f;
+    float pW = 0.0f, pH = 0.0f;
+    C2D_TextGetDimensions(&pathVal, pScale, pScale, &pW, &pH);
+    if (pW > maxContentW && pW > 0.0f) {
+      pScale *= (maxContentW / pW);
+    }
+    C2D_DrawText(&pathVal, C2D_WithColor, contentX, rightY + 138.0f, 0.5f,
+                 pScale, pScale, CLR_TEXT_SECONDARY);
   } else {
-    C2D_Text emptyText;
-    std::string msg = "No installed titles match the current filter.\n\n"
-                      "- Filter Mode: " +
-                      getActiveFilterDescription() +
-                      "\n"
-                      "- Sort Mode: " +
+    // Empty filter state card
+    C2D_DrawRectSolid(12.0f, 40.0f, 0.5f, 376.0f, 168.0f, CLR_BORDER_SUBTLE);
+    C2D_DrawRectSolid(13.0f, 41.0f, 0.5f, 374.0f, 166.0f, CLR_SURFACE_CARD);
+    C2D_DrawRectSolid(12.0f, 40.0f, 0.5f, 4.0f, 168.0f, CLR_YELLOW);
+
+    C2D_Text emptyTitle;
+    C2D_TextParse(&emptyTitle, m_textBuf,
+                  "No Installed Titles Match Current Filter");
+    C2D_TextOptimize(&emptyTitle);
+    C2D_DrawText(&emptyTitle, C2D_WithColor, 26.0f, 50.0f, 0.5f, 0.50f, 0.50f,
+                 CLR_YELLOW);
+
+    C2D_DrawRectSolid(26.0f, 72.0f, 0.5f, 348.0f, 1.0f, CLR_BORDER_SUBTLE);
+
+    std::string msg = "- Active Filter: " + getActiveFilterDescription() +
+                      "\n- Active Sort:   " +
                       std::string(getSortModeName(m_localSortMode)) + "\n";
     if (!m_localFilterText.empty()) {
-      msg += "- Search Query: \"" + m_localFilterText + "\"\n";
+      msg += "- Search Query:  \"" + m_localFilterText + "\"\n";
     }
-    msg +=
-        "\nTap [Clr], [Sort], or [Filter] to change view, or (START) to exit.";
+    msg += "\nTap [Clr], [Sort], [Filter], or [Refresh] on the bottom screen.";
+
+    C2D_Text emptyText;
     C2D_TextParse(&emptyText, m_textBuf, msg.c_str());
     C2D_TextOptimize(&emptyText);
-    C2D_DrawText(&emptyText, C2D_WithColor, 16.0f, 65.0f, 0.5f, 0.48f, 0.48f,
-                 CLR_TEXT_MUTED);
+    C2D_DrawText(&emptyText, C2D_WithColor, 26.0f, 82.0f, 0.5f, 0.43f, 0.43f,
+                 CLR_TEXT_SECONDARY);
   }
+
+  // Footer HUD Bar (24px)
+  C2D_DrawRectSolid(0.0f, 216.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 24.0f,
+                    CLR_SURFACE_HEADER);
+  C2D_DrawRectSolid(0.0f, 216.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 1.0f,
+                    CLR_BORDER_SUBTLE);
+
+  C2D_Text hudText;
+  C2D_TextParse(
+      &hudText, m_textBuf,
+      "(A) Sync  (X) Batch Sync  (L/R) Force Up/Down  (SEL) Match  (Y) Search");
+  C2D_TextOptimize(&hudText);
+  C2D_DrawText(&hudText, C2D_WithColor, 10.0f, 221.0f, 0.5f, 0.38f, 0.38f,
+               CLR_TEXT_SECONDARY);
 }
 
 void UIManager::renderMainMenuBottom() {
-  C2D_DrawRectSolid(8.0f, 4.0f, 0.5f, RomM3DS::SCREEN_BOTTOM_WIDTH - 16.0f,
-                    RomM3DS::SCREEN_BOTTOM_HEIGHT - 8.0f, CLR_CARD);
-
-  size_t total = m_filteredLocalIndices.size();
-  std::string header =
-      "Installed (" +
-      std::to_string(total > 0 ? (m_selectedGameIndex + 1) : 0) + "/" +
-      std::to_string(total) + ")";
-  C2D_Text titleText;
-  C2D_TextParse(&titleText, m_textBuf, header.c_str());
-  C2D_TextOptimize(&titleText);
-  C2D_DrawText(&titleText, C2D_WithColor, 16.0f, 9.0f, 0.5f, 0.44f, 0.44f,
-               CLR_TEXT_WHITE);
-
-  std::string sortLabel = std::string(getSortModeName(m_localSortMode));
-  drawButton(124.0f, 7.0f, 84.0f, 20.0f, sortLabel.c_str(), false,
-             CLR_BORDER_OFF);
-
-  std::string modeLabel = getActiveFilterButtonLabel();
-  u32 modeColor =
-      (m_localFilterMode == LocalFilterMode::HIDDEN) ? CLR_YELLOW : CLR_ACCENT;
-  drawButton(212.0f, 7.0f, 92.0f, 20.0f, modeLabel.c_str(), false, modeColor);
-
-  std::string searchDisplay = m_localFilterText.empty()
-                                  ? "Search: Tap to filter (Y)..."
-                                  : ("Search: " + m_localFilterText);
-  u32 searchBorder = m_localFilterText.empty() ? CLR_BORDER_OFF : CLR_ACCENT;
-  u32 searchTextColor =
-      m_localFilterText.empty() ? CLR_TEXT_MUTED : CLR_TEXT_WHITE;
-  C2D_DrawRectSolid(16.0f, 30.0f, 0.5f, 230.0f, 22.0f, searchBorder);
-  C2D_DrawRectSolid(17.5f, 31.5f, 0.5f, 227.0f, 19.0f, CLR_INPUT_BG);
-
-  C2D_Text searchTxt;
-  C2D_TextParse(&searchTxt, m_textBuf, searchDisplay.c_str());
-  C2D_TextOptimize(&searchTxt);
-  C2D_DrawText(&searchTxt, C2D_WithColor, 22.0f, 34.0f, 0.5f, 0.40f, 0.40f,
-               searchTextColor);
-
-  drawButton(252.0f, 30.0f, 52.0f, 22.0f, "[ Clr ]", false);
-
-  size_t pageOffset = (m_selectedGameIndex / 4) * 4;
-  for (size_t i = 0; i < 4 && (pageOffset + i) < total; ++i) {
-    size_t filteredIdx = pageOffset + i;
-    size_t actualIdx = m_filteredLocalIndices[filteredIdx];
-    const auto &item = m_syncMgr->getItems()[actualIdx];
-    bool selected = (filteredIdx == m_selectedGameIndex);
-
-    float y = 56.0f + static_cast<float>(i * 26.0f);
-    u32 rowBg = selected ? CLR_HEADER : CLR_INPUT_BG;
-    u32 borderColor = selected ? CLR_ACCENT : CLR_BORDER_OFF;
-
-    C2D_DrawRectSolid(16.0f, y, 0.5f, 288.0f, 24.0f, borderColor);
-    C2D_DrawRectSolid(17.5f, y + 1.5f, 0.5f, 285.0f, 21.0f, rowBg);
-
-    u32 dotColor = item.isIgnored ? CLR_TEXT_MUTED
-                                  : (item.isMatched ? CLR_GREEN : CLR_YELLOW);
-    C2D_DrawRectSolid(22.0f, y + 7.0f, 0.5f, 8.0f, 8.0f, dotColor);
-
-    std::string tag;
-    if (item.localTitle.hasSave) {
-      tag += " [S]";
-    }
-    if (item.localTitle.hasSave && item.remoteHasSave) {
-      time_t lt = item.localTitle.saveTime;
-      time_t rt =
-          item.remoteSaveTime != 0
-              ? item.remoteSaveTime
-              : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
-      if (rt > lt + 5 && lt > 0) {
-        tag += " [v]";
-      } else if (lt > rt + 5 && rt > 0) {
-        tag += " [^]";
+  // 1. Physics update
+  if (!m_isDragging) {
+    if (std::abs(m_velocityY) > 0.15f) {
+      float maxScroll = std::max(
+          0.0f, static_cast<float>(m_filteredLocalIndices.size()) * 32.0f - 160.0f);
+      m_targetScrollY =
+          std::clamp(m_targetScrollY + m_velocityY, 0.0f, maxScroll);
+      m_scrollY = m_targetScrollY;
+      m_velocityY *= 0.88f;
+    } else {
+      m_velocityY = 0.0f;
+      if (std::abs(m_targetScrollY - m_scrollY) > 0.1f) {
+        m_scrollY += (m_targetScrollY - m_scrollY) * 0.35f;
+      } else {
+        m_scrollY = m_targetScrollY;
       }
     }
-    if (item.isIgnored) {
-      tag += " (Hide)";
-    }
-
-    std::string prefix = "[" + item.localTitle.console + "] ";
-    std::string fullLabel = prefix + item.localTitle.name + tag;
-
-    constexpr float MAX_ROW_TEXT_WIDTH = 260.0f;
-    float textScale = 0.40f;
-
-    C2D_Text rowText;
-    C2D_TextParse(&rowText, m_textBuf, fullLabel.c_str());
-    C2D_TextOptimize(&rowText);
-
-    float textW = 0.0f, textH = 0.0f;
-    C2D_TextGetDimensions(&rowText, textScale, textScale, &textW, &textH);
-
-    if (textW > MAX_ROW_TEXT_WIDTH) {
-      std::string name = item.localTitle.name;
-      int low = 0;
-      int high = static_cast<int>(name.length());
-      int bestLen = 0;
-
-      while (low <= high) {
-        int mid = low + (high - low) / 2;
-        std::string testLabel = prefix + name.substr(0, mid) + ".." + tag;
-        C2D_Text testText;
-        C2D_TextParse(&testText, m_textBuf, testLabel.c_str());
-        C2D_TextOptimize(&testText);
-        float curW = 0.0f, curH = 0.0f;
-        C2D_TextGetDimensions(&testText, textScale, textScale, &curW, &curH);
-
-        if (curW <= MAX_ROW_TEXT_WIDTH) {
-          bestLen = mid;
-          low = mid + 1;
-        } else {
-          high = mid - 1;
-        }
-      }
-
-      fullLabel = prefix + name.substr(0, bestLen) + ".." + tag;
-      C2D_TextParse(&rowText, m_textBuf, fullLabel.c_str());
-      C2D_TextOptimize(&rowText);
-    }
-
-    C2D_DrawText(&rowText, C2D_WithColor, 36.0f, y + 5.0f, 0.5f, textScale,
-                 textScale, CLR_TEXT_WHITE);
   }
 
-  drawButton(16.0f, 163.0f, 92.0f, 26.0f, "[ Sync (A) ]", false);
-  drawButton(114.0f, 163.0f, 104.0f, 26.0f, "[ Sync All (X) ]", false);
-  drawButton(224.0f, 163.0f, 80.0f, 26.0f, "[ Refresh ]", false);
+  if (m_activeSheet != ActiveSheet::NONE || m_sheetCurrentY < 239.5f) {
+    m_sheetCurrentY += (m_sheetTargetY - m_sheetCurrentY) * 0.35f;
+    if (m_sheetTargetY >= 239.0f && m_sheetCurrentY >= 238.5f) {
+      m_activeSheet = ActiveSheet::NONE;
+      m_sheetCurrentY = 240.0f;
+    }
+  }
 
-  drawButton(16.0f, 193.0f, 68.0f, 26.0f, "[ Match ]", false);
-  drawButton(90.0f, 193.0f, 74.0f, 26.0f, "[ Save Path ]", false);
+  // 2. Base background
+  C2D_DrawRectSolid(0.0f, 0.0f, 0.2f, RomM3DS::SCREEN_BOTTOM_WIDTH,
+                    RomM3DS::SCREEN_BOTTOM_HEIGHT, CLR_BG_BOTTOM);
 
-  bool isCurrentlyIgnored =
-      (!m_filteredLocalIndices.empty() &&
-       m_selectedGameIndex < m_filteredLocalIndices.size() &&
-       m_syncMgr->getItems()[m_filteredLocalIndices[m_selectedGameIndex]]
-           .isIgnored);
-  const char *ignoreLabel = isCurrentlyIgnored ? "[ Unhide ]" : "[ Hide ]";
-  u32 ignoreAccent = isCurrentlyIgnored ? CLR_GREEN : 0;
-  drawButton(170.0f, 193.0f, 64.0f, 26.0f, ignoreLabel, false, ignoreAccent);
-  drawButton(240.0f, 193.0f, 64.0f, 26.0f, "[ Cfg ]", false);
+  size_t total = m_filteredLocalIndices.size();
 
-  u32 statusColor = (m_statusMessage.find("Error") != std::string::npos ||
-                     m_statusMessage.find("Failed") != std::string::npos)
-                        ? CLR_ERROR
-                        : CLR_GREEN;
-  C2D_Text statusText;
-  C2D_TextParse(&statusText, m_textBuf, m_statusMessage.c_str());
-  C2D_TextOptimize(&statusText);
-  C2D_DrawText(&statusText, C2D_WithColor, 16.0f, 223.0f, 0.5f, 0.38f, 0.38f,
-               statusColor);
+  // 3. Render 5-row game list (z = 0.40f)
+  if (total == 0) {
+    C2D_DrawRectSolid(16.0f, 60.0f, 0.40f, 288.0f, 110.0f, CLR_BORDER_SUBTLE);
+    C2D_DrawRectSolid(17.0f, 61.0f, 0.40f, 286.0f, 108.0f, CLR_SURFACE_CARD);
+    C2D_DrawRectSolid(16.0f, 60.0f, 0.41f, 4.0f, 110.0f, CLR_YELLOW);
+
+    C2D_Text emptyTitle;
+    C2D_TextParse(&emptyTitle, m_textBuf, "No Matching Titles");
+    C2D_TextOptimize(&emptyTitle);
+    C2D_DrawText(&emptyTitle, C2D_WithColor, 28.0f, 72.0f, 0.42f, 0.46f, 0.46f,
+                 CLR_YELLOW);
+
+    C2D_Text emptyHint;
+    C2D_TextParse(&emptyHint, m_textBuf,
+                  "No installed games match the active filter or search query.\n"
+                  "Tap [Filter] or [Search] to adjust your selection.");
+    C2D_TextOptimize(&emptyHint);
+    C2D_DrawText(&emptyHint, C2D_WithColor, 28.0f, 96.0f, 0.42f, 0.38f, 0.38f,
+                 CLR_TEXT_SECONDARY);
+  } else {
+    int firstIdx = std::max(0, static_cast<int>(m_scrollY / 32.0f) - 1);
+    int lastIdx =
+        std::min(static_cast<int>(total) - 1,
+                 static_cast<int>((m_scrollY + 160.0f) / 32.0f) + 1);
+
+    for (int i = firstIdx; i <= lastIdx; ++i) {
+      float rowY = 38.0f + static_cast<float>(i) * 32.0f - m_scrollY;
+      if (rowY + 32.0f < 38.0f || rowY > 198.0f)
+        continue;
+
+      size_t actualIdx = m_filteredLocalIndices[i];
+      const auto &item = m_syncMgr->getItems()[actualIdx];
+      bool selected = (static_cast<size_t>(i) == m_selectedGameIndex);
+
+      u32 rowBg = selected ? CLR_SURFACE_ELEVATED
+                           : ((i % 2 == 0) ? CLR_SURFACE_CARD : CLR_SURFACE_ALT);
+      u32 rowBorder = selected ? CLR_ACCENT_PRIMARY : CLR_BORDER_SUBTLE;
+
+      // Row background & border
+      C2D_DrawRectSolid(8.0f, rowY + 1.0f, 0.40f, 304.0f, 30.0f, rowBorder);
+      C2D_DrawRectSolid(9.0f, rowY + 2.0f, 0.40f, 302.0f, 28.0f, rowBg);
+
+      // Selected left purple indicator bar
+      if (selected) {
+        C2D_DrawRectSolid(8.0f, rowY + 1.0f, 0.42f, 3.5f, 30.0f,
+                          CLR_ACCENT_PRIMARY);
+      }
+
+      // Status indicator dot (preserved green / yellow / gray per user rule)
+      u32 dotColor =
+          item.isIgnored ? CLR_TEXT_SECONDARY
+                         : (item.isMatched ? CLR_GREEN : CLR_YELLOW);
+      C2D_DrawRectSolid(16.0f, rowY + 13.0f, 0.43f, 6.0f, 6.0f, dotColor);
+
+      // Console tag pill badge
+      float consoleBadgeW = drawPillBadge(26.0f, rowY + 6.5f,
+                                          item.localTitle.console.c_str(),
+                                          CLR_SURFACE_HEADER,
+                                          CLR_TEXT_SECONDARY, 0.35f, 0.43f);
+
+      // Right-aligned status pills
+      float pillRightX = 304.0f;
+      if (item.isIgnored) {
+        pillRightX -= 36.0f;
+        drawPillBadge(pillRightX, rowY + 6.5f, "Hide", CLR_SURFACE_HEADER,
+                      CLR_TEXT_DIM, 0.34f, 0.43f);
+      }
+      if (item.localTitle.hasSave && item.remoteHasSave) {
+        time_t lt = item.localTitle.saveTime;
+        time_t rt =
+            item.remoteSaveTime != 0
+                ? item.remoteSaveTime
+                : SyncManager::parseIsoTimestamp(item.remoteSaveUpdatedAt);
+        if (rt > lt + 5 && lt > 0) {
+          pillRightX -= 22.0f;
+          drawPillBadge(pillRightX, rowY + 6.5f, "v", CLR_ACCENT_SOFT,
+                        CLR_GREEN, 0.34f, 0.43f);
+        } else if (lt > rt + 5 && rt > 0) {
+          pillRightX -= 22.0f;
+          drawPillBadge(pillRightX, rowY + 6.5f, "^", CLR_ACCENT_SOFT,
+                        CLR_YELLOW, 0.34f, 0.43f);
+        } else {
+          pillRightX -= 22.0f;
+          drawPillBadge(pillRightX, rowY + 6.5f, "=", CLR_SURFACE_HEADER,
+                        CLR_TEXT_DIM, 0.34f, 0.43f);
+        }
+      }
+      if (item.localTitle.hasSave) {
+        pillRightX -= 18.0f;
+        drawPillBadge(pillRightX, rowY + 6.5f, "S", CLR_SURFACE_HEADER,
+                      CLR_TEXT_SECONDARY, 0.34f, 0.43f);
+      }
+
+      // Title text (positioned between console badge and right pills)
+      float titleStartX = 26.0f + consoleBadgeW + 6.0f;
+      float titleMaxW = std::max(60.0f, pillRightX - titleStartX - 6.0f);
+      float titleScale = 0.40f;
+
+      std::string dispName = item.localTitle.name;
+      C2D_Text titleText;
+      C2D_TextParse(&titleText, m_textBuf, dispName.c_str());
+      C2D_TextOptimize(&titleText);
+
+      float textW = 0.0f, textH = 0.0f;
+      C2D_TextGetDimensions(&titleText, titleScale, titleScale, &textW, &textH);
+      if (textW > titleMaxW && !dispName.empty()) {
+        int low = 0;
+        int high = static_cast<int>(dispName.length());
+        int bestLen = 0;
+        while (low <= high) {
+          int mid = low + (high - low) / 2;
+          std::string testStr = dispName.substr(0, mid) + "..";
+          C2D_Text testText;
+          C2D_TextParse(&testText, m_textBuf, testStr.c_str());
+          C2D_TextOptimize(&testText);
+          float curW = 0.0f, curH = 0.0f;
+          C2D_TextGetDimensions(&testText, titleScale, titleScale, &curW, &curH);
+          if (curW <= titleMaxW) {
+            bestLen = mid;
+            low = mid + 1;
+          } else {
+            high = mid - 1;
+          }
+        }
+        dispName = dispName.substr(0, bestLen) + "..";
+        C2D_TextParse(&titleText, m_textBuf, dispName.c_str());
+        C2D_TextOptimize(&titleText);
+      }
+
+      u32 titleColor = selected ? CLR_TEXT_PRIMARY : CLR_TEXT_SECONDARY;
+      C2D_DrawText(&titleText, C2D_WithColor, titleStartX, rowY + 8.5f, 0.43f,
+                   titleScale, titleScale, titleColor);
+    }
+  }
+
+  // 4. Scrollbar (z = 0.56f)
+  if (total > 5) {
+    float maxScroll =
+        std::max(0.0f, static_cast<float>(total) * 32.0f - 160.0f);
+    C2D_DrawRectSolid(315.0f, 40.0f, 0.56f, 2.0f, 156.0f, CLR_BORDER_SUBTLE);
+    float thumbH =
+        std::max(16.0f, 156.0f * (160.0f / (static_cast<float>(total) * 32.0f)));
+    float thumbY =
+        40.0f + (156.0f - thumbH) * (m_scrollY / maxScroll);
+    C2D_DrawRectSolid(314.0f, thumbY, 0.58f, 3.0f, thumbH, CLR_ACCENT_PRIMARY);
+  }
+
+  // 5. Top Control Bar (z = 0.50f..0.55f)
+  C2D_DrawRectSolid(0.0f, 0.0f, 0.50f, RomM3DS::SCREEN_BOTTOM_WIDTH, 38.0f,
+                    CLR_BG_BOTTOM);
+  C2D_DrawRectSolid(0.0f, 37.0f, 0.52f, RomM3DS::SCREEN_BOTTOM_WIDTH, 1.0f,
+                    CLR_BORDER_SUBTLE);
+
+  std::string sortLabel = "Sort: " + std::string(getSortModeName(m_localSortMode));
+  drawButton(8.0f, 4.0f, 92.0f, 30.0f, sortLabel.c_str(), false, 0, 0.55f);
+
+  std::string modeLabel = getActiveFilterButtonLabel();
+  u32 filterAccent = (m_localFilterMode == LocalFilterMode::ALL) ? 0 : CLR_ACCENT_PRIMARY;
+  drawButton(104.0f, 4.0f, 114.0f, 30.0f, modeLabel.c_str(), false, filterAccent, 0.55f);
+
+  if (m_localFilterText.empty()) {
+    drawButton(222.0f, 4.0f, 90.0f, 30.0f, "[ Search (Y) ]", false, 0, 0.55f);
+  } else {
+    std::string searchDisplay = "\"" + m_localFilterText + "\"";
+    drawButton(222.0f, 4.0f, 62.0f, 30.0f, searchDisplay.c_str(), false, CLR_ACCENT_PRIMARY, 0.55f);
+    drawButton(286.0f, 4.0f, 26.0f, 30.0f, "[X]", false, 0, 0.55f);
+  }
+
+  // 6. Bottom Deck (z = 0.50f..0.55f)
+  C2D_DrawRectSolid(0.0f, 198.0f, 0.50f, RomM3DS::SCREEN_BOTTOM_WIDTH, 42.0f,
+                    CLR_BG_BOTTOM);
+  C2D_DrawRectSolid(0.0f, 198.0f, 0.52f, RomM3DS::SCREEN_BOTTOM_WIDTH, 1.0f,
+                    CLR_BORDER_SUBTLE);
+
+  drawButton(8.0f, 203.0f, 96.0f, 32.0f, "[ Sync (A) ]", false, CLR_ACCENT_PRIMARY, 0.55f);
+  drawButton(108.0f, 203.0f, 104.0f, 32.0f, "[ Actions (SEL) ]", false, 0, 0.55f);
+  drawButton(216.0f, 203.0f, 96.0f, 32.0f, "[ Menu (X) ]", false, 0, 0.55f);
+
+  // 7. Bottom Sheet Overlay (z = 0.75f..0.85f)
+  if (m_activeSheet != ActiveSheet::NONE || m_sheetCurrentY < 239.0f) {
+    renderBottomSheet();
+  }
 }
 
 void UIManager::renderMatchingTop() {
@@ -1952,38 +2512,75 @@ void UIManager::renderMatchingBottom() {
 }
 
 void UIManager::renderMatchingConsolesTop() {
-  C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 42.0f,
-                    CLR_HEADER);
-  C2D_DrawRectSolid(0.0f, 40.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f,
-                    CLR_ACCENT);
+  C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 32.0f,
+                    CLR_SURFACE_HEADER);
+  C2D_DrawRectSolid(0.0f, 30.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f,
+                    CLR_ACCENT_PRIMARY);
 
   C2D_Text headerText;
-  C2D_TextParse(&headerText, m_textBuf, "romm3ds - RomM Consoles");
+  C2D_TextParse(&headerText, m_textBuf, "romm3ds - Match RomM Console");
   C2D_TextOptimize(&headerText);
-  C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 10.0f, 0.5f, 0.75f, 0.75f,
-               CLR_TEXT_WHITE);
+  C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 7.0f, 0.5f, 0.58f, 0.58f,
+               CLR_TEXT_PRIMARY);
+
+  C2D_DrawRectSolid(12.0f, 40.0f, 0.5f, 376.0f, 168.0f, CLR_BORDER_SUBTLE);
+  C2D_DrawRectSolid(13.0f, 41.0f, 0.5f, 374.0f, 166.0f, CLR_SURFACE_CARD);
+  C2D_DrawRectSolid(12.0f, 40.0f, 0.5f, 4.0f, 168.0f, CLR_ACCENT_PRIMARY);
 
   if (m_syncMgr && !m_filteredLocalIndices.empty() &&
       m_selectedGameIndex < m_filteredLocalIndices.size()) {
     size_t localActualIdx = m_filteredLocalIndices[m_selectedGameIndex];
     const auto &item = m_syncMgr->getItems()[localActualIdx];
 
-    std::string guide = "Target Local Game:\n  " + item.localTitle.name + " [" +
-                        item.localTitle.console +
-                        "]\n\n"
-                        "Select console to browse in RomM library:\n"
-                        "  (A) Open Selected Console\n"
-                        "  (B) Back to Main Menu\n"
-                        "  (X) Refresh Consoles & Library";
+    C2D_Text targetLbl;
+    C2D_TextParse(&targetLbl, m_textBuf, "Target Local Game:");
+    C2D_TextOptimize(&targetLbl);
+    C2D_DrawText(&targetLbl, C2D_WithColor, 24.0f, 48.0f, 0.5f, 0.40f, 0.40f,
+                 CLR_TEXT_DIM);
+
+    std::string targetName =
+        item.localTitle.name + "  [" + item.localTitle.console + "]";
+    C2D_Text nameTxt;
+    C2D_TextParse(&nameTxt, m_textBuf, targetName.c_str());
+    C2D_TextOptimize(&nameTxt);
+    float nScale = 0.50f;
+    float nW = 0.0f, nH = 0.0f;
+    C2D_TextGetDimensions(&nameTxt, nScale, nScale, &nW, &nH);
+    if (nW > 348.0f && nW > 0.0f) {
+      nScale *= (348.0f / nW);
+    }
+    C2D_DrawText(&nameTxt, C2D_WithColor, 24.0f, 64.0f, 0.5f, nScale, nScale,
+                 CLR_ACCENT_SOFT);
+
+    C2D_DrawRectSolid(24.0f, 88.0f, 0.5f, 350.0f, 1.0f, CLR_BORDER_SUBTLE);
+
+    std::string guide =
+        "Select a platform on the bottom screen to browse its\n"
+        "ROMs on your RomM server:\n\n"
+        "- Press (A) or tap a console to load its games\n"
+        "- Press (X) to refresh platforms & library from RomM\n"
+        "- Press (B) to cancel and return to the Main Menu";
     if (!m_loadingMessage.empty()) {
-      guide += "\n\n--> " + m_loadingMessage;
+      guide += "\n\n-> " + m_loadingMessage;
     }
     C2D_Text guideText;
     C2D_TextParse(&guideText, m_textBuf, guide.c_str());
     C2D_TextOptimize(&guideText);
-    C2D_DrawText(&guideText, C2D_WithColor, 16.0f, 56.0f, 0.5f, 0.48f, 0.48f,
-                 CLR_TEXT_WHITE);
+    C2D_DrawText(&guideText, C2D_WithColor, 24.0f, 96.0f, 0.5f, 0.42f, 0.42f,
+                 CLR_TEXT_SECONDARY);
   }
+
+  C2D_DrawRectSolid(0.0f, 216.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 24.0f,
+                    CLR_SURFACE_HEADER);
+  C2D_DrawRectSolid(0.0f, 216.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 1.0f,
+                    CLR_BORDER_SUBTLE);
+
+  C2D_Text hudText;
+  C2D_TextParse(&hudText, m_textBuf,
+                "(A) Open Console   (X) Refresh Library   (B) Back to Library");
+  C2D_TextOptimize(&hudText);
+  C2D_DrawText(&hudText, C2D_WithColor, 12.0f, 221.0f, 0.5f, 0.40f, 0.40f,
+               CLR_TEXT_SECONDARY);
 }
 
 void UIManager::renderMatchingConsolesBottom() {
@@ -2050,44 +2647,80 @@ void UIManager::renderMatchingConsolesBottom() {
 }
 
 void UIManager::renderMatchingGamesTop() {
-  C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 42.0f,
-                    CLR_HEADER);
-  C2D_DrawRectSolid(0.0f, 40.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f,
-                    CLR_YELLOW);
+  C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 32.0f,
+                    CLR_SURFACE_HEADER);
+  C2D_DrawRectSolid(0.0f, 30.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f,
+                    CLR_ACCENT_SOFT);
 
   std::string header = "romm3ds - " + m_selectedConsoleName;
-  if (header.length() > 36)
-    header = header.substr(0, 34) + "..";
+  if (header.length() > 38)
+    header = header.substr(0, 36) + "..";
   C2D_Text headerText;
   C2D_TextParse(&headerText, m_textBuf, header.c_str());
   C2D_TextOptimize(&headerText);
-  C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 10.0f, 0.5f, 0.75f, 0.75f,
-               CLR_TEXT_WHITE);
+  C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 7.0f, 0.5f, 0.58f, 0.58f,
+               CLR_TEXT_PRIMARY);
+
+  C2D_DrawRectSolid(12.0f, 40.0f, 0.5f, 376.0f, 168.0f, CLR_BORDER_SUBTLE);
+  C2D_DrawRectSolid(13.0f, 41.0f, 0.5f, 374.0f, 166.0f, CLR_SURFACE_CARD);
+  C2D_DrawRectSolid(12.0f, 40.0f, 0.5f, 4.0f, 168.0f, CLR_ACCENT_SOFT);
 
   if (m_syncMgr && !m_filteredLocalIndices.empty() &&
       m_selectedGameIndex < m_filteredLocalIndices.size()) {
     size_t localActualIdx = m_filteredLocalIndices[m_selectedGameIndex];
     const auto &item = m_syncMgr->getItems()[localActualIdx];
 
-    std::string guide = "Local Target: " + item.localTitle.name + " [" +
-                        item.localTitle.console +
-                        "]\n"
-                        "Console: " +
-                        m_selectedConsoleName + " (" + m_selectedConsoleSlug +
-                        ")\n\n"
-                        "Controls:\n"
-                        "  (A) Pair Selected Game     (B) Back to Consoles\n"
-                        "  (Y) Search Filter Games    (X) Clear Filter\n"
-                        "  (L) Refresh from Server";
-    if (!m_remoteFilterText.empty()) {
-      guide += "\n\nActive Filter: \"" + m_remoteFilterText + "\"";
+    C2D_Text targetLbl;
+    C2D_TextParse(&targetLbl, m_textBuf, "Pairing Local Title:");
+    C2D_TextOptimize(&targetLbl);
+    C2D_DrawText(&targetLbl, C2D_WithColor, 24.0f, 48.0f, 0.5f, 0.40f, 0.40f,
+                 CLR_TEXT_DIM);
+
+    std::string targetName =
+        item.localTitle.name + "  [" + item.localTitle.console + "]";
+    C2D_Text nameTxt;
+    C2D_TextParse(&nameTxt, m_textBuf, targetName.c_str());
+    C2D_TextOptimize(&nameTxt);
+    float nScale = 0.50f;
+    float nW = 0.0f, nH = 0.0f;
+    C2D_TextGetDimensions(&nameTxt, nScale, nScale, &nW, &nH);
+    if (nW > 348.0f && nW > 0.0f) {
+      nScale *= (348.0f / nW);
     }
+    C2D_DrawText(&nameTxt, C2D_WithColor, 24.0f, 64.0f, 0.5f, nScale, nScale,
+                 CLR_ACCENT_SOFT);
+
+    C2D_DrawRectSolid(24.0f, 88.0f, 0.5f, 350.0f, 1.0f, CLR_BORDER_SUBTLE);
+
+    std::string guide = "RomM Platform: " + m_selectedConsoleName + " (" +
+                        m_selectedConsoleSlug + ")\n";
+    if (!m_remoteFilterText.empty()) {
+      guide += "Search Filter: \"" + m_remoteFilterText + "\"\n";
+    }
+    guide += "\nSelect the matching game on the bottom screen:\n"
+             "- (A) Link Selected RomM Game\n"
+             "- (Y) Filter by Title   (X) Clear Filter\n"
+             "- (L) Reload Platform ROMs from Server";
+
     C2D_Text guideText;
     C2D_TextParse(&guideText, m_textBuf, guide.c_str());
     C2D_TextOptimize(&guideText);
-    C2D_DrawText(&guideText, C2D_WithColor, 16.0f, 56.0f, 0.5f, 0.48f, 0.48f,
-                 CLR_TEXT_WHITE);
+    C2D_DrawText(&guideText, C2D_WithColor, 24.0f, 96.0f, 0.5f, 0.41f, 0.41f,
+                 CLR_TEXT_SECONDARY);
   }
+
+  C2D_DrawRectSolid(0.0f, 216.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 24.0f,
+                    CLR_SURFACE_HEADER);
+  C2D_DrawRectSolid(0.0f, 216.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 1.0f,
+                    CLR_BORDER_SUBTLE);
+
+  C2D_Text hudText;
+  C2D_TextParse(
+      &hudText, m_textBuf,
+      "(A) Pair Game   (Y) Search   (X) Clear   (L) Refresh   (B) Consoles");
+  C2D_TextOptimize(&hudText);
+  C2D_DrawText(&hudText, C2D_WithColor, 12.0f, 221.0f, 0.5f, 0.39f, 0.39f,
+               CLR_TEXT_SECONDARY);
 }
 
 void UIManager::renderMatchingGamesBottom() {
@@ -2197,16 +2830,16 @@ void UIManager::renderMatchingGamesBottom() {
 }
 
 void UIManager::renderConflictTop() {
-  C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 36.0f,
-                    CLR_HEADER);
-  C2D_DrawRectSolid(0.0f, 34.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f,
+  C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 32.0f,
+                    CLR_SURFACE_HEADER);
+  C2D_DrawRectSolid(0.0f, 30.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f,
                     CLR_YELLOW);
 
   C2D_Text headerText;
-  C2D_TextParse(&headerText, m_textBuf, "Save Conflict Resolution");
+  C2D_TextParse(&headerText, m_textBuf, "romm3ds - Save Conflict Resolution");
   C2D_TextOptimize(&headerText);
-  C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 8.0f, 0.5f, 0.65f, 0.65f,
-               CLR_TEXT_WHITE);
+  C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 7.0f, 0.5f, 0.58f, 0.58f,
+               CLR_TEXT_PRIMARY);
 
   if (!m_syncMgr || m_conflictGameIndex >= m_syncMgr->getItems().size()) {
     return;
@@ -2215,14 +2848,14 @@ void UIManager::renderConflictTop() {
   const auto &item = m_syncMgr->getItems()[m_conflictGameIndex];
 
   std::string titleStr = "Game: " + item.localTitle.name;
-  if (titleStr.length() > 36) {
-    titleStr = titleStr.substr(0, 33) + "...";
+  if (titleStr.length() > 42) {
+    titleStr = titleStr.substr(0, 39) + "...";
   }
   C2D_Text titleText;
   C2D_TextParse(&titleText, m_textBuf, titleStr.c_str());
   C2D_TextOptimize(&titleText);
-  C2D_DrawText(&titleText, C2D_WithColor, 16.0f, 44.0f, 0.5f, 0.52f, 0.52f,
-               CLR_ACCENT);
+  C2D_DrawText(&titleText, C2D_WithColor, 14.0f, 38.0f, 0.5f, 0.50f, 0.50f,
+               CLR_ACCENT_SOFT);
 
   std::string localTimeStr =
       SyncManager::formatTimestamp(item.localTitle.saveTime);
@@ -2241,86 +2874,95 @@ void UIManager::renderConflictTop() {
       (localTime > 0 && (remoteTime == 0 || localTime > remoteTime + 5));
 
   // Card 1: Local (3DS) Save
-  float card1Y = 68.0f;
+  float card1Y = 62.0f;
   float cardH = 46.0f;
-  u32 card1Border = localIsNewer ? CLR_GREEN : CLR_BORDER_OFF;
-  C2D_DrawRectSolid(12.0f, card1Y, 0.5f, 376.0f, cardH, CLR_CARD);
+  u32 card1Border = localIsNewer ? CLR_YELLOW : CLR_BORDER_SUBTLE;
+  C2D_DrawRectSolid(12.0f, card1Y, 0.5f, 376.0f, cardH, CLR_BORDER_SUBTLE);
+  C2D_DrawRectSolid(13.0f, card1Y + 1.0f, 0.5f, 374.0f, cardH - 2.0f,
+                    CLR_SURFACE_CARD);
   C2D_DrawRectSolid(12.0f, card1Y, 0.5f, 4.0f, cardH, card1Border);
 
   C2D_Text localLbl;
   C2D_TextParse(&localLbl, m_textBuf, "Local (3DS) Save:");
   C2D_TextOptimize(&localLbl);
-  C2D_DrawText(&localLbl, C2D_WithColor, 24.0f, card1Y + 5.0f, 0.5f, 0.44f,
-               0.44f, CLR_TEXT_MUTED);
+  C2D_DrawText(&localLbl, C2D_WithColor, 24.0f, card1Y + 5.0f, 0.5f, 0.42f,
+               0.42f, CLR_TEXT_SECONDARY);
 
   C2D_Text localDateText;
   C2D_TextParse(&localDateText, m_textBuf, localTimeStr.c_str());
   C2D_TextOptimize(&localDateText);
   C2D_DrawText(&localDateText, C2D_WithColor, 24.0f, card1Y + 23.0f, 0.5f,
-               0.50f, 0.50f, CLR_TEXT_WHITE);
+               0.48f, 0.48f, CLR_TEXT_PRIMARY);
 
   const char *localTag =
-      localIsNewer ? "[ NEWER ]" : (remoteIsNewer ? "[ OLDER ]" : "[ SAME ]");
-  u32 localTagColor = localIsNewer ? CLR_GREEN : CLR_TEXT_MUTED;
-  C2D_Text localTagText;
-  C2D_TextParse(&localTagText, m_textBuf, localTag);
-  C2D_TextOptimize(&localTagText);
-  C2D_DrawText(&localTagText, C2D_WithColor, 298.0f, card1Y + 13.0f, 0.5f,
-               0.52f, 0.52f, localTagColor);
+      localIsNewer ? "NEWER [^]" : (remoteIsNewer ? "OLDER" : "SAME");
+  drawPillBadge(300.0f, card1Y + 14.0f, localTag, CLR_SURFACE_ALT,
+                localIsNewer ? CLR_YELLOW : CLR_TEXT_SECONDARY, 0.40f);
 
   // Card 2: Remote (RomM) Save
-  float card2Y = 122.0f;
-  u32 card2Border = remoteIsNewer ? CLR_GREEN : CLR_BORDER_OFF;
-  C2D_DrawRectSolid(12.0f, card2Y, 0.5f, 376.0f, cardH, CLR_CARD);
+  float card2Y = 114.0f;
+  u32 card2Border = remoteIsNewer ? CLR_GREEN : CLR_BORDER_SUBTLE;
+  C2D_DrawRectSolid(12.0f, card2Y, 0.5f, 376.0f, cardH, CLR_BORDER_SUBTLE);
+  C2D_DrawRectSolid(13.0f, card2Y + 1.0f, 0.5f, 374.0f, cardH - 2.0f,
+                    CLR_SURFACE_CARD);
   C2D_DrawRectSolid(12.0f, card2Y, 0.5f, 4.0f, cardH, card2Border);
 
   C2D_Text remoteLbl;
   C2D_TextParse(&remoteLbl, m_textBuf, "Remote (RomM) Save:");
   C2D_TextOptimize(&remoteLbl);
-  C2D_DrawText(&remoteLbl, C2D_WithColor, 24.0f, card2Y + 5.0f, 0.5f, 0.44f,
-               0.44f, CLR_TEXT_MUTED);
+  C2D_DrawText(&remoteLbl, C2D_WithColor, 24.0f, card2Y + 5.0f, 0.5f, 0.42f,
+               0.42f, CLR_TEXT_SECONDARY);
 
   C2D_Text remoteDateText;
   C2D_TextParse(&remoteDateText, m_textBuf, remoteTimeStr.c_str());
   C2D_TextOptimize(&remoteDateText);
   C2D_DrawText(&remoteDateText, C2D_WithColor, 24.0f, card2Y + 23.0f, 0.5f,
-               0.50f, 0.50f, CLR_TEXT_WHITE);
+               0.48f, 0.48f, CLR_TEXT_PRIMARY);
 
   const char *remoteTag =
-      remoteIsNewer ? "[ NEWER ]" : (localIsNewer ? "[ OLDER ]" : "[ SAME ]");
-  u32 remoteTagColor = remoteIsNewer ? CLR_GREEN : CLR_TEXT_MUTED;
-  C2D_Text remoteTagText;
-  C2D_TextParse(&remoteTagText, m_textBuf, remoteTag);
-  C2D_TextOptimize(&remoteTagText);
-  C2D_DrawText(&remoteTagText, C2D_WithColor, 298.0f, card2Y + 13.0f, 0.5f,
-               0.52f, 0.52f, remoteTagColor);
+      remoteIsNewer ? "NEWER [v]" : (localIsNewer ? "OLDER" : "SAME");
+  drawPillBadge(300.0f, card2Y + 14.0f, remoteTag, CLR_SURFACE_ALT,
+                remoteIsNewer ? CLR_GREEN : CLR_TEXT_SECONDARY, 0.40f);
 
-  // Recommendation
+  // Recommendation & Automatic Backup Notice
   std::string summary;
-  u32 summaryColor = CLR_TEXT_WHITE;
+  u32 summaryColor = CLR_TEXT_PRIMARY;
   if (remoteIsNewer) {
-    summary = "-> Recommendation: Download Save (Remote is newer)";
+    summary = "-> Recommended: Download Save (Remote is newer)";
     summaryColor = CLR_GREEN;
   } else if (localIsNewer) {
-    summary = "-> Recommendation: Upload Save (Local 3DS is newer)";
-    summaryColor = CLR_GREEN;
+    summary = "-> Recommended: Upload Save (Local 3DS is newer)";
+    summaryColor = CLR_YELLOW;
   } else {
     summary = "Saves have identical timestamps.";
-    summaryColor = CLR_TEXT_MUTED;
+    summaryColor = CLR_TEXT_SECONDARY;
   }
 
   C2D_Text summaryText;
   C2D_TextParse(&summaryText, m_textBuf, summary.c_str());
   C2D_TextOptimize(&summaryText);
-  C2D_DrawText(&summaryText, C2D_WithColor, 16.0f, 178.0f, 0.5f, 0.44f, 0.44f,
+  C2D_DrawText(&summaryText, C2D_WithColor, 14.0f, 168.0f, 0.5f, 0.43f, 0.43f,
                summaryColor);
 
-  C2D_Text guideText;
-  C2D_TextParse(&guideText, m_textBuf,
-                "Select resolution option on bottom screen.");
-  C2D_TextOptimize(&guideText);
-  C2D_DrawText(&guideText, C2D_WithColor, 16.0f, 202.0f, 0.5f, 0.40f, 0.40f,
-               CLR_TEXT_MUTED);
+  C2D_Text backupNote;
+  C2D_TextParse(&backupNote, m_textBuf,
+                "Note: Existing local saves are backed up to /3ds/romm3ds/backups/ before overwrite.");
+  C2D_TextOptimize(&backupNote);
+  C2D_DrawText(&backupNote, C2D_WithColor, 14.0f, 190.0f, 0.5f, 0.35f, 0.35f,
+               CLR_TEXT_DIM);
+
+  // Footer HUD Bar
+  C2D_DrawRectSolid(0.0f, 216.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 24.0f,
+                    CLR_SURFACE_HEADER);
+  C2D_DrawRectSolid(0.0f, 216.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 1.0f,
+                    CLR_BORDER_SUBTLE);
+
+  C2D_Text hudText;
+  C2D_TextParse(&hudText, m_textBuf,
+                "(Up/Down) Select Action   (A) Confirm Choice   (B) Skip Game");
+  C2D_TextOptimize(&hudText);
+  C2D_DrawText(&hudText, C2D_WithColor, 12.0f, 221.0f, 0.5f, 0.40f, 0.40f,
+               CLR_TEXT_SECONDARY);
 }
 
 void UIManager::renderConflictBottom() {
@@ -2766,17 +3408,16 @@ void UIManager::handleSavePickerInput(u32 kDown, const touchPosition &touch) {
 }
 
 void UIManager::renderSavePickerTop() {
-  C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH,
-                    RomM3DS::SCREEN_TOP_HEIGHT, CLR_BG_TOP);
-
-  C2D_DrawRectSolid(8.0f, 6.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH - 16.0f, 110.0f,
-                    CLR_CARD);
+  C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 32.0f,
+                    CLR_SURFACE_HEADER);
+  C2D_DrawRectSolid(0.0f, 30.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f,
+                    CLR_ACCENT_PRIMARY);
 
   C2D_Text titleText;
-  C2D_TextParse(&titleText, m_textBuf, "Set Custom Save Location");
+  C2D_TextParse(&titleText, m_textBuf, "romm3ds - Custom Save Path");
   C2D_TextOptimize(&titleText);
-  C2D_DrawText(&titleText, C2D_WithColor, 16.0f, 12.0f, 0.5f, 0.55f, 0.55f,
-               CLR_ACCENT);
+  C2D_DrawText(&titleText, C2D_WithColor, 12.0f, 7.0f, 0.5f, 0.58f, 0.58f,
+               CLR_TEXT_PRIMARY);
 
   std::string gameName = "Unknown Title";
   std::string curSavePath = "(None / Auto-detect)";
@@ -2793,28 +3434,33 @@ void UIManager::renderSavePickerTop() {
     hasSave = item.localTitle.hasSave;
   }
 
+  C2D_DrawRectSolid(12.0f, 40.0f, 0.5f, 376.0f, 82.0f, CLR_BORDER_SUBTLE);
+  C2D_DrawRectSolid(13.0f, 41.0f, 0.5f, 374.0f, 80.0f, CLR_SURFACE_CARD);
+  C2D_DrawRectSolid(12.0f, 40.0f, 0.5f, 4.0f, 82.0f,
+                    hasSave ? CLR_GREEN : CLR_YELLOW);
+
   C2D_Text nameText;
   C2D_TextParse(&nameText, m_textBuf, gameName.c_str());
   C2D_TextOptimize(&nameText);
-  float nScale = 0.52f;
+  float nScale = 0.50f;
   float nW = 0.0f, nH = 0.0f;
   C2D_TextGetDimensions(&nameText, nScale, nScale, &nW, &nH);
-  if (nW > 360.0f && nW > 0.0f)
-    nScale *= (360.0f / nW);
-  C2D_DrawText(&nameText, C2D_WithColor, 16.0f, 36.0f, 0.5f, nScale, nScale,
-               CLR_TEXT_WHITE);
+  if (nW > 350.0f && nW > 0.0f)
+    nScale *= (350.0f / nW);
+  C2D_DrawText(&nameText, C2D_WithColor, 24.0f, 46.0f, 0.5f, nScale, nScale,
+               CLR_TEXT_PRIMARY);
 
   std::string pathLine = "Active Path: " + curSavePath;
   C2D_Text pathText;
   C2D_TextParse(&pathText, m_textBuf, pathLine.c_str());
   C2D_TextOptimize(&pathText);
-  float pScale = 0.40f;
+  float pScale = 0.39f;
   float pW = 0.0f, pH = 0.0f;
   C2D_TextGetDimensions(&pathText, pScale, pScale, &pW, &pH);
-  if (pW > 360.0f && pW > 0.0f)
-    pScale *= (360.0f / pW);
-  C2D_DrawText(&pathText, C2D_WithColor, 16.0f, 62.0f, 0.5f, pScale, pScale,
-               CLR_TEXT_MUTED);
+  if (pW > 350.0f && pW > 0.0f)
+    pScale *= (350.0f / pW);
+  C2D_DrawText(&pathText, C2D_WithColor, 24.0f, 68.0f, 0.5f, pScale, pScale,
+               CLR_TEXT_SECONDARY);
 
   std::string statusLine = hasSave ? "Save file verified on SD (Ready for sync)"
                                    : "No save file found at active path";
@@ -2822,23 +3468,34 @@ void UIManager::renderSavePickerTop() {
   C2D_Text stText;
   C2D_TextParse(&stText, m_textBuf, statusLine.c_str());
   C2D_TextOptimize(&stText);
-  C2D_DrawText(&stText, C2D_WithColor, 16.0f, 84.0f, 0.5f, 0.42f, 0.42f,
+  C2D_DrawText(&stText, C2D_WithColor, 24.0f, 88.0f, 0.5f, 0.41f, 0.41f,
                statusColor);
 
-  C2D_DrawRectSolid(8.0f, 122.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH - 16.0f,
-                    110.0f, CLR_CARD);
+  C2D_DrawRectSolid(12.0f, 128.0f, 0.5f, 376.0f, 80.0f, CLR_BORDER_SUBTLE);
+  C2D_DrawRectSolid(13.0f, 129.0f, 0.5f, 374.0f, 78.0f, CLR_SURFACE_CARD);
+  C2D_DrawRectSolid(12.0f, 128.0f, 0.5f, 4.0f, 80.0f, CLR_ACCENT_PRIMARY);
 
-  std::string inst = "Instructions:\n"
-                     "  (A) Select highlighted .sav file, or open folder\n"
-                     "  (X) Manual keyboard entry (enter exact SD path)\n"
-                     "  (Y) Reset / Clear custom override (use auto-detect)\n"
-                     "  (B) Cancel and return to library\n"
-                     "  D-Pad Up/Down to browse, Left/Right for page jumps";
+  std::string inst = "File Browser Controls:\n"
+                     "- (A) Select highlighted .sav/.srm file or open folder\n"
+                     "- (X) Manual keyboard path entry (sdmc:/...)\n"
+                     "- (Y) Reset override to auto-detected save path";
   C2D_Text instText;
   C2D_TextParse(&instText, m_textBuf, inst.c_str());
   C2D_TextOptimize(&instText);
-  C2D_DrawText(&instText, C2D_WithColor, 16.0f, 130.0f, 0.5f, 0.40f, 0.40f,
-               CLR_TEXT_WHITE);
+  C2D_DrawText(&instText, C2D_WithColor, 24.0f, 134.0f, 0.5f, 0.40f, 0.40f,
+               CLR_TEXT_SECONDARY);
+
+  C2D_DrawRectSolid(0.0f, 216.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 24.0f,
+                    CLR_SURFACE_HEADER);
+  C2D_DrawRectSolid(0.0f, 216.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 1.0f,
+                    CLR_BORDER_SUBTLE);
+
+  C2D_Text hudText;
+  C2D_TextParse(&hudText, m_textBuf,
+                "(A) Select/Open   (X) Keyboard   (Y) Reset Auto   (B) Back");
+  C2D_TextOptimize(&hudText);
+  C2D_DrawText(&hudText, C2D_WithColor, 12.0f, 221.0f, 0.5f, 0.40f, 0.40f,
+               CLR_TEXT_SECONDARY);
 }
 
 void UIManager::renderSavePickerBottom() {
@@ -3045,28 +3702,44 @@ void UIManager::handleSortPickerInput(u32 kDown, const touchPosition &touch) {
 }
 
 void UIManager::renderFilterPickerTop() {
-  C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 42.0f,
-                    CLR_HEADER);
-  C2D_DrawRectSolid(0.0f, 40.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f,
-                    CLR_ACCENT);
+  C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 32.0f,
+                    CLR_SURFACE_HEADER);
+  C2D_DrawRectSolid(0.0f, 30.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f,
+                    CLR_ACCENT_PRIMARY);
 
   C2D_Text headerText;
   C2D_TextParse(&headerText, m_textBuf, "romm3ds - Filter Local Library");
   C2D_TextOptimize(&headerText);
-  C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 10.0f, 0.5f, 0.72f, 0.72f,
-               CLR_TEXT_WHITE);
+  C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 7.0f, 0.5f, 0.58f, 0.58f,
+               CLR_TEXT_PRIMARY);
+
+  C2D_DrawRectSolid(12.0f, 40.0f, 0.5f, 376.0f, 168.0f, CLR_BORDER_SUBTLE);
+  C2D_DrawRectSolid(13.0f, 41.0f, 0.5f, 374.0f, 166.0f, CLR_SURFACE_CARD);
+  C2D_DrawRectSolid(12.0f, 40.0f, 0.5f, 4.0f, 168.0f, CLR_ACCENT_PRIMARY);
 
   std::string guide = "Active Filter: " + getActiveFilterDescription() +
                       "\n\n"
                       "Select a filter option on the bottom screen:\n"
-                      "  (A) / Tap Option: Apply Selected Filter\n"
-                      "  (B) / Back: Cancel & Return to Library\n"
-                      "  D-Pad Up/Down to navigate, Left/Right for page jumps";
+                      "- (A) or Tap Option: Apply Selected Filter\n"
+                      "- (B) or Back: Cancel & Return to Library\n"
+                      "- D-Pad Up/Down to navigate, Left/Right for page jumps";
   C2D_Text guideText;
   C2D_TextParse(&guideText, m_textBuf, guide.c_str());
   C2D_TextOptimize(&guideText);
-  C2D_DrawText(&guideText, C2D_WithColor, 16.0f, 56.0f, 0.5f, 0.48f, 0.48f,
-               CLR_TEXT_WHITE);
+  C2D_DrawText(&guideText, C2D_WithColor, 24.0f, 52.0f, 0.5f, 0.44f, 0.44f,
+               CLR_TEXT_SECONDARY);
+
+  C2D_DrawRectSolid(0.0f, 216.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 24.0f,
+                    CLR_SURFACE_HEADER);
+  C2D_DrawRectSolid(0.0f, 216.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 1.0f,
+                    CLR_BORDER_SUBTLE);
+
+  C2D_Text hudText;
+  C2D_TextParse(&hudText, m_textBuf,
+                "(Up/Down) Navigate   (A) Apply Filter   (B) Cancel & Return");
+  C2D_TextOptimize(&hudText);
+  C2D_DrawText(&hudText, C2D_WithColor, 12.0f, 221.0f, 0.5f, 0.40f, 0.40f,
+               CLR_TEXT_SECONDARY);
 }
 
 void UIManager::renderFilterPickerBottom() {
@@ -3117,28 +3790,44 @@ void UIManager::renderFilterPickerBottom() {
 }
 
 void UIManager::renderSortPickerTop() {
-  C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 42.0f,
-                    CLR_HEADER);
-  C2D_DrawRectSolid(0.0f, 40.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f,
-                    CLR_ACCENT);
+  C2D_DrawRectSolid(0.0f, 0.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 32.0f,
+                    CLR_SURFACE_HEADER);
+  C2D_DrawRectSolid(0.0f, 30.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 2.0f,
+                    CLR_ACCENT_PRIMARY);
 
   C2D_Text headerText;
   C2D_TextParse(&headerText, m_textBuf, "romm3ds - Sort Local Library");
   C2D_TextOptimize(&headerText);
-  C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 10.0f, 0.5f, 0.72f, 0.72f,
-               CLR_TEXT_WHITE);
+  C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 7.0f, 0.5f, 0.58f, 0.58f,
+               CLR_TEXT_PRIMARY);
+
+  C2D_DrawRectSolid(12.0f, 40.0f, 0.5f, 376.0f, 168.0f, CLR_BORDER_SUBTLE);
+  C2D_DrawRectSolid(13.0f, 41.0f, 0.5f, 374.0f, 166.0f, CLR_SURFACE_CARD);
+  C2D_DrawRectSolid(12.0f, 40.0f, 0.5f, 4.0f, 168.0f, CLR_ACCENT_PRIMARY);
 
   std::string guide =
       "Active Sort: " + std::string(getSortModeName(m_localSortMode)) +
       "\n\n"
       "Select a sort option on the bottom screen:\n"
-      "  (A) / Tap Option: Apply Selected Sort\n"
-      "  (B) / Back: Cancel & Return to Library";
+      "- (A) or Tap Option: Apply Selected Sort\n"
+      "- (B) or Back: Cancel & Return to Library";
   C2D_Text guideText;
   C2D_TextParse(&guideText, m_textBuf, guide.c_str());
   C2D_TextOptimize(&guideText);
-  C2D_DrawText(&guideText, C2D_WithColor, 16.0f, 56.0f, 0.5f, 0.48f, 0.48f,
-               CLR_TEXT_WHITE);
+  C2D_DrawText(&guideText, C2D_WithColor, 24.0f, 52.0f, 0.5f, 0.44f, 0.44f,
+               CLR_TEXT_SECONDARY);
+
+  C2D_DrawRectSolid(0.0f, 216.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 24.0f,
+                    CLR_SURFACE_HEADER);
+  C2D_DrawRectSolid(0.0f, 216.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 1.0f,
+                    CLR_BORDER_SUBTLE);
+
+  C2D_Text hudText;
+  C2D_TextParse(&hudText, m_textBuf,
+                "(Up/Down) Navigate   (A) Apply Sort   (B) Cancel & Return");
+  C2D_TextOptimize(&hudText);
+  C2D_DrawText(&hudText, C2D_WithColor, 12.0f, 221.0f, 0.5f, 0.40f, 0.40f,
+               CLR_TEXT_SECONDARY);
 }
 
 void UIManager::renderSortPickerBottom() {

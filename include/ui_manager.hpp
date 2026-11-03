@@ -54,7 +54,7 @@ public:
               ConfigManager* configMgr, NetworkManager* netMgr = nullptr,
               SaveManager* saveMgr = nullptr, SyncManager* syncMgr = nullptr);
 
-    void handleInput(u32 kDown, const touchPosition& touch);
+    void handleInput(u32 kDown, u32 kHeld, u32 kUp, const touchPosition& touch);
     void render();
     void cleanup();
 
@@ -119,13 +119,40 @@ private:
     void freeGameLogo();
 
     void drawInputBox(float x, float y, float w, float h, const char* label, const std::string& value, bool selected);
-    void drawButton(float x, float y, float w, float h, const char* label, bool selected, u32 accentColor = 0);
-    float drawPillBadge(float x, float y, const char* text, u32 bgColor, u32 textColor, float scale = 0.38f);
+    void drawButton(float x, float y, float w, float h, const char* label, bool selected, u32 accentColor = 0, float z = 0.5f);
+    float drawPillBadge(float x, float y, const char* text, u32 bgColor, u32 textColor, float scale = 0.38f, float z = 0.5f);
     void drawLoadingOverlay(const std::string& message);
     void openOperationLog(const std::string& title);
     void addOperationLog(const std::string& message);
     void finishOperationLog();
     void renderOperationLogOverlay();
+
+    enum class ActiveSheet {
+        NONE,
+        GAME_ACTIONS,
+        APP_MENU
+    };
+
+    ActiveSheet m_activeSheet = ActiveSheet::NONE;
+    float m_sheetCurrentY = 240.0f;
+    float m_sheetTargetY = 240.0f;
+    int m_sheetSelectedIndex = 0;
+
+    void openGameActionsSheet();
+    void openAppMenuSheet();
+    void closeSheet();
+    void renderBottomSheet();
+    bool handleSheetInput(u32 kDown, const touchPosition& touch);
+
+    float m_scrollY = 0.0f;
+    float m_targetScrollY = 0.0f;
+    float m_velocityY = 0.0f;
+    bool m_isDragging = false;
+    float m_touchStartY = 0.0f;
+    float m_lastTouchY = 0.0f;
+    int m_holdRepeatTimer = 0;
+
+    void ensureSelectedVisible();
 
     std::string launchKeyboard(const std::string& hint, const std::string& initial, int maxLen = 256);
     void openServerSettings();

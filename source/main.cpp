@@ -106,12 +106,14 @@ int main(int argc, char *argv[]) {
     hidScanInput();
 
     u32 kDown = hidKeysDown();
+    u32 kHeld = hidKeysHeld();
+    u32 kUp = hidKeysUp();
     if (kDown & KEY_START) {
       break;
     }
 
     hidTouchRead(&touch);
-    uiMgr.handleInput(kDown, touch);
+    uiMgr.handleInput(kDown, kHeld, kUp, touch);
 
     uiMgr.render();
   }
