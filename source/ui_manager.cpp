@@ -16,18 +16,35 @@ namespace RomM3DS {
 
 namespace {
 
-constexpr u32 CLR_BG_TOP = C2D_Color32(0x18, 0x1B, 0x22, 0xFF);
-constexpr u32 CLR_BG_BOTTOM = C2D_Color32(0x10, 0x12, 0x17, 0xFF);
-constexpr u32 CLR_HEADER = C2D_Color32(0x21, 0x26, 0x31, 0xFF);
-constexpr u32 CLR_CARD = C2D_Color32(0x1C, 0x21, 0x2B, 0xFF);
-constexpr u32 CLR_INPUT_BG = C2D_Color32(0x13, 0x16, 0x1D, 0xFF);
-constexpr u32 CLR_ACCENT = C2D_Color32(0x3B, 0x82, 0xF6, 0xFF);
-constexpr u32 CLR_BORDER_OFF = C2D_Color32(0x2F, 0x36, 0x46, 0xFF);
-constexpr u32 CLR_TEXT_WHITE = C2D_Color32(0xF8, 0xFA, 0xFC, 0xFF);
-constexpr u32 CLR_TEXT_MUTED = C2D_Color32(0x94, 0xA3, 0xB8, 0xFF);
+// Obsidian Black, Dark Charcoal Gray & Amethyst Purple Theme Palette
+constexpr u32 CLR_BG_TOP = C2D_Color32(0x0B, 0x0A, 0x0E, 0xFF);
+constexpr u32 CLR_BG_BOTTOM = C2D_Color32(0x08, 0x07, 0x0B, 0xFF);
+constexpr u32 CLR_SURFACE_HEADER = C2D_Color32(0x14, 0x12, 0x1A, 0xFF);
+constexpr u32 CLR_SURFACE_CARD = C2D_Color32(0x18, 0x16, 0x20, 0xFF);
+constexpr u32 CLR_SURFACE_ELEVATED = C2D_Color32(0x21, 0x1E, 0x2C, 0xFF);
+constexpr u32 CLR_SURFACE_ALT = C2D_Color32(0x12, 0x10, 0x17, 0xFF);
+constexpr u32 CLR_BORDER_SUBTLE = C2D_Color32(0x2B, 0x26, 0x38, 0xFF);
+constexpr u32 CLR_ACCENT_PRIMARY = C2D_Color32(0x8B, 0x5C, 0xF6, 0xFF);
+constexpr u32 CLR_ACCENT_PRESSED = C2D_Color32(0x6D, 0x28, 0xD9, 0xFF);
+constexpr u32 CLR_ACCENT_SOFT = C2D_Color32(0xA7, 0x8B, 0xFA, 0xFF);
+constexpr u32 CLR_ACCENT_MUTED = C2D_Color32(0x4C, 0x1D, 0x95, 0xFF);
+constexpr u32 CLR_TEXT_PRIMARY = C2D_Color32(0xF3, 0xF0, 0xFF, 0xFF);
+constexpr u32 CLR_TEXT_SECONDARY = C2D_Color32(0x9C, 0xA3, 0xAF, 0xFF);
+constexpr u32 CLR_TEXT_DIM = C2D_Color32(0x5B, 0x56, 0x6B, 0xFF);
+constexpr u32 CLR_DANGER = C2D_Color32(0xE1, 0x1D, 0x48, 0xFF);
+constexpr u32 CLR_DIM_OVERLAY = C2D_Color32(0x05, 0x04, 0x08, 0xB8);
+
+// Semantic aliases & status indicator colors (Green / Yellow / Gray)
+constexpr u32 CLR_HEADER = CLR_SURFACE_HEADER;
+constexpr u32 CLR_CARD = CLR_SURFACE_CARD;
+constexpr u32 CLR_INPUT_BG = CLR_SURFACE_ALT;
+constexpr u32 CLR_ACCENT = CLR_ACCENT_PRIMARY;
+constexpr u32 CLR_BORDER_OFF = CLR_BORDER_SUBTLE;
+constexpr u32 CLR_TEXT_WHITE = CLR_TEXT_PRIMARY;
+constexpr u32 CLR_TEXT_MUTED = CLR_TEXT_SECONDARY;
 constexpr u32 CLR_GREEN = C2D_Color32(0x22, 0xC5, 0x5E, 0xFF);
 constexpr u32 CLR_YELLOW = C2D_Color32(0xEA, 0xB3, 0x08, 0xFF);
-constexpr u32 CLR_ERROR = C2D_Color32(0xEF, 0x44, 0x44, 0xFF);
+constexpr u32 CLR_ERROR = CLR_DANGER;
 
 bool containsIgnoreCase(const std::string &str, const std::string &sub) {
   if (sub.empty())
@@ -826,6 +843,11 @@ void UIManager::resolveConflict(int choice) {
 }
 
 void UIManager::handleInput(u32 kDown, const touchPosition &touch) {
+  m_touchHeld = (hidKeysHeld() & KEY_TOUCH) != 0;
+  if (m_touchHeld || (kDown & KEY_TOUCH)) {
+    m_activeTouch = touch;
+  }
+
   if (m_showLogDialog) {
     if (!m_operationInProgress) {
       if (kDown & (KEY_A | KEY_B | KEY_START)) {
@@ -1185,34 +1207,58 @@ void UIManager::handleInput(u32 kDown, const touchPosition &touch) {
 void UIManager::drawInputBox(float x, float y, float w, float h,
                              const char *label, const std::string &value,
                              bool selected) {
-  u32 borderColor = selected ? CLR_ACCENT : CLR_BORDER_OFF;
+  bool isPressed = m_touchHeld && isTouchInside(m_activeTouch, x, y, w, h);
+  u32 borderColor =
+      isPressed ? CLR_ACCENT_SOFT
+                : (selected ? CLR_ACCENT_PRIMARY : CLR_BORDER_SUBTLE);
+  u32 boxBg =
+      (selected || isPressed) ? CLR_SURFACE_ELEVATED : CLR_SURFACE_ALT;
+
   C2D_DrawRectSolid(x, y, 0.5f, w, h, borderColor);
-  C2D_DrawRectSolid(x + 1.5f, y + 1.5f, 0.5f, w - 3.0f, h - 3.0f, CLR_INPUT_BG);
+  C2D_DrawRectSolid(x + 1.5f, y + 1.5f, 0.5f, w - 3.0f, h - 3.0f, boxBg);
+  if (selected || isPressed) {
+    C2D_DrawRectSolid(x, y, 0.5f, 3.0f, h,
+                      isPressed ? CLR_ACCENT_PRESSED : CLR_ACCENT_PRIMARY);
+  }
 
   C2D_Text lblText;
   C2D_TextParse(&lblText, m_textBuf, label);
   C2D_TextOptimize(&lblText);
   C2D_DrawText(&lblText, C2D_WithColor, x, y - 14.0f, 0.5f, 0.45f, 0.45f,
-               CLR_TEXT_MUTED);
+               selected ? CLR_ACCENT_SOFT : CLR_TEXT_SECONDARY);
 
   std::string displayVal = value.empty() ? "<Empty - Tap or Press (A)>" : value;
-  u32 valColor = value.empty() ? CLR_TEXT_MUTED : CLR_TEXT_WHITE;
+  u32 valColor = value.empty() ? CLR_TEXT_DIM : CLR_TEXT_PRIMARY;
 
   C2D_Text valText;
   C2D_TextParse(&valText, m_textBuf, displayVal.c_str());
   C2D_TextOptimize(&valText);
-  C2D_DrawText(&valText, C2D_WithColor, x + 8.0f, y + 8.0f, 0.5f, 0.48f, 0.48f,
-               valColor);
+  float textOffsetY = isPressed ? 9.0f : 8.0f;
+  C2D_DrawText(&valText, C2D_WithColor, x + 8.0f, y + textOffsetY, 0.5f, 0.48f,
+               0.48f, valColor);
 }
 
 void UIManager::drawButton(float x, float y, float w, float h,
                            const char *label, bool selected, u32 accentColor) {
-  u32 btnBg =
-      selected ? (accentColor != 0 ? accentColor : CLR_ACCENT) : CLR_CARD;
-  u32 borderColor = selected ? CLR_TEXT_WHITE : CLR_BORDER_OFF;
+  bool isPressed = m_touchHeld && isTouchInside(m_activeTouch, x, y, w, h);
+  u32 baseAccent = (accentColor != 0) ? accentColor : CLR_ACCENT_PRIMARY;
+
+  u32 btnBg = CLR_SURFACE_CARD;
+  u32 borderColor = (accentColor != 0) ? accentColor : CLR_BORDER_SUBTLE;
+  if (isPressed) {
+    btnBg = CLR_ACCENT_PRESSED;
+    borderColor = CLR_ACCENT_SOFT;
+  } else if (selected) {
+    btnBg = CLR_SURFACE_ELEVATED;
+    borderColor = baseAccent;
+  }
 
   C2D_DrawRectSolid(x, y, 0.5f, w, h, borderColor);
   C2D_DrawRectSolid(x + 1.5f, y + 1.5f, 0.5f, w - 3.0f, h - 3.0f, btnBg);
+  if (selected || isPressed) {
+    C2D_DrawRectSolid(x, y, 0.5f, 3.0f, h,
+                      isPressed ? CLR_ACCENT_SOFT : baseAccent);
+  }
 
   C2D_Text btnText;
   C2D_TextParse(&btnText, m_textBuf, label);
@@ -1228,30 +1274,52 @@ void UIManager::drawButton(float x, float y, float w, float h,
   }
 
   float textX = x + (w - textW) / 2.0f;
-  float textY = y + (h - textH) / 2.0f;
+  float textY = y + (h - textH) / 2.0f + (isPressed ? 1.0f : 0.0f);
   C2D_DrawText(&btnText, C2D_WithColor, textX, textY, 0.5f, scale, scale,
-               CLR_TEXT_WHITE);
+               CLR_TEXT_PRIMARY);
+}
+
+float UIManager::drawPillBadge(float x, float y, const char *text, u32 bgColor,
+                               u32 textColor, float scale) {
+  C2D_Text pillText;
+  C2D_TextParse(&pillText, m_textBuf, text);
+  C2D_TextOptimize(&pillText);
+
+  float textW = 0.0f, textH = 0.0f;
+  C2D_TextGetDimensions(&pillText, scale, scale, &textW, &textH);
+
+  float padX = 6.0f;
+  float padY = 2.5f;
+  float pillW = textW + padX * 2.0f;
+  float pillH = textH + padY * 2.0f;
+
+  C2D_DrawRectSolid(x, y, 0.5f, pillW, pillH, CLR_BORDER_SUBTLE);
+  C2D_DrawRectSolid(x + 1.0f, y + 1.0f, 0.5f, pillW - 2.0f, pillH - 2.0f,
+                    bgColor);
+  C2D_DrawText(&pillText, C2D_WithColor, x + padX, y + padY, 0.5f, scale, scale,
+               textColor);
+  return pillW;
 }
 
 void UIManager::drawLoadingOverlay(const std::string &message) {
-  constexpr u32 CLR_OVERLAY_DIM = C2D_Color32(0x05, 0x07, 0x0B, 0xCC);
   C2D_DrawRectSolid(0.0f, 0.0f, 0.7f, RomM3DS::SCREEN_BOTTOM_WIDTH,
-                    RomM3DS::SCREEN_BOTTOM_HEIGHT, CLR_OVERLAY_DIM);
+                    RomM3DS::SCREEN_BOTTOM_HEIGHT, CLR_DIM_OVERLAY);
 
   float boxW = 260.0f;
   float boxH = 74.0f;
   float boxX = (RomM3DS::SCREEN_BOTTOM_WIDTH - boxW) / 2.0f;
   float boxY = (RomM3DS::SCREEN_BOTTOM_HEIGHT - boxH) / 2.0f;
 
-  C2D_DrawRectSolid(boxX, boxY, 0.75f, boxW, boxH, CLR_ACCENT);
+  C2D_DrawRectSolid(boxX, boxY, 0.75f, boxW, boxH, CLR_ACCENT_PRIMARY);
   C2D_DrawRectSolid(boxX + 2.0f, boxY + 2.0f, 0.75f, boxW - 4.0f, boxH - 4.0f,
-                    CLR_HEADER);
+                    CLR_SURFACE_HEADER);
+  C2D_DrawRectSolid(boxX, boxY, 0.76f, 4.0f, boxH, CLR_ACCENT_PRIMARY);
 
   C2D_Text headerText;
   C2D_TextParse(&headerText, m_textBuf, "Please wait...");
   C2D_TextOptimize(&headerText);
   C2D_DrawText(&headerText, C2D_WithColor, boxX + 16.0f, boxY + 14.0f, 0.8f,
-               0.50f, 0.50f, CLR_ACCENT);
+               0.50f, 0.50f, CLR_ACCENT_SOFT);
 
   C2D_Text msgText;
   C2D_TextParse(&msgText, m_textBuf, message.c_str());
@@ -1264,7 +1332,7 @@ void UIManager::drawLoadingOverlay(const std::string &message) {
     msgScale *= ((boxW - 32.0f) / msgW);
   }
   C2D_DrawText(&msgText, C2D_WithColor, boxX + 16.0f, boxY + 40.0f, 0.8f,
-               msgScale, msgScale, CLR_TEXT_WHITE);
+               msgScale, msgScale, CLR_TEXT_PRIMARY);
 }
 
 static std::vector<std::string> softWrapLogLine(const std::string &line,
@@ -1354,22 +1422,22 @@ void UIManager::openOperationLog(const std::string &title) {
 }
 
 void UIManager::addOperationLog(const std::string &message) {
-  u32 color = C2D_Color32(0xD0, 0xD8, 0xE5, 0xFF);
+  u32 color = CLR_TEXT_PRIMARY;
   if (message.rfind("[SUCCESS]", 0) == 0 || message.rfind("[OK]", 0) == 0) {
-    color = C2D_Color32(0x40, 0xE0, 0x60, 0xFF);
+    color = CLR_GREEN;
   } else if (message.rfind("[ERROR]", 0) == 0 ||
              message.rfind("[FAIL]", 0) == 0) {
-    color = C2D_Color32(0xFF, 0x50, 0x50, 0xFF);
+    color = CLR_DANGER;
   } else if (message.rfind("[Sync]", 0) == 0 ||
              message.rfind("[Download]", 0) == 0 ||
              message.rfind("[Upload]", 0) == 0) {
-    color = CLR_ACCENT;
+    color = CLR_ACCENT_SOFT;
   } else if (message.rfind("[WARN]", 0) == 0) {
-    color = C2D_Color32(0xFF, 0xCC, 0x00, 0xFF);
+    color = CLR_YELLOW;
   } else if (message.rfind("Existing", 0) == 0 ||
              message.rfind("Remote", 0) == 0 ||
              message.rfind("Local", 0) == 0 || message.rfind("ROM", 0) == 0) {
-    color = C2D_Color32(0x80, 0xD0, 0xFF, 0xFF);
+    color = CLR_TEXT_SECONDARY;
   }
 
   std::vector<std::string> wrapped = softWrapLogLine(message, 38);
@@ -1387,34 +1455,31 @@ void UIManager::finishOperationLog() {
 }
 
 void UIManager::renderOperationLogOverlay() {
-  constexpr u32 CLR_OVERLAY_DIM = C2D_Color32(0x05, 0x07, 0x0B, 0xE0);
   C2D_DrawRectSolid(0.0f, 0.0f, 0.7f, RomM3DS::SCREEN_BOTTOM_WIDTH,
-                    RomM3DS::SCREEN_BOTTOM_HEIGHT, CLR_OVERLAY_DIM);
+                    RomM3DS::SCREEN_BOTTOM_HEIGHT, CLR_DIM_OVERLAY);
 
   float boxX = 6.0f;
   float boxY = 6.0f;
   float boxW = RomM3DS::SCREEN_BOTTOM_WIDTH - 12.0f;
   float boxH = RomM3DS::SCREEN_BOTTOM_HEIGHT - 12.0f;
 
-  C2D_DrawRectSolid(boxX, boxY, 0.72f, boxW, boxH, CLR_ACCENT);
+  C2D_DrawRectSolid(boxX, boxY, 0.72f, boxW, boxH, CLR_ACCENT_PRIMARY);
   C2D_DrawRectSolid(boxX + 2.0f, boxY + 2.0f, 0.72f, boxW - 4.0f, boxH - 4.0f,
-                    CLR_HEADER);
+                    CLR_SURFACE_HEADER);
 
   C2D_Text titleText;
   C2D_TextParse(&titleText, m_textBuf, m_logDialogTitle.c_str());
   C2D_TextOptimize(&titleText);
   C2D_DrawText(&titleText, C2D_WithColor, boxX + 8.0f, boxY + 6.0f, 0.75f,
-               0.46f, 0.46f, CLR_TEXT_WHITE);
+               0.46f, 0.46f, CLR_TEXT_PRIMARY);
 
   float logX = boxX + 6.0f;
   float logY = boxY + 24.0f;
   float logW = boxW - 12.0f;
   float logH = 168.0f;
-  constexpr u32 CLR_TERM_BG = C2D_Color32(0x0a, 0x0f, 0x18, 0xFF);
-  constexpr u32 CLR_TERM_BORDER = C2D_Color32(0x1e, 0x2c, 0x40, 0xFF);
-  C2D_DrawRectSolid(logX, logY, 0.75f, logW, logH, CLR_TERM_BORDER);
+  C2D_DrawRectSolid(logX, logY, 0.75f, logW, logH, CLR_BORDER_SUBTLE);
   C2D_DrawRectSolid(logX + 1.0f, logY + 1.0f, 0.75f, logW - 2.0f, logH - 2.0f,
-                    CLR_TERM_BG);
+                    CLR_SURFACE_ALT);
 
   constexpr float LINE_HEIGHT = 13.5f;
   int maxVisibleLines = static_cast<int>((logH - 6.0f) / LINE_HEIGHT);

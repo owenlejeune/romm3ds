@@ -120,6 +120,7 @@ private:
 
     void drawInputBox(float x, float y, float w, float h, const char* label, const std::string& value, bool selected);
     void drawButton(float x, float y, float w, float h, const char* label, bool selected, u32 accentColor = 0);
+    float drawPillBadge(float x, float y, const char* text, u32 bgColor, u32 textColor, float scale = 0.38f);
     void drawLoadingOverlay(const std::string& message);
     void openOperationLog(const std::string& title);
     void addOperationLog(const std::string& message);
@@ -146,6 +147,9 @@ private:
     C3D_RenderTarget* m_topTarget = nullptr;
     C3D_RenderTarget* m_bottomTarget = nullptr;
     C2D_TextBuf m_textBuf = nullptr;
+
+    bool m_touchHeld = false;
+    touchPosition m_activeTouch = {0, 0};
 
     bool m_showLogDialog = false;
     bool m_operationInProgress = false;
