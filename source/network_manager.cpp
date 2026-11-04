@@ -49,6 +49,18 @@ size_t headerCallback(char* buffer, size_t size, size_t nmemb, void* userp) {
     return totalBytes;
 }
 
+int curlXferInfoCallback(void* clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow) {
+    (void)clientp; (void)dltotal; (void)dlnow; (void)ultotal; (void)ulnow;
+#if defined(__3DS__) || defined(_3DS)
+    hidScanInput();
+    u32 kDown = hidKeysDown();
+    if (kDown & KEY_B) {
+        return 1; // Abort operation immediately on (B) press
+    }
+#endif
+    return 0;
+}
+
 size_t stringWriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
     size_t totalBytes = size * nmemb;
     auto* str = static_cast<std::string*>(userp);
@@ -237,7 +249,10 @@ NetworkResult NetworkManager::testConnection() {
     curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, headerCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, stringWriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseData);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 8L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, curlXferInfoCallback);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
@@ -255,7 +270,11 @@ NetworkResult NetworkManager::testConnection() {
             result.errorMessage = "Server responded with HTTP " + std::to_string(result.httpCode);
         }
     } else {
-        result.errorMessage = curl_easy_strerror(res);
+        if (res == CURLE_ABORTED_BY_CALLBACK) {
+            result.errorMessage = "Operation cancelled.";
+        } else {
+            result.errorMessage = curl_easy_strerror(res);
+        }
     }
 
     curl_slist_free_all(headers);
@@ -264,6 +283,7 @@ NetworkResult NetworkManager::testConnection() {
 
 NetworkResult NetworkManager::fetchPlatforms(std::vector<RommPlatform>& outPlatforms) {
     NetworkResult result;
+    outPlatforms.clear();
 
     if (!s_networkInitialized) {
         result.errorMessage = "Network is not initialized.";
@@ -295,7 +315,10 @@ NetworkResult NetworkManager::fetchPlatforms(std::vector<RommPlatform>& outPlatf
     curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, headerCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, stringWriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseData);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 8L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, curlXferInfoCallback);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
@@ -332,7 +355,11 @@ NetworkResult NetworkManager::fetchPlatforms(std::vector<RommPlatform>& outPlatf
             result.errorMessage = "HTTP Error " + std::to_string(result.httpCode);
         }
     } else {
-        result.errorMessage = curl_easy_strerror(res);
+        if (res == CURLE_ABORTED_BY_CALLBACK) {
+            result.errorMessage = "Operation cancelled.";
+        } else {
+            result.errorMessage = curl_easy_strerror(res);
+        }
     }
 
     curl_slist_free_all(headers);
@@ -353,29 +380,21 @@ NetworkResult NetworkManager::fetchLibrary(std::vector<RommGame>& outGames, uint
 
     std::string baseQuery;
     if (platformId > 0) {
-        baseQuery += "platform_id=" + std::to_string(platformId);
+        baseQuery += "platform_id=" + std::to_string(platformId) + "&platform_ids=" + std::to_string(platformId);
     } else if (!platformSlug.empty()) {
         baseQuery += "platform_slug=" + platformSlug;
     }
 
     std::string apiKey = getApiKey();
 
-    auto romFilterCallback = [](int depth, json::parse_event_t event, json& parsed) -> bool {
+    auto romFilterCallback = [](int /*depth*/, json::parse_event_t event, json& parsed) -> bool {
         if (event == json::parse_event_t::key) {
             if (!parsed.is_string()) return false;
             const std::string& k = parsed.get_ref<const std::string&>();
-            if (depth == 1) {
-                return (k == "items" || k == "total" ||
-                        k == "id" || k == "platform_id" || k == "name" || k == "title" ||
-                        k == "platform_slug" || k == "platform" || k == "fs_name" ||
-                        k == "rom_path" || k == "save_path" || k == "updated_at" || k == "updatedAt");
-            }
-            if (depth == 2) {
-                return (k == "id" || k == "platform_id" || k == "name" || k == "title" ||
-                        k == "platform_slug" || k == "platform" || k == "fs_name" ||
-                        k == "rom_path" || k == "save_path" || k == "updated_at" || k == "updatedAt");
-            }
-            return false;
+            return (k == "items" || k == "total" ||
+                    k == "id" || k == "platform_id" || k == "name" || k == "title" ||
+                    k == "platform_slug" || k == "platform" || k == "fs_name" ||
+                    k == "rom_path" || k == "save_path" || k == "updated_at" || k == "updatedAt");
         }
         return true;
     };
@@ -409,7 +428,10 @@ NetworkResult NetworkManager::fetchLibrary(std::vector<RommGame>& outGames, uint
         curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, headerCallback);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, stringWriteCallback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseData);
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 8L);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 20L);
+        curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+        curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, curlXferInfoCallback);
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
@@ -417,7 +439,11 @@ NetworkResult NetworkManager::fetchLibrary(std::vector<RommGame>& outGames, uint
 
         CURLcode res = curl_easy_perform(curl);
         if (res != CURLE_OK) {
-            result.errorMessage = curl_easy_strerror(res);
+            if (res == CURLE_ABORTED_BY_CALLBACK) {
+                result.errorMessage = "Operation cancelled.";
+            } else {
+                result.errorMessage = curl_easy_strerror(res);
+            }
             curl_slist_free_all(headers);
             break;
         }
@@ -438,7 +464,8 @@ NetworkResult NetworkManager::fetchLibrary(std::vector<RommGame>& outGames, uint
             break;
         }
 
-        json items = parsed.is_array() ? parsed : (parsed.contains("items") ? parsed["items"] : json::array());
+        bool isFlatArray = parsed.is_array();
+        json items = isFlatArray ? parsed : (parsed.contains("items") ? parsed["items"] : json::array());
         if (items.empty()) {
             break;
         }
@@ -448,12 +475,20 @@ NetworkResult NetworkManager::fetchLibrary(std::vector<RommGame>& outGames, uint
             RommGame game;
             game.id = getSafeUint64(item, "id", 0);
             game.platformId = getSafeUint64(item, "platform_id", 0);
+            if (game.platformId == 0 && platformId > 0) {
+                game.platformId = platformId;
+            }
             game.title = getSafeString(item, "name", getSafeString(item, "title", ""));
-            game.platform = getSafeString(item, "platform_slug", getSafeString(item, "platform", ""));
+            game.platform = getSafeString(item, "platform_slug", getSafeString(item, "platform", platformSlug));
             game.romPath = getSafeString(item, "fs_name", getSafeString(item, "rom_path", ""));
             game.savePath = getSafeString(item, "save_path", "");
             game.updatedAt = getSafeString(item, "updated_at", getSafeString(item, "updatedAt", ""));
             outGames.push_back(game);
+        }
+
+        // If RomM returned a raw unpaginated array, do not loop
+        if (isFlatArray) {
+            break;
         }
 
         if (parsed.is_object() && parsed.contains("total")) {
@@ -510,7 +545,10 @@ NetworkResult NetworkManager::fetchSaves(std::vector<RommSave>& outSaves, uint64
     curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, headerCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, stringWriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseData);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 8L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, curlXferInfoCallback);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
@@ -560,7 +598,11 @@ NetworkResult NetworkManager::fetchSaves(std::vector<RommSave>& outSaves, uint64
             }
         }
     } else {
-        result.errorMessage = curl_easy_strerror(res);
+        if (res == CURLE_ABORTED_BY_CALLBACK) {
+            result.errorMessage = "Operation cancelled.";
+        } else {
+            result.errorMessage = curl_easy_strerror(res);
+        }
     }
 
     curl_slist_free_all(headers);
@@ -630,7 +672,10 @@ NetworkResult NetworkManager::uploadSave(uint64_t gameId, const std::string& fil
     curl_easy_setopt(curl, CURLOPT_MIMEPOST, mime);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, stringWriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseData);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 8L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, curlXferInfoCallback);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
@@ -648,7 +693,11 @@ NetworkResult NetworkManager::uploadSave(uint64_t gameId, const std::string& fil
             }
         }
     } else {
-        result.errorMessage = curl_easy_strerror(res);
+        if (res == CURLE_ABORTED_BY_CALLBACK) {
+            result.errorMessage = "Operation cancelled.";
+        } else {
+            result.errorMessage = curl_easy_strerror(res);
+        }
     }
 
     curl_easy_setopt(curl, CURLOPT_MIMEPOST, nullptr);
@@ -706,7 +755,10 @@ NetworkResult NetworkManager::downloadSaveById(uint64_t saveId, const std::strin
     curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, headerCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, fileWriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 8L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, curlXferInfoCallback);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
@@ -723,7 +775,11 @@ NetworkResult NetworkManager::downloadSaveById(uint64_t saveId, const std::strin
             remove(destPath.c_str());
         }
     } else {
-        result.errorMessage = curl_easy_strerror(res);
+        if (res == CURLE_ABORTED_BY_CALLBACK) {
+            result.errorMessage = "Operation cancelled.";
+        } else {
+            result.errorMessage = curl_easy_strerror(res);
+        }
         remove(destPath.c_str());
     }
 

@@ -184,9 +184,12 @@ void UIManager::runLibraryRefresh(bool forceFullRemoteRefresh) {
   m_loadingMessage = "Scanning titles & querying RomM...";
   render();
   render();
+  gspWaitForVBlank();
 
   m_syncMgr->refresh(forceFullRemoteRefresh);
   m_loadingMessage.clear();
+  render();
+  render();
   updateLocalFilteredList();
   updateRemoteFilteredList();
   m_selectedGameIndex = 0;
@@ -477,6 +480,7 @@ void UIManager::toggleIgnoreSelected() {
 }
 
 void UIManager::openServerSettings() {
+  closeSheet();
   if (m_configMgr) {
     const auto &cfg = m_configMgr->getConfig();
     m_enteredEndpoint =
@@ -546,7 +550,7 @@ void UIManager::syncSelectedGame() {
   }
 
   if (!item.isMatched) {
-    m_statusMessage = "Cannot sync: Unmatched game. Press (SELECT) to match.";
+    m_statusMessage = "Cannot sync: Unmatched game. Open Actions (SEL) to match.";
     return;
   }
 
@@ -557,6 +561,7 @@ void UIManager::syncSelectedGame() {
 
   SyncAction action = m_syncMgr->evaluateItem(item);
   if (action == SyncAction::CONFLICT) {
+    closeSheet();
     m_conflictGameIndex = actualIdx;
     time_t localTime = item.localTitle.saveTime;
     time_t remoteTime =
@@ -660,6 +665,7 @@ void UIManager::processBatchSync() {
       }
 
       // Hide the log dialog so the conflict UI is visible
+      closeSheet();
       m_showLogDialog = false;
       m_state = UIState::CONFLICT_PROMPT;
       return;
@@ -702,6 +708,7 @@ void UIManager::forceUploadSelected() {
   // Destructive Action Guarding (NSA Pattern C):
   // Overwriting a remote save is a destructive operation.
   if (item.remoteHasSave) {
+    closeSheet();
     m_conflictGameIndex = actualIdx;
     m_conflictChoiceIndex = 2; // Default to safe Cancel / Skip
     m_state = UIState::CONFLICT_PROMPT;
@@ -742,6 +749,7 @@ void UIManager::forceDownloadSelected() {
   // Destructive Action Guarding (NSA Pattern C):
   // Overwriting a local save is a destructive operation.
   if (item.localTitle.hasSave) {
+    closeSheet();
     m_conflictGameIndex = actualIdx;
     m_conflictChoiceIndex = 2; // Default to safe Cancel / Skip
     m_state = UIState::CONFLICT_PROMPT;
@@ -758,6 +766,8 @@ void UIManager::forceDownloadSelected() {
 }
 
 void UIManager::openManualMatch() {
+  closeSheet();
+
   if (!m_syncMgr || m_filteredLocalIndices.empty())
     return;
   if (m_selectedGameIndex >= m_filteredLocalIndices.size())
@@ -766,7 +776,41 @@ void UIManager::openManualMatch() {
   size_t localActualIdx = m_filteredLocalIndices[m_selectedGameIndex];
   const auto &localItem = m_syncMgr->getItems()[localActualIdx];
 
-  m_availableConsoles = m_syncMgr->getPlatforms();
+  // Immediately switch UI state to MATCHING so renders draw the matching screen
+  m_matchingSubState = MatchingSubState::SELECT_CONSOLE;
+  m_state = UIState::MATCHING;
+
+  std::vector<RommPlatform> allPlatforms = m_syncMgr->getPlatforms();
+  bool suspiciousCounts = false;
+  if (!allPlatforms.empty()) {
+    int count205 = 0;
+    for (const auto &p : allPlatforms) {
+      if (p.romCount == 205) count205++;
+    }
+    if (count205 > 1) suspiciousCounts = true;
+  }
+
+  if (m_netMgr && (allPlatforms.empty() || suspiciousCounts)) {
+    m_statusMessage = "Loading platforms from RomM...";
+    m_loadingMessage = "Loading platforms from RomM...";
+    render();
+    render();
+    gspWaitForVBlank();
+    m_syncMgr->refreshPlatforms();
+    m_loadingMessage.clear();
+    render();
+    render();
+    allPlatforms = m_syncMgr->getPlatforms();
+  }
+
+  std::vector<RommPlatform> withRoms;
+  for (const auto &p : allPlatforms) {
+    if (p.romCount > 0) {
+      withRoms.push_back(p);
+    }
+  }
+  m_availableConsoles = withRoms.empty() ? allPlatforms : withRoms;
+
   if (m_availableConsoles.empty()) {
     std::map<std::string, int> counts;
     for (const auto &g : m_syncMgr->getRemoteLibrary()) {
@@ -797,9 +841,6 @@ void UIManager::openManualMatch() {
       break;
     }
   }
-
-  m_matchingSubState = MatchingSubState::SELECT_CONSOLE;
-  m_state = UIState::MATCHING;
 }
 
 void UIManager::selectConsole(size_t index) {
@@ -817,9 +858,19 @@ void UIManager::selectConsole(size_t index) {
       m_loadingMessage = "Loading " + m_selectedConsoleName + " games...";
       render();
       render();
-      m_syncMgr->loadGamesForPlatform(m_selectedConsoleId,
-                                      m_selectedConsoleSlug);
+      gspWaitForVBlank();
+      bool ok = m_syncMgr->loadGamesForPlatform(m_selectedConsoleId,
+                                                m_selectedConsoleSlug);
       m_loadingMessage.clear();
+      render();
+      render();
+      if (!ok) {
+        m_statusMessage = m_syncMgr->getLastMessage();
+        if (m_statusMessage.empty()) {
+          m_statusMessage = "Failed to load games for " + m_selectedConsoleName;
+        }
+        return;
+      }
     }
   }
 
@@ -848,10 +899,12 @@ void UIManager::confirmManualMatch() {
   m_syncMgr->manualMatch(localActualIdx, remoteGames[remoteActualIdx]);
   m_statusMessage = m_syncMgr->getLastMessage();
   updateLocalFilteredList();
+  closeSheet();
   m_state = UIState::MAIN_MENU;
 }
 
 void UIManager::resolveConflict(int choice) {
+  closeSheet();
   if (!m_syncMgr || m_conflictGameIndex >= m_syncMgr->getItems().size()) {
     m_state = UIState::MAIN_MENU;
     m_batchSyncActive = false;
@@ -938,11 +991,14 @@ void UIManager::openAppMenuSheet() {
 }
 
 void UIManager::closeSheet() {
+  m_activeSheet = ActiveSheet::NONE;
+  m_sheetCurrentY = 240.0f;
   m_sheetTargetY = 240.0f;
 }
 
 bool UIManager::handleSheetInput(u32 kDown, const touchPosition &touch) {
-  if (m_activeSheet == ActiveSheet::NONE) {
+  if (m_state != UIState::MAIN_MENU || m_activeSheet == ActiveSheet::NONE ||
+      m_sheetTargetY >= 239.0f) {
     return false;
   }
 
@@ -1208,11 +1264,21 @@ void UIManager::renderBottomSheet() {
                  (item.localTitle.hasSave || item.remoteHasSave);
     }
 
+    bool isMatched = false;
+    if (m_syncMgr && !m_filteredLocalIndices.empty() &&
+        m_selectedGameIndex < m_filteredLocalIndices.size()) {
+      isMatched =
+          m_syncMgr->getItems()[m_filteredLocalIndices[m_selectedGameIndex]]
+              .isMatched;
+    }
+    const char *matchOptionLabel =
+        isMatched ? "Rematch RomM Game" : "Match RomM Game";
+
     const char *options[6] = {
         "Sync Save Now (A)",
         "Force Upload Local Save (L)",
         "Force Download Remote Save (R)",
-        "Manual Match with RomM (SEL)",
+        matchOptionLabel,
         "Set Custom Save Path",
         isIgnored ? "Unhide Title" : "Hide Title"};
 
@@ -1394,7 +1460,7 @@ void UIManager::handleInput(u32 kDown, u32 kHeld, u32 kUp, const touchPosition &
     m_activeTouch = touch;
   }
 
-  if (m_activeSheet != ActiveSheet::NONE) {
+  if (m_state == UIState::MAIN_MENU && m_activeSheet != ActiveSheet::NONE) {
     if (handleSheetInput(kDown, touch)) {
       return;
     }
@@ -1668,18 +1734,18 @@ void UIManager::handleInput(u32 kDown, u32 kHeld, u32 kUp, const touchPosition &
     if (m_matchingSubState == MatchingSubState::SELECT_CONSOLE) {
       size_t consoleTotal = m_availableConsoles.size();
       if (consoleTotal > 0) {
-        if (kDown & KEY_UP) {
+        if (kDown & (KEY_UP | KEY_CPAD_UP)) {
           m_selectedConsoleIndex = (m_selectedConsoleIndex > 0)
                                        ? (m_selectedConsoleIndex - 1)
                                        : (consoleTotal - 1);
-        } else if (kDown & KEY_DOWN) {
+        } else if (kDown & (KEY_DOWN | KEY_CPAD_DOWN)) {
           m_selectedConsoleIndex = (m_selectedConsoleIndex + 1 < consoleTotal)
                                        ? (m_selectedConsoleIndex + 1)
                                        : 0;
-        } else if (kDown & KEY_LEFT) {
+        } else if (kDown & (KEY_LEFT | KEY_CPAD_LEFT)) {
           m_selectedConsoleIndex =
               (m_selectedConsoleIndex >= 5) ? (m_selectedConsoleIndex - 5) : 0;
-        } else if (kDown & KEY_RIGHT) {
+        } else if (kDown & (KEY_RIGHT | KEY_CPAD_RIGHT)) {
           m_selectedConsoleIndex = (m_selectedConsoleIndex + 5 < consoleTotal)
                                        ? (m_selectedConsoleIndex + 5)
                                        : (consoleTotal - 1);
@@ -1689,17 +1755,37 @@ void UIManager::handleInput(u32 kDown, u32 kHeld, u32 kUp, const touchPosition &
       if (kDown & KEY_A) {
         selectConsole(m_selectedConsoleIndex);
       } else if (kDown & KEY_B) {
+        closeSheet();
         m_state = UIState::MAIN_MENU;
       } else if (kDown & KEY_X) {
-        runLibraryRefresh(true);
-        m_availableConsoles =
+        if (m_syncMgr) {
+          m_statusMessage = "Refreshing platforms...";
+          m_loadingMessage = "Refreshing platforms...";
+          render();
+          render();
+          gspWaitForVBlank();
+          m_syncMgr->refreshPlatforms();
+          m_loadingMessage.clear();
+          render();
+          render();
+        }
+        std::vector<RommPlatform> allP =
             m_syncMgr ? m_syncMgr->getPlatforms() : std::vector<RommPlatform>();
+        std::vector<RommPlatform> withRoms;
+        for (const auto &p : allP) {
+          if (p.romCount > 0) withRoms.push_back(p);
+        }
+        m_availableConsoles = withRoms.empty() ? allP : withRoms;
+        if (m_selectedConsoleIndex >= m_availableConsoles.size()) {
+          m_selectedConsoleIndex = 0;
+        }
       }
 
       if (kDown & KEY_TOUCH) {
         if (isTouchInside(touch, 16.0f, 194.0f, 138.0f, 30.0f)) {
           selectConsole(m_selectedConsoleIndex);
         } else if (isTouchInside(touch, 166.0f, 194.0f, 138.0f, 30.0f)) {
+          closeSheet();
           m_state = UIState::MAIN_MENU;
         } else {
           size_t pageOffset = (m_selectedConsoleIndex / 5) * 5;
@@ -1715,18 +1801,18 @@ void UIManager::handleInput(u32 kDown, u32 kHeld, u32 kUp, const touchPosition &
     } else {
       size_t remoteTotal = m_filteredRemoteIndices.size();
       if (remoteTotal > 0) {
-        if (kDown & KEY_UP) {
+        if (kDown & (KEY_UP | KEY_CPAD_UP)) {
           m_selectedRemoteIndex = (m_selectedRemoteIndex > 0)
                                       ? (m_selectedRemoteIndex - 1)
                                       : (remoteTotal - 1);
-        } else if (kDown & KEY_DOWN) {
+        } else if (kDown & (KEY_DOWN | KEY_CPAD_DOWN)) {
           m_selectedRemoteIndex = (m_selectedRemoteIndex + 1 < remoteTotal)
                                       ? (m_selectedRemoteIndex + 1)
                                       : 0;
-        } else if (kDown & KEY_LEFT) {
+        } else if (kDown & (KEY_LEFT | KEY_CPAD_LEFT)) {
           m_selectedRemoteIndex =
               (m_selectedRemoteIndex >= 5) ? (m_selectedRemoteIndex - 5) : 0;
-        } else if (kDown & KEY_RIGHT) {
+        } else if (kDown & (KEY_RIGHT | KEY_CPAD_RIGHT)) {
           m_selectedRemoteIndex = (m_selectedRemoteIndex + 5 < remoteTotal)
                                       ? (m_selectedRemoteIndex + 5)
                                       : (remoteTotal - 1);
@@ -1756,6 +1842,7 @@ void UIManager::handleInput(u32 kDown, u32 kHeld, u32 kUp, const touchPosition &
               "Refreshing " + m_selectedConsoleName + " games...";
           render();
           render();
+          gspWaitForVBlank();
           m_syncMgr->loadGamesForPlatform(m_selectedConsoleId,
                                           m_selectedConsoleSlug, true);
           m_loadingMessage.clear();
@@ -1953,7 +2040,7 @@ void UIManager::drawLoadingOverlay(const std::string &message) {
                     RomM3DS::SCREEN_BOTTOM_HEIGHT, CLR_DIM_OVERLAY);
 
   float boxW = 260.0f;
-  float boxH = 74.0f;
+  float boxH = 82.0f;
   float boxX = (RomM3DS::SCREEN_BOTTOM_WIDTH - boxW) / 2.0f;
   float boxY = (RomM3DS::SCREEN_BOTTOM_HEIGHT - boxH) / 2.0f;
 
@@ -1965,7 +2052,7 @@ void UIManager::drawLoadingOverlay(const std::string &message) {
   C2D_Text headerText;
   C2D_TextParse(&headerText, m_textBuf, "Please wait...");
   C2D_TextOptimize(&headerText);
-  C2D_DrawText(&headerText, C2D_WithColor, boxX + 16.0f, boxY + 14.0f, 0.8f,
+  C2D_DrawText(&headerText, C2D_WithColor, boxX + 16.0f, boxY + 12.0f, 0.8f,
                0.50f, 0.50f, CLR_ACCENT_SOFT);
 
   C2D_Text msgText;
@@ -1978,8 +2065,14 @@ void UIManager::drawLoadingOverlay(const std::string &message) {
   if (msgW > (boxW - 32.0f) && msgW > 0.0f) {
     msgScale *= ((boxW - 32.0f) / msgW);
   }
-  C2D_DrawText(&msgText, C2D_WithColor, boxX + 16.0f, boxY + 40.0f, 0.8f,
+  C2D_DrawText(&msgText, C2D_WithColor, boxX + 16.0f, boxY + 36.0f, 0.8f,
                msgScale, msgScale, CLR_TEXT_PRIMARY);
+
+  C2D_Text cancelText;
+  C2D_TextParse(&cancelText, m_textBuf, "Press (B) to Cancel");
+  C2D_TextOptimize(&cancelText);
+  C2D_DrawText(&cancelText, C2D_WithColor, boxX + 16.0f, boxY + 58.0f, 0.8f,
+               0.38f, 0.38f, CLR_TEXT_MUTED);
 }
 
 static std::vector<std::string> softWrapLogLine(const std::string &line,
@@ -2059,6 +2152,7 @@ static std::vector<std::string> softWrapLogLine(const std::string &line,
 }
 
 void UIManager::openOperationLog(const std::string &title) {
+  closeSheet();
   m_showLogDialog = true;
   m_operationInProgress = true;
   m_logDialogTitle = title;
@@ -2537,8 +2631,7 @@ void UIManager::renderMainMenuTop() {
     std::string matchVal =
         item.isIgnored
             ? "Excluded from sync (Hidden)"
-            : (item.isMatched ? item.remoteTitle
-                              : "Unmatched (Press SELECT or [Match])");
+            : (item.isMatched ? item.remoteTitle : "Unmatched");
     u32 matchColor = item.isIgnored
                          ? CLR_TEXT_SECONDARY
                          : (item.isMatched ? CLR_GREEN : CLR_YELLOW);
@@ -2781,26 +2874,13 @@ void UIManager::renderMainMenuBottom() {
 
       float textW = 0.0f, textH = 0.0f;
       C2D_TextGetDimensions(&titleText, titleScale, titleScale, &textW, &textH);
-      if (textW > titleMaxW && !dispName.empty()) {
-        int low = 0;
-        int high = static_cast<int>(dispName.length());
-        int bestLen = 0;
-        while (low <= high) {
-          int mid = low + (high - low) / 2;
-          std::string testStr = dispName.substr(0, mid) + "..";
-          C2D_Text testText;
-          C2D_TextParse(&testText, m_textBuf, testStr.c_str());
-          C2D_TextOptimize(&testText);
-          float curW = 0.0f, curH = 0.0f;
-          C2D_TextGetDimensions(&testText, titleScale, titleScale, &curW, &curH);
-          if (curW <= titleMaxW) {
-            bestLen = mid;
-            low = mid + 1;
-          } else {
-            high = mid - 1;
-          }
+      if (textW > titleMaxW && textW > 0.0f && !dispName.empty()) {
+        size_t targetLen = static_cast<size_t>(dispName.length() * (titleMaxW / textW));
+        if (targetLen > 3 && targetLen < dispName.length()) {
+          dispName = dispName.substr(0, targetLen - 3) + "..";
+        } else if (dispName.length() > 24) {
+          dispName = dispName.substr(0, 22) + "..";
         }
-        dispName = dispName.substr(0, bestLen) + "..";
         C2D_TextParse(&titleText, m_textBuf, dispName.c_str());
         C2D_TextOptimize(&titleText);
       }
@@ -3156,29 +3236,13 @@ void UIManager::renderMatchingGamesBottom() {
     float textW = 0.0f, textH = 0.0f;
     C2D_TextGetDimensions(&rowText, textScale, textScale, &textW, &textH);
 
-    if (textW > MAX_REMOTE_ROW_WIDTH) {
-      int low = 0;
-      int high = static_cast<int>(label.length());
-      int bestLen = 0;
-
-      while (low <= high) {
-        int mid = low + (high - low) / 2;
-        std::string testLabel = label.substr(0, mid) + "..";
-        C2D_Text testText;
-        C2D_TextParse(&testText, m_textBuf, testLabel.c_str());
-        C2D_TextOptimize(&testText);
-        float curW = 0.0f, curH = 0.0f;
-        C2D_TextGetDimensions(&testText, textScale, textScale, &curW, &curH);
-
-        if (curW <= MAX_REMOTE_ROW_WIDTH) {
-          bestLen = mid;
-          low = mid + 1;
-        } else {
-          high = mid - 1;
-        }
+    if (textW > MAX_REMOTE_ROW_WIDTH && textW > 0.0f && !label.empty()) {
+      size_t targetLen = static_cast<size_t>(label.length() * (MAX_REMOTE_ROW_WIDTH / textW));
+      if (targetLen > 3 && targetLen < label.length()) {
+        label = label.substr(0, targetLen - 3) + "..";
+      } else if (label.length() > 34) {
+        label = label.substr(0, 32) + "..";
       }
-
-      label = label.substr(0, bestLen) + "..";
       C2D_TextParse(&rowText, m_textBuf, label.c_str());
       C2D_TextOptimize(&rowText);
     }
@@ -3433,6 +3497,10 @@ void UIManager::renderTopScreen() {
     renderSortPickerTop();
     break;
   }
+
+  if (!m_loadingMessage.empty()) {
+    drawPillBadge(RomM3DS::SCREEN_TOP_WIDTH - 150.0f, 6.0f, "Loading... (B)", CLR_SURFACE_CARD, CLR_ACCENT_SOFT, 0.38f, 0.65f);
+  }
 }
 
 void UIManager::renderBottomScreen() {
@@ -3483,6 +3551,7 @@ void UIManager::render() {
 }
 
 void UIManager::openSavePicker() {
+  closeSheet();
   if (!m_syncMgr || m_filteredLocalIndices.empty())
     return;
   if (m_selectedGameIndex >= m_filteredLocalIndices.size())
@@ -3621,6 +3690,7 @@ void UIManager::applyCustomSavePath(const std::string &path) {
   m_syncMgr->setCustomSavePath(actualIdx, path);
   m_statusMessage = m_syncMgr->getLastMessage();
   updateLocalFilteredList();
+  closeSheet();
   m_state = UIState::MAIN_MENU;
 }
 
@@ -3699,6 +3769,7 @@ void UIManager::handleSavePickerInput(u32 kDown, const touchPosition &touch) {
   } else if (kDown & KEY_Y) {
     applyCustomSavePath("");
   } else if (kDown & KEY_B) {
+    closeSheet();
     m_state = UIState::MAIN_MENU;
   }
 
@@ -3756,6 +3827,7 @@ void UIManager::handleSavePickerInput(u32 kDown, const touchPosition &touch) {
     } else if (isTouchInside(touch, 170.0f, 206.0f, 68.0f, 26.0f)) {
       applyCustomSavePath("");
     } else if (isTouchInside(touch, 242.0f, 206.0f, 70.0f, 26.0f)) {
+      closeSheet();
       m_state = UIState::MAIN_MENU;
     } else {
       size_t pageOffset = (m_browserSelectedIndex / 5) * 5;
@@ -4021,12 +4093,14 @@ void UIManager::handleFilterPickerInput(u32 kDown, const touchPosition &touch) {
       m_localFilterConsole = opt.console;
       updateLocalFilteredList();
     }
+    closeSheet();
     m_state = UIState::MAIN_MENU;
   };
 
   if (kDown & KEY_A) {
     applySelected();
   } else if (kDown & KEY_B) {
+    closeSheet();
     m_state = UIState::MAIN_MENU;
   }
 
@@ -4034,6 +4108,7 @@ void UIManager::handleFilterPickerInput(u32 kDown, const touchPosition &touch) {
     if (isTouchInside(touch, 16.0f, 194.0f, 138.0f, 30.0f)) {
       applySelected();
     } else if (isTouchInside(touch, 166.0f, 194.0f, 138.0f, 30.0f)) {
+      closeSheet();
       m_state = UIState::MAIN_MENU;
     } else {
       size_t pageOffset = (m_selectedFilterPickerIndex / 5) * 5;
@@ -4068,12 +4143,14 @@ void UIManager::handleSortPickerInput(u32 kDown, const touchPosition &touch) {
       m_localSortMode = m_sortOptions[m_selectedSortPickerIndex].mode;
       updateLocalFilteredList();
     }
+    closeSheet();
     m_state = UIState::MAIN_MENU;
   };
 
   if (kDown & KEY_A) {
     applySelected();
   } else if (kDown & KEY_B) {
+    closeSheet();
     m_state = UIState::MAIN_MENU;
   }
 
@@ -4081,6 +4158,7 @@ void UIManager::handleSortPickerInput(u32 kDown, const touchPosition &touch) {
     if (isTouchInside(touch, 16.0f, 194.0f, 138.0f, 30.0f)) {
       applySelected();
     } else if (isTouchInside(touch, 166.0f, 194.0f, 138.0f, 30.0f)) {
+      closeSheet();
       m_state = UIState::MAIN_MENU;
     } else {
       size_t pageOffset = (m_selectedSortPickerIndex / 5) * 5;

@@ -334,7 +334,7 @@ std::string SyncManager::getFriendlyPlatformName(const std::string& slug) {
 }
 
 bool SyncManager::isPlatformCompatible(const std::string& localConsole, const std::string& remotePlatformSlug) {
-    if (localConsole.empty() || remotePlatformSlug.empty()) return true;
+    if (localConsole.empty() || remotePlatformSlug.empty()) return false;
 
     std::string lc = localConsole;
     for (char& c : lc) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -364,10 +364,17 @@ bool SyncManager::isPlatformCompatible(const std::string& localConsole, const st
 void SyncManager::consolidatePlatforms() {
     std::map<std::string, int> slugCounts;
     for (const auto& g : m_remoteGames) {
-        if (!g.platform.empty()) {
-            slugCounts[g.platform]++;
-        } else {
-            slugCounts["other"]++;
+        std::string slug = g.platform;
+        if (slug.empty() && g.platformId > 0) {
+            for (const auto& p : m_platforms) {
+                if (p.id == g.platformId && !p.slug.empty()) {
+                    slug = p.slug;
+                    break;
+                }
+            }
+        }
+        if (!slug.empty()) {
+            slugCounts[slug]++;
         }
     }
 
@@ -377,7 +384,7 @@ void SyncManager::consolidatePlatforms() {
         }
         auto it = slugCounts.find(p.slug);
         if (it != slugCounts.end()) {
-            if (p.romCount <= 0 || it->second > p.romCount) {
+            if (p.romCount <= 0) {
                 p.romCount = it->second;
             }
             slugCounts.erase(it);
@@ -392,14 +399,6 @@ void SyncManager::consolidatePlatforms() {
         m_platforms.push_back(p);
     }
 
-    if (m_loadedPlatforms.count("0:") > 0 && !m_remoteGames.empty()) {
-        m_platforms.erase(
-            std::remove_if(m_platforms.begin(), m_platforms.end(),
-                [](const RommPlatform& p) { return p.romCount <= 0; }),
-            m_platforms.end()
-        );
-    }
-
     std::sort(m_platforms.begin(), m_platforms.end(),
         [](const RommPlatform& a, const RommPlatform& b) {
             return a.name < b.name;
@@ -407,13 +406,19 @@ void SyncManager::consolidatePlatforms() {
 }
 
 bool SyncManager::isPlatformLoaded(uint64_t platformId, const std::string& platformSlug) const {
-    if (m_loadedPlatforms.count("0:") > 0) return true;
     std::string key = std::to_string(platformId) + ":" + platformSlug;
-    if (m_loadedPlatforms.count(key) > 0) return true;
+    if (m_loadedPlatforms.count(key) == 0) return false;
 
     for (const auto& g : m_remoteGames) {
-        if (platformId > 0 && g.platformId == platformId) return true;
-        if (!platformSlug.empty() && strcasecmp(g.platform.c_str(), platformSlug.c_str()) == 0) return true;
+        if (g.id > 0 && !g.title.empty()) {
+            if (platformId > 0 && g.platformId == platformId) return true;
+            if (!platformSlug.empty() && strcasecmp(g.platform.c_str(), platformSlug.c_str()) == 0) return true;
+        }
+    }
+    for (const auto& p : m_platforms) {
+        if ((platformId > 0 && p.id == platformId) || (!platformSlug.empty() && strcasecmp(p.slug.c_str(), platformSlug.c_str()) == 0)) {
+            if (p.romCount == 0) return true;
+        }
     }
     return false;
 }
@@ -427,10 +432,30 @@ bool SyncManager::loadGamesForPlatform(uint64_t platformId, const std::string& p
 
     if (!m_netMgr) return false;
 
+    // Resolve platformId from platformSlug if missing
+    if (platformId == 0 && !platformSlug.empty()) {
+        for (const auto& p : m_platforms) {
+            if (strcasecmp(p.slug.c_str(), platformSlug.c_str()) == 0 && p.id > 0) {
+                platformId = p.id;
+                break;
+            }
+        }
+    }
+    // Resolve platformSlug from platformId if missing
+    std::string resolvedSlug = platformSlug;
+    if (resolvedSlug.empty() && platformId > 0) {
+        for (const auto& p : m_platforms) {
+            if (p.id == platformId && !p.slug.empty()) {
+                resolvedSlug = p.slug;
+                break;
+            }
+        }
+    }
+
     std::vector<RommGame> fetchedGames;
-    NetworkResult res = m_netMgr->fetchLibrary(fetchedGames, platformId, platformSlug);
+    NetworkResult res = m_netMgr->fetchLibrary(fetchedGames, platformId, resolvedSlug);
     if (!res.success) {
-        if (isPlatformLoaded(platformId, platformSlug)) {
+        if (isPlatformLoaded(platformId, resolvedSlug)) {
             m_lastMessage = "Network failed; using cached games.";
             return true;
         }
@@ -438,7 +463,31 @@ bool SyncManager::loadGamesForPlatform(uint64_t platformId, const std::string& p
         return false;
     }
 
-    for (const auto& fg : fetchedGames) {
+    for (auto& fg : fetchedGames) {
+        if (fg.platformId == 0 && platformId > 0) {
+            fg.platformId = platformId;
+        }
+        if (fg.platform.empty()) {
+            if (!resolvedSlug.empty()) {
+                fg.platform = resolvedSlug;
+            } else if (fg.platformId > 0) {
+                for (const auto& p : m_platforms) {
+                    if (p.id == fg.platformId && !p.slug.empty()) {
+                        fg.platform = p.slug;
+                        break;
+                    }
+                }
+            }
+        }
+        if (fg.platformId == 0 && !fg.platform.empty()) {
+            for (const auto& p : m_platforms) {
+                if (strcasecmp(p.slug.c_str(), fg.platform.c_str()) == 0) {
+                    fg.platformId = p.id;
+                    break;
+                }
+            }
+        }
+
         bool exists = false;
         for (auto& existing : m_remoteGames) {
             if (existing.id == fg.id) {
@@ -461,8 +510,10 @@ bool SyncManager::loadGamesForPlatform(uint64_t platformId, const std::string& p
     m_loadedPlatforms.insert(key);
 
     for (auto& p : m_platforms) {
-        if ((platformId > 0 && p.id == platformId) || (!platformSlug.empty() && p.slug == platformSlug)) {
-            p.romCount = std::max(p.romCount, static_cast<int>(fetchedGames.size()));
+        if ((platformId > 0 && p.id == platformId) || (!resolvedSlug.empty() && strcasecmp(p.slug.c_str(), resolvedSlug.c_str()) == 0)) {
+            if (p.romCount <= 0 || !fetchedGames.empty()) {
+                p.romCount = static_cast<int>(fetchedGames.size());
+            }
         }
     }
 
@@ -597,7 +648,7 @@ bool SyncManager::loadLibraryCache(const std::string& path) {
             if (item.contains("save_path") && item["save_path"].is_string()) g.savePath = item["save_path"].get<std::string>();
             if (item.contains("updated_at") && item["updated_at"].is_string()) g.updatedAt = item["updated_at"].get<std::string>();
 
-            if (g.id > 0) {
+            if (g.id > 0 && !g.title.empty()) {
                 m_remoteGames.push_back(std::move(g));
             }
         }
@@ -606,7 +657,10 @@ bool SyncManager::loadLibraryCache(const std::string& path) {
     if (root.contains("loaded_platforms") && root["loaded_platforms"].is_array()) {
         for (const auto& lp : root["loaded_platforms"]) {
             if (lp.is_string()) {
-                m_loadedPlatforms.insert(lp.get<std::string>());
+                std::string s = lp.get<std::string>();
+                if (s != "0:") {
+                    m_loadedPlatforms.insert(s);
+                }
             }
         }
     }
@@ -643,6 +697,18 @@ void SyncManager::clearLibraryCache() {
     if (outFile.is_open()) {
         outFile.write(reinterpret_cast<const char*>(cborData.data()), static_cast<std::streamsize>(cborData.size()));
     }
+}
+
+bool SyncManager::refreshPlatforms() {
+    if (!m_netMgr) return false;
+    std::vector<RommPlatform> freshPlatforms;
+    if (m_netMgr->fetchPlatforms(freshPlatforms).success && !freshPlatforms.empty()) {
+        m_platforms = std::move(freshPlatforms);
+        consolidatePlatforms();
+        saveLibraryCache();
+        return true;
+    }
+    return false;
 }
 
 bool SyncManager::refresh(bool forceFullRemoteRefresh) {
@@ -693,11 +759,11 @@ bool SyncManager::refresh(bool forceFullRemoteRefresh) {
     if (m_netMgr) {
         bool cacheModified = false;
 
-        if (m_platforms.empty() || forceFullRemoteRefresh) {
-            if (m_netMgr->fetchPlatforms(m_platforms).success) {
-                consolidatePlatforms();
-                cacheModified = true;
-            }
+        std::vector<RommPlatform> freshPlatforms;
+        if (m_netMgr->fetchPlatforms(freshPlatforms).success && !freshPlatforms.empty()) {
+            m_platforms = std::move(freshPlatforms);
+            consolidatePlatforms();
+            cacheModified = true;
         }
 
         if (hasUnmatchedLocal && (forceFullRemoteRefresh || !loadedFromCache)) {

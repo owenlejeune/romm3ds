@@ -43,6 +43,7 @@ public:
     ~SyncManager();
 
     bool refresh(bool forceFullRemoteRefresh = false);
+    bool refreshPlatforms();
     std::vector<SyncItem>& getItems() { return m_items; }
     const std::vector<SyncItem>& getItems() const { return m_items; }
     const std::vector<RommGame>& getRemoteLibrary() const { return m_remoteGames; }
