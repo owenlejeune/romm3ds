@@ -29,6 +29,8 @@ AccessControlInfo:
 
   FileSystemAccess:
    - DirectSdmc
+   - DirectSdmcWrite
+   - CategoryFileSystemTool
 
   ServiceAccessControl:
    - apt:u
@@ -42,4 +44,5 @@ AccessControlInfo:
    - ptm:u
    - cfg:u
    - am:u
-   - hb:ldr
+   - am:net
+   - am:app

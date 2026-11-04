@@ -47,7 +47,7 @@ jobs:
           makerom -version || true
           bannertool || true
 
-      - name: Build romm3ds (.3dsx, .smdh, and forwarder .cia)
+      - name: Build romm3ds (.3dsx, .smdh, and standalone .cia)
         run: |
           ./scripts/build-cia.sh
 

@@ -33,7 +33,7 @@ It automatically detects installed Nintendo 3DS and CIA games (SD/Cartridge/NAND
 
 ### 1. Initial Setup & Configuration
 
-1. Launch **romm3ds** on your 3DS (via the Homebrew Launcher or the installed HOME Menu forwarder).
+1. Launch **romm3ds** on your 3DS (via the Homebrew Launcher or from the installed HOME Menu icon).
 2. On first launch, you will be prompted to configure your RomM connection:
    - **RomM Server Endpoint**: Your RomM server address (e.g., `http://192.168.1.100:8080`). If using a reverse proxy with a subpath, include it (e.g., `https://romm.example.com/romm`).
    - **API Key / Credentials**: Your RomM API Key / Personal Access Token (generated in the RomM web dashboard under your user profile / API tokens).
@@ -133,7 +133,7 @@ All common build and deployment workflows are wrapped in helper scripts under [`
 |---|---|
 | [`./scripts/make.sh`](file:///Users/owen.lejeune/Documents/dev/romm3ds/scripts/make.sh) | Compiles `outputs/romm3ds.3dsx` and `outputs/romm3ds.smdh` using Docker |
 | [`./scripts/make-clean.sh`](file:///Users/owen.lejeune/Documents/dev/romm3ds/scripts/make-clean.sh) | Cleans build artifacts and object files using Docker |
-| [`./scripts/build-cia.sh`](file:///Users/owen.lejeune/Documents/dev/romm3ds/scripts/build-cia.sh) | Builds the forwarder ELF and packages `outputs/romm3ds.cia` |
+| [`./scripts/build-cia.sh`](file:///Users/owen.lejeune/Documents/dev/romm3ds/scripts/build-cia.sh) | Compiles the standalone ELF and packages `outputs/romm3ds.cia` |
 | [`./scripts/3dslink-install.sh <IP>`](file:///Users/owen.lejeune/Documents/dev/romm3ds/scripts/3dslink-install.sh) | Compiles (if needed) and sends `romm3ds.3dsx` to your 3DS over Wi-Fi |
 
 ---
@@ -172,9 +172,9 @@ To build the standard `.3dsx` homebrew executable:
 
 ---
 
-### 2. Packaging the HOME Menu Forwarder (.cia)
+### 2. Packaging the Standalone HOME Menu App (.cia)
 
-To generate the optional HOME Menu forwarder CIA (`outputs/romm3ds.cia`):
+To generate the standalone HOME Menu installable CIA (`outputs/romm3ds.cia`):
 
 1. Ensure `bannertool` and `makerom` are present on your host system (e.g., in `~/.local/bin` or your system `PATH`).
 2. Run the CIA build script:
@@ -183,10 +183,10 @@ To generate the optional HOME Menu forwarder CIA (`outputs/romm3ds.cia`):
    ```
 
 Outputs are placed in the `outputs/` directory:
-- `outputs/romm3ds.3dsx` — Main 3DS executable
+- `outputs/romm3ds.3dsx` — Standalone 3DS executable (for Homebrew Launcher)
 - `outputs/romm3ds.smdh` — Icon and application metadata
 - `outputs/romm3ds.elf` — ELF executable
-- `outputs/romm3ds.cia` — Lightweight HOME Menu forwarder CIA
+- `outputs/romm3ds.cia` — Fully bundled, standalone CIA package for the 3DS HOME Menu
 
 ---
 
@@ -194,9 +194,19 @@ Outputs are placed in the `outputs/` directory:
 
 Ensure your 3DS is running modern custom firmware ([Luma3DS](https://github.com/LumaTeam/Luma3DS)).
 
-#### Step 1: Install the .3dsx Binary (Required)
+You can choose whether to install `romm3ds` as a **standalone HOME Menu title (`.cia`)** or run it via the **Homebrew Launcher (`.3dsx`)**:
 
-The executable must reside on your SD card at `sdmc:/3ds/romm3ds/romm3ds.3dsx`.
+#### Option A: Install Standalone .cia to HOME Menu (Recommended)
+
+`romm3ds.cia` is a fully bundled, standalone application that installs directly to your 3DS HOME Menu. It runs independently and does not require `romm3ds.3dsx` to be present on your SD card.
+
+1. Copy `outputs/romm3ds.cia` to your SD card (e.g. `sdmc:/cias/`).
+2. Open **FBI** on your 3DS, navigate to `sdmc:/cias/romm3ds.cia`, and choose **Install and delete CIA**.
+3. Press **HOME** to return to the HOME Menu, unwrap your new **RomM 3DS** gift, and launch it directly!
+
+#### Option B: Run via Homebrew Launcher (.3dsx)
+
+If you prefer not to install a title to your HOME Menu or want to run `romm3ds` through the Homebrew Launcher:
 
 ##### Method 1: SD Card Copy
 Copy `outputs/romm3ds.3dsx` to your SD card:
@@ -206,6 +216,7 @@ SD Card
     └── romm3ds/
         └── romm3ds.3dsx
 ```
+Launch **romm3ds** from the **Homebrew Launcher**.
 
 ##### Method 2: Wireless NetLoader (`3dslink`)
 1. Connect your 3DS and computer to the same Wi-Fi network.
@@ -214,20 +225,6 @@ SD Card
    ```bash
    ./scripts/3dslink-install.sh <3DS_IP_ADDRESS>
    ```
-
----
-
-#### Step 2: Install the HOME Menu Forwarder .cia (Optional)
-
-If you prefer launching `romm3ds` directly from your 3DS HOME Menu without opening the Homebrew Launcher:
-
-> [!NOTE]
-> The `.cia` is a lightweight **forwarder**, not a monolithic bundle. It delegates execution to `sdmc:/3ds/romm3ds/romm3ds.3dsx`. You only need to install the `.cia` once—future updates only require replacing `romm3ds.3dsx`.
-
-1. Verify `romm3ds.3dsx` is on your SD card at `sdmc:/3ds/romm3ds/romm3ds.3dsx`.
-2. Copy `outputs/romm3ds.cia` to your SD card (e.g. `sdmc:/cias/`).
-3. Open **FBI** on your 3DS, navigate to `sdmc:/cias/romm3ds.cia`, and choose **Install and delete CIA**.
-4. Press **HOME** to return to the HOME Menu, unwrap your new **RomM 3DS** gift, and launch it!
 
 ---
 
