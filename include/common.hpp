@@ -4,7 +4,7 @@
 
 namespace RomM3DS {
 
-constexpr const char *APP_VERSION = "0.1.2";
+constexpr const char *APP_VERSION = "0.2.0";
 constexpr const char *CONFIG_PATH = "sdmc:/3ds/romm3ds/config.json";
 constexpr const char *MAPPING_PATH = "sdmc:/3ds/romm3ds/mapping.json";
 constexpr const char *CACHE_PATH = "sdmc:/3ds/romm3ds/cache.bin";
