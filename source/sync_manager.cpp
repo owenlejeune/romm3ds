@@ -455,13 +455,17 @@ bool SyncManager::loadGamesForPlatform(uint64_t platformId, const std::string& p
     std::vector<RommGame> fetchedGames;
     NetworkResult res = m_netMgr->fetchLibrary(fetchedGames, platformId, resolvedSlug);
     if (!res.success) {
+        m_serverReachable = false;
+        m_lastNetworkError = res.errorMessage;
         if (isPlatformLoaded(platformId, resolvedSlug)) {
-            m_lastMessage = "Network failed; using cached games.";
+            m_lastMessage = "Server unreachable (" + res.errorMessage + "); using cached games.";
             return true;
         }
         m_lastMessage = "Failed to load games: " + res.errorMessage;
         return false;
     }
+    m_serverReachable = true;
+    m_lastNetworkError.clear();
 
     for (auto& fg : fetchedGames) {
         if (fg.platformId == 0 && platformId > 0) {
@@ -700,14 +704,25 @@ void SyncManager::clearLibraryCache() {
 }
 
 bool SyncManager::refreshPlatforms() {
-    if (!m_netMgr) return false;
+    if (!m_netMgr) {
+        m_serverReachable = false;
+        m_lastNetworkError = "Network subsystem unavailable.";
+        m_lastMessage = "Network subsystem unavailable.";
+        return false;
+    }
     std::vector<RommPlatform> freshPlatforms;
-    if (m_netMgr->fetchPlatforms(freshPlatforms).success && !freshPlatforms.empty()) {
+    NetworkResult res = m_netMgr->fetchPlatforms(freshPlatforms);
+    if (res.success && !freshPlatforms.empty()) {
         m_platforms = std::move(freshPlatforms);
         consolidatePlatforms();
         saveLibraryCache();
+        m_serverReachable = true;
+        m_lastNetworkError.clear();
         return true;
     }
+    m_serverReachable = false;
+    m_lastNetworkError = res.errorMessage.empty() ? "Unable to connect to RomM server." : res.errorMessage;
+    m_lastMessage = "Server unreachable: " + m_lastNetworkError;
     return false;
 }
 
@@ -756,14 +771,23 @@ bool SyncManager::refresh(bool forceFullRemoteRefresh) {
     }
 
     std::map<uint64_t, RommSave> remoteSaveMap;
+    bool networkAttempted = false;
+    bool networkSucceeded = false;
+    std::string networkError;
+
     if (m_netMgr) {
+        networkAttempted = true;
         bool cacheModified = false;
 
         std::vector<RommPlatform> freshPlatforms;
-        if (m_netMgr->fetchPlatforms(freshPlatforms).success && !freshPlatforms.empty()) {
+        NetworkResult platRes = m_netMgr->fetchPlatforms(freshPlatforms);
+        if (platRes.success && !freshPlatforms.empty()) {
             m_platforms = std::move(freshPlatforms);
             consolidatePlatforms();
             cacheModified = true;
+            networkSucceeded = true;
+        } else if (!platRes.success) {
+            networkError = platRes.errorMessage;
         }
 
         if (hasUnmatchedLocal && (forceFullRemoteRefresh || !loadedFromCache)) {
@@ -777,15 +801,21 @@ bool SyncManager::refresh(bool forceFullRemoteRefresh) {
                         }
                     }
                     if (needed && (forceFullRemoteRefresh || !isPlatformLoaded(p.id, p.slug))) {
-                        loadGamesForPlatform(p.id, p.slug, forceFullRemoteRefresh);
+                        if (loadGamesForPlatform(p.id, p.slug, forceFullRemoteRefresh)) {
+                            networkSucceeded = true;
+                        }
                         cacheModified = false; // loadGamesForPlatform already saves cache
                     }
                 }
             } else {
-                if (m_netMgr->fetchLibrary(m_remoteGames, 0, "").success) {
+                NetworkResult libRes = m_netMgr->fetchLibrary(m_remoteGames, 0, "");
+                if (libRes.success) {
                     m_loadedPlatforms.insert("0:");
                     consolidatePlatforms();
                     cacheModified = true;
+                    networkSucceeded = true;
+                } else if (!libRes.success && networkError.empty()) {
+                    networkError = libRes.errorMessage;
                 }
             }
         }
@@ -795,7 +825,9 @@ bool SyncManager::refresh(bool forceFullRemoteRefresh) {
         }
 
         std::vector<RommSave> allSaves;
-        if (m_netMgr->fetchSaves(allSaves).success) {
+        NetworkResult saveRes = m_netMgr->fetchSaves(allSaves);
+        if (saveRes.success) {
+            networkSucceeded = true;
             for (const auto& s : allSaves) {
                 if (remoteSaveMap.find(s.romId) == remoteSaveMap.end()) {
                     remoteSaveMap[s.romId] = s;
@@ -807,6 +839,16 @@ bool SyncManager::refresh(bool forceFullRemoteRefresh) {
                     }
                 }
             }
+        } else if (!saveRes.success && networkError.empty()) {
+            networkError = saveRes.errorMessage;
+        }
+
+        if (networkSucceeded) {
+            m_serverReachable = true;
+            m_lastNetworkError.clear();
+        } else if (networkAttempted) {
+            m_serverReachable = false;
+            m_lastNetworkError = networkError.empty() ? "Unable to connect to RomM server." : networkError;
         }
     }
 
@@ -935,9 +977,13 @@ bool SyncManager::refresh(bool forceFullRemoteRefresh) {
         m_saveMgr->saveTimestampCache();
     }
 
-    m_lastMessage = "Found " + std::to_string(m_items.size()) + " local titles, " +
-                    std::to_string(m_platforms.size()) + " consoles, " +
-                    std::to_string(m_remoteGames.size()) + " remote games.";
+    if (!m_serverReachable && networkAttempted) {
+        m_lastMessage = "Offline: RomM server unreachable (" + m_lastNetworkError + "). Loaded from cache.";
+    } else {
+        m_lastMessage = "Found " + std::to_string(m_items.size()) + " local titles, " +
+                        std::to_string(m_platforms.size()) + " consoles, " +
+                        std::to_string(m_remoteGames.size()) + " remote games.";
+    }
     return true;
 }
 

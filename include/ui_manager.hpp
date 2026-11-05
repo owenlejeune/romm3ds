@@ -126,6 +126,9 @@ private:
     void addOperationLog(const std::string& message);
     void finishOperationLog();
     void renderOperationLogOverlay();
+    void showNotification(const std::string& title, const std::string& message, u32 accentColor = 0xFF5B45F6);
+    void dismissNotification();
+    void renderNotificationModal();
 
     enum class ActiveSheet {
         NONE,
@@ -189,6 +192,11 @@ private:
     };
     std::vector<OperationLogEntry> m_operationLogs;
     int m_logScrollOffset = 0;
+
+    bool m_showNotification = false;
+    std::string m_notificationTitle;
+    std::string m_notificationMessage;
+    u32 m_notificationAccent = 0xFF5B45F6;
 
     int m_setupSelectedIndex = 0;
     std::string m_enteredEndpoint;

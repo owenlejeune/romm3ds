@@ -194,6 +194,15 @@ void UIManager::runLibraryRefresh(bool forceFullRemoteRefresh) {
   updateRemoteFilteredList();
   m_selectedGameIndex = 0;
   m_statusMessage = m_syncMgr->getLastMessage();
+
+  if (forceFullRemoteRefresh && !m_syncMgr->isServerReachable()) {
+    std::string ep = m_configMgr ? m_configMgr->getConfig().serverEndpoint : "";
+    std::string err = m_syncMgr->getLastNetworkError();
+    if (err.empty()) err = "Server is unreachable.";
+    showNotification("RomM Unreachable",
+                     "Could not refresh from RomM server:\n\n" + err +
+                     "\n\nEndpoint: " + ep + "\nLoaded library from local cache.", CLR_DANGER);
+  }
 }
 
 void UIManager::updateLocalFilteredList() {
@@ -541,6 +550,16 @@ void UIManager::syncSelectedGame() {
     return;
   }
 
+  if (!m_syncMgr->isServerReachable()) {
+    std::string ep = m_configMgr ? m_configMgr->getConfig().serverEndpoint : "";
+    std::string err = m_syncMgr->getLastNetworkError();
+    if (err.empty()) err = "Server is unreachable.";
+    showNotification("RomM Server Unreachable",
+                     "Cannot sync save file because RomM server is offline.\n\nEndpoint: " + ep +
+                     "\nError: " + err + "\n\nPlease check Wi-Fi and server status.", CLR_DANGER);
+    return;
+  }
+
   size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
   SyncItem &item = m_syncMgr->getItems()[actualIdx];
 
@@ -591,6 +610,16 @@ void UIManager::syncSelectedGame() {
 void UIManager::syncAllGames() {
   if (!m_syncMgr || m_filteredLocalIndices.empty()) {
     m_statusMessage = "No installed titles match current filter.";
+    return;
+  }
+
+  if (!m_syncMgr->isServerReachable()) {
+    std::string ep = m_configMgr ? m_configMgr->getConfig().serverEndpoint : "";
+    std::string err = m_syncMgr->getLastNetworkError();
+    if (err.empty()) err = "Server is unreachable.";
+    showNotification("RomM Server Unreachable",
+                     "Cannot batch sync because RomM server is offline.\n\nEndpoint: " + ep +
+                     "\nError: " + err + "\n\nPlease check Wi-Fi and server status.", CLR_DANGER);
     return;
   }
 
@@ -693,6 +722,16 @@ void UIManager::forceUploadSelected() {
   if (m_selectedGameIndex >= m_filteredLocalIndices.size())
     return;
 
+  if (!m_syncMgr->isServerReachable()) {
+    std::string ep = m_configMgr ? m_configMgr->getConfig().serverEndpoint : "";
+    std::string err = m_syncMgr->getLastNetworkError();
+    if (err.empty()) err = "Server is unreachable.";
+    showNotification("RomM Server Unreachable",
+                     "Cannot upload save because RomM server is offline.\n\nEndpoint: " + ep +
+                     "\nError: " + err + "\n\nPlease check Wi-Fi and server status.", CLR_DANGER);
+    return;
+  }
+
   size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
   SyncItem &item = m_syncMgr->getItems()[actualIdx];
 
@@ -729,6 +768,16 @@ void UIManager::forceDownloadSelected() {
     return;
   if (m_selectedGameIndex >= m_filteredLocalIndices.size())
     return;
+
+  if (!m_syncMgr->isServerReachable()) {
+    std::string ep = m_configMgr ? m_configMgr->getConfig().serverEndpoint : "";
+    std::string err = m_syncMgr->getLastNetworkError();
+    if (err.empty()) err = "Server is unreachable.";
+    showNotification("RomM Server Unreachable",
+                     "Cannot download save because RomM server is offline.\n\nEndpoint: " + ep +
+                     "\nError: " + err + "\n\nPlease check Wi-Fi and server status.", CLR_DANGER);
+    return;
+  }
 
   size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
   SyncItem &item = m_syncMgr->getItems()[actualIdx];
@@ -869,6 +918,11 @@ void UIManager::selectConsole(size_t index) {
         if (m_statusMessage.empty()) {
           m_statusMessage = "Failed to load games for " + m_selectedConsoleName;
         }
+        std::string err = m_syncMgr->getLastNetworkError();
+        if (err.empty()) err = m_statusMessage;
+        showNotification("RomM Unreachable",
+                         "Failed to load games for " + m_selectedConsoleName + ":\n\n" +
+                         err + "\n\nPlease check network connection.", CLR_DANGER);
         return;
       }
     }
@@ -987,7 +1041,7 @@ void UIManager::openGameActionsSheet() {
 void UIManager::openAppMenuSheet() {
   m_activeSheet = ActiveSheet::APP_MENU;
   m_sheetSelectedIndex = 0;
-  m_sheetTargetY = 120.0f;
+  m_sheetTargetY = 92.0f;
 }
 
 void UIManager::closeSheet() {
@@ -1006,7 +1060,7 @@ bool UIManager::handleSheetInput(u32 kDown, const touchPosition &touch) {
   if (m_activeSheet == ActiveSheet::GAME_ACTIONS) {
     numOptions = 6;
   } else if (m_activeSheet == ActiveSheet::APP_MENU) {
-    numOptions = 3;
+    numOptions = 4;
   } else if (m_activeSheet == ActiveSheet::SORT) {
     numOptions = static_cast<int>(m_sortOptions.size());
   } else if (m_activeSheet == ActiveSheet::FILTER) {
@@ -1114,7 +1168,32 @@ bool UIManager::handleSheetInput(u32 kDown, const touchPosition &touch) {
     case 1:
       runLibraryRefresh(true);
       break;
-    case 2:
+    case 2: {
+      if (!m_netMgr) {
+        showNotification("Test Connection", "Network subsystem unavailable.", CLR_DANGER);
+        break;
+      }
+      m_loadingMessage = "Testing RomM connection...";
+      render();
+      render();
+      gspWaitForVBlank();
+      NetworkResult res = m_netMgr->testConnection();
+      m_loadingMessage.clear();
+      if (m_syncMgr) {
+        m_syncMgr->setServerReachable(res.success, res.errorMessage);
+      }
+      render();
+      render();
+      if (res.success) {
+        std::string ep = m_configMgr ? m_configMgr->getConfig().serverEndpoint : "";
+        showNotification("Server Online", "Successfully connected to RomM server!\n\nEndpoint: " + ep, CLR_GREEN);
+      } else {
+        std::string ep = m_configMgr ? m_configMgr->getConfig().serverEndpoint : "";
+        showNotification("Server Unreachable", "Failed to connect to RomM server:\n\n" + res.errorMessage + "\n\nEndpoint: " + ep, CLR_DANGER);
+      }
+      break;
+    }
+    case 3:
       openServerSettings();
       break;
     }
@@ -1325,12 +1404,13 @@ void UIManager::renderBottomSheet() {
     C2D_DrawText(&titleTxt, C2D_WithColor, 16.0f, m_sheetCurrentY + 11.0f,
                  0.85f, 0.44f, 0.44f, CLR_ACCENT_PRIMARY);
 
-    const char *options[3] = {"Batch Sync All Filtered (X)",
+    const char *options[4] = {"Batch Sync All Filtered (X)",
                               "Refresh Library & Saves",
+                              "Test Server Connection",
                               "Server Settings (Endpoint & API Key)"};
 
     float startY = m_sheetCurrentY + 30.0f;
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < 4; ++i) {
       float itemY = startY + static_cast<float>(i) * 28.0f;
       bool selected = (i == m_sheetSelectedIndex);
       u32 bg = selected ? CLR_SURFACE_ELEVATED : CLR_SURFACE_ALT;
@@ -1458,6 +1538,13 @@ void UIManager::handleInput(u32 kDown, u32 kHeld, u32 kUp, const touchPosition &
   m_touchHeld = (kHeld & KEY_TOUCH) != 0;
   if (m_touchHeld || (kDown & KEY_TOUCH)) {
     m_activeTouch = touch;
+  }
+
+  if (m_showNotification) {
+    if (kDown & (KEY_A | KEY_B | KEY_START | KEY_X | KEY_Y | KEY_TOUCH)) {
+      dismissNotification();
+    }
+    return;
   }
 
   if (m_state == UIState::MAIN_MENU && m_activeSheet != ActiveSheet::NONE) {
@@ -1628,7 +1715,14 @@ void UIManager::handleInput(u32 kDown, u32 kHeld, u32 kUp, const touchPosition &
     }
 
     if (kDown & KEY_A) {
-      if (canSyncSelected) {
+      if (m_syncMgr && !m_syncMgr->isServerReachable()) {
+        std::string ep = m_configMgr ? m_configMgr->getConfig().serverEndpoint : "";
+        std::string err = m_syncMgr->getLastNetworkError();
+        if (err.empty()) err = "Server is unreachable.";
+        showNotification("RomM Server Unreachable",
+                         "Cannot sync save file because RomM server is offline.\n\nEndpoint: " + ep +
+                         "\nError: " + err + "\n\nPlease check Wi-Fi and server status.", CLR_DANGER);
+      } else if (canSyncSelected) {
         syncSelectedGame();
       } else {
         m_statusMessage = "Cannot sync: No local or remote save exists.";
@@ -1676,7 +1770,14 @@ void UIManager::handleInput(u32 kDown, u32 kHeld, u32 kUp, const touchPosition &
         m_localFilterText.clear();
         updateLocalFilteredList();
       } else if (isTouchInside(touch, 8.0f, 203.0f, 96.0f, 32.0f)) {
-        if (canSyncSelected) {
+        if (m_syncMgr && !m_syncMgr->isServerReachable()) {
+          std::string ep = m_configMgr ? m_configMgr->getConfig().serverEndpoint : "";
+          std::string err = m_syncMgr->getLastNetworkError();
+          if (err.empty()) err = "Server is unreachable.";
+          showNotification("RomM Server Unreachable",
+                           "Cannot sync save file because RomM server is offline.\n\nEndpoint: " + ep +
+                           "\nError: " + err + "\n\nPlease check Wi-Fi and server status.", CLR_DANGER);
+        } else if (canSyncSelected) {
           syncSelectedGame();
         } else {
           m_statusMessage = "Cannot sync: No local or remote save exists.";
@@ -1753,7 +1854,15 @@ void UIManager::handleInput(u32 kDown, u32 kHeld, u32 kUp, const touchPosition &
       }
 
       if (kDown & KEY_A) {
-        selectConsole(m_selectedConsoleIndex);
+        if (consoleTotal > 0) {
+          selectConsole(m_selectedConsoleIndex);
+        } else if (m_syncMgr && !m_syncMgr->isServerReachable()) {
+          std::string ep = m_configMgr ? m_configMgr->getConfig().serverEndpoint : "";
+          showNotification("RomM Server Unreachable",
+                           "Cannot browse consoles: RomM server is offline.\n\nEndpoint: " + ep +
+                           "\nError: " + m_syncMgr->getLastNetworkError() +
+                           "\n\nPress (X) to retry connection.", CLR_DANGER);
+        }
       } else if (kDown & KEY_B) {
         closeSheet();
         m_state = UIState::MAIN_MENU;
@@ -1779,11 +1888,25 @@ void UIManager::handleInput(u32 kDown, u32 kHeld, u32 kUp, const touchPosition &
         if (m_selectedConsoleIndex >= m_availableConsoles.size()) {
           m_selectedConsoleIndex = 0;
         }
+        if (m_syncMgr && !m_syncMgr->isServerReachable()) {
+          std::string ep = m_configMgr ? m_configMgr->getConfig().serverEndpoint : "";
+          showNotification("RomM Unreachable",
+                           "Failed to reach RomM server:\n\n" + m_syncMgr->getLastNetworkError() +
+                           "\n\nEndpoint: " + ep + "\nPlease check Wi-Fi / server status.", CLR_DANGER);
+        }
       }
 
       if (kDown & KEY_TOUCH) {
         if (isTouchInside(touch, 16.0f, 194.0f, 138.0f, 30.0f)) {
-          selectConsole(m_selectedConsoleIndex);
+          if (consoleTotal > 0) {
+            selectConsole(m_selectedConsoleIndex);
+          } else if (m_syncMgr && !m_syncMgr->isServerReachable()) {
+            std::string ep = m_configMgr ? m_configMgr->getConfig().serverEndpoint : "";
+            showNotification("RomM Server Unreachable",
+                             "Cannot browse consoles: RomM server is offline.\n\nEndpoint: " + ep +
+                             "\nError: " + m_syncMgr->getLastNetworkError() +
+                             "\n\nPress (X) to retry connection.", CLR_DANGER);
+          }
         } else if (isTouchInside(touch, 166.0f, 194.0f, 138.0f, 30.0f)) {
           closeSheet();
           m_state = UIState::MAIN_MENU;
@@ -2270,6 +2393,61 @@ void UIManager::renderOperationLogOverlay() {
   }
 }
 
+void UIManager::showNotification(const std::string &title, const std::string &message, u32 accentColor) {
+  closeSheet();
+  m_showNotification = true;
+  m_notificationTitle = title;
+  m_notificationMessage = message;
+  m_notificationAccent = accentColor;
+}
+
+void UIManager::dismissNotification() {
+  m_showNotification = false;
+  m_notificationTitle.clear();
+  m_notificationMessage.clear();
+}
+
+void UIManager::renderNotificationModal() {
+  C2D_DrawRectSolid(0.0f, 0.0f, 0.90f, RomM3DS::SCREEN_BOTTOM_WIDTH,
+                    RomM3DS::SCREEN_BOTTOM_HEIGHT, CLR_DIM_OVERLAY);
+
+  float boxX = 14.0f;
+  float boxY = 24.0f;
+  float boxW = RomM3DS::SCREEN_BOTTOM_WIDTH - 28.0f;
+  float boxH = 192.0f;
+
+  C2D_DrawRectSolid(boxX, boxY, 0.91f, boxW, boxH, m_notificationAccent);
+  C2D_DrawRectSolid(boxX + 2.0f, boxY + 2.0f, 0.92f, boxW - 4.0f, boxH - 4.0f,
+                    CLR_SURFACE_CARD);
+  C2D_DrawRectSolid(boxX + 2.0f, boxY + 2.0f, 0.93f, boxW - 4.0f, 26.0f,
+                    CLR_SURFACE_HEADER);
+  C2D_DrawRectSolid(boxX + 2.0f, boxY + 27.0f, 0.94f, boxW - 4.0f, 2.0f,
+                    m_notificationAccent);
+
+  C2D_Text titleText;
+  C2D_TextParse(&titleText, m_textBuf, m_notificationTitle.c_str());
+  C2D_TextOptimize(&titleText);
+  C2D_DrawText(&titleText, C2D_WithColor, boxX + 8.0f, boxY + 7.0f, 0.95f,
+               0.46f, 0.46f, CLR_TEXT_PRIMARY);
+
+  std::vector<std::string> lines = softWrapLogLine(m_notificationMessage, 38);
+  float textY = boxY + 36.0f;
+  constexpr float LINE_H = 13.0f;
+  for (size_t i = 0; i < lines.size() && i < 8; ++i) {
+    if (!lines[i].empty()) {
+      C2D_Text mText;
+      C2D_TextParse(&mText, m_textBuf, lines[i].c_str());
+      C2D_TextOptimize(&mText);
+      C2D_DrawText(&mText, C2D_WithColor, boxX + 10.0f, textY, 0.95f,
+                   0.38f, 0.38f, CLR_TEXT_SECONDARY);
+    }
+    textY += LINE_H;
+  }
+
+  drawButton(boxX + (boxW - 140.0f) * 0.5f, boxY + boxH - 32.0f, 140.0f, 26.0f,
+             "[ Dismiss (A / B) ]", true, m_notificationAccent, 0.95f);
+}
+
 void UIManager::renderFirstLaunchTop() {
   bool canCancel = (m_configMgr && m_configMgr->hasValidConfig());
 
@@ -2385,18 +2563,31 @@ void UIManager::renderMainMenuTop() {
   C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 7.0f, 0.5f, 0.56f, 0.56f,
                CLR_TEXT_PRIMARY);
 
-  // Active Filter Pill on Top-Right Header
+  // Connection Pill (ONLINE / OFFLINE) on far right
+  bool isOnline = m_syncMgr && m_syncMgr->isServerReachable();
+  const char *connText = isOnline ? "ONLINE" : "OFFLINE";
+  u32 connBg = isOnline ? 0xFF1B4D2E : 0xFF5A1E1E;
+  u32 connFg = isOnline ? CLR_GREEN : CLR_DANGER;
+  C2D_Text cbMeasure;
+  C2D_TextParse(&cbMeasure, m_textBuf, connText);
+  C2D_TextOptimize(&cbMeasure);
+  float cbW = 0.0f, cbH = 0.0f;
+  C2D_TextGetDimensions(&cbMeasure, 0.36f, 0.36f, &cbW, &cbH);
+  float connX = RomM3DS::SCREEN_TOP_WIDTH - (cbW + 12.0f) - 10.0f;
+  drawPillBadge(connX, 6.0f, connText, connBg, connFg, 0.36f);
+
+  // Active Filter Pill on Top-Right Header (to the left of connection pill)
   std::string filterBadge = "Filter: " + getActiveFilterButtonLabel();
   C2D_Text fbMeasure;
   C2D_TextParse(&fbMeasure, m_textBuf, filterBadge.c_str());
   C2D_TextOptimize(&fbMeasure);
   float fbW = 0.0f, fbH = 0.0f;
-  C2D_TextGetDimensions(&fbMeasure, 0.37f, 0.37f, &fbW, &fbH);
-  float pillX = RomM3DS::SCREEN_TOP_WIDTH - (fbW + 12.0f) - 10.0f;
+  C2D_TextGetDimensions(&fbMeasure, 0.36f, 0.36f, &fbW, &fbH);
+  float pillX = connX - (fbW + 12.0f) - 6.0f;
   drawPillBadge(pillX, 6.0f, filterBadge.c_str(), CLR_SURFACE_ELEVATED,
                 (m_localFilterMode == LocalFilterMode::HIDDEN) ? CLR_YELLOW
                                                                : CLR_ACCENT_SOFT,
-                0.37f);
+                0.36f);
 
   if (m_syncMgr && !m_filteredLocalIndices.empty() &&
       m_selectedGameIndex < m_filteredLocalIndices.size()) {
@@ -2939,7 +3130,8 @@ void UIManager::renderMainMenuBottom() {
               (item.localTitle.hasSave || item.remoteHasSave);
   }
 
-  drawButton(8.0f, 203.0f, 96.0f, 32.0f, "[ Sync (A) ]", false, CLR_ACCENT_PRIMARY, 0.55f, !canSync);
+  bool isOffline = m_syncMgr && !m_syncMgr->isServerReachable();
+  drawButton(8.0f, 203.0f, 96.0f, 32.0f, "[ Sync (A) ]", false, CLR_ACCENT_PRIMARY, 0.55f, !canSync || isOffline);
   drawButton(108.0f, 203.0f, 104.0f, 32.0f, "[ Actions (SEL) ]", false, 0, 0.55f);
   drawButton(216.0f, 203.0f, 96.0f, 32.0f, "[ Menu (X) ]", false, 0, 0.55f);
 
@@ -2976,6 +3168,18 @@ void UIManager::renderMatchingConsolesTop() {
   C2D_TextOptimize(&headerText);
   C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 7.0f, 0.5f, 0.58f, 0.58f,
                CLR_TEXT_PRIMARY);
+
+  bool isOnline = m_syncMgr && m_syncMgr->isServerReachable();
+  const char *connText = isOnline ? "ONLINE" : "OFFLINE";
+  u32 connBg = isOnline ? 0xFF1B4D2E : 0xFF5A1E1E;
+  u32 connFg = isOnline ? CLR_GREEN : CLR_DANGER;
+  C2D_Text cbMeasure;
+  C2D_TextParse(&cbMeasure, m_textBuf, connText);
+  C2D_TextOptimize(&cbMeasure);
+  float cbW = 0.0f, cbH = 0.0f;
+  C2D_TextGetDimensions(&cbMeasure, 0.36f, 0.36f, &cbW, &cbH);
+  float connX = RomM3DS::SCREEN_TOP_WIDTH - (cbW + 12.0f) - 10.0f;
+  drawPillBadge(connX, 6.0f, connText, connBg, connFg, 0.36f);
 
   C2D_DrawRectSolid(12.0f, 40.0f, 0.5f, 376.0f, 168.0f, CLR_BORDER_SUBTLE);
   C2D_DrawRectSolid(13.0f, 41.0f, 0.5f, 374.0f, 166.0f, CLR_SURFACE_CARD);
@@ -3087,16 +3291,38 @@ void UIManager::renderMatchingConsolesBottom() {
   }
 
   if (consoleTotal == 0) {
-    C2D_Text emptyTxt;
-    C2D_TextParse(
-        &emptyTxt, m_textBuf,
-        "No consoles found in RomM library.\nCheck connection or refresh (X).");
-    C2D_TextOptimize(&emptyTxt);
-    C2D_DrawText(&emptyTxt, C2D_WithColor, 24.0f, 80.0f, 0.5f, 0.45f, 0.45f,
-                 CLR_TEXT_MUTED);
+    if (m_syncMgr && !m_syncMgr->isServerReachable()) {
+      C2D_DrawRectSolid(16.0f, 36.0f, 0.52f, 288.0f, 142.0f, CLR_BORDER_SUBTLE);
+      C2D_DrawRectSolid(17.0f, 37.0f, 0.52f, 286.0f, 140.0f, CLR_SURFACE_ALT);
+      C2D_DrawRectSolid(17.0f, 37.0f, 0.53f, 4.0f, 140.0f, CLR_DANGER);
+
+      C2D_Text alertTitle;
+      C2D_TextParse(&alertTitle, m_textBuf, "RomM Server Unreachable");
+      C2D_TextOptimize(&alertTitle);
+      C2D_DrawText(&alertTitle, C2D_WithColor, 28.0f, 44.0f, 0.55f, 0.46f, 0.46f, CLR_DANGER);
+
+      std::string ep = m_configMgr ? m_configMgr->getConfig().serverEndpoint : "";
+      if (ep.length() > 34) ep = ep.substr(0, 32) + "..";
+      std::string errMsg = m_syncMgr ? m_syncMgr->getLastNetworkError() : "Connection failed";
+      if (errMsg.length() > 34) errMsg = errMsg.substr(0, 32) + "..";
+
+      std::string body = "Endpoint: " + ep + "\nError: " + errMsg + "\n\n(X) Retry Server Connection\n(B) Return to Library";
+      C2D_Text alertBody;
+      C2D_TextParse(&alertBody, m_textBuf, body.c_str());
+      C2D_TextOptimize(&alertBody);
+      C2D_DrawText(&alertBody, C2D_WithColor, 28.0f, 66.0f, 0.55f, 0.38f, 0.38f, CLR_TEXT_SECONDARY);
+    } else {
+      C2D_Text emptyTxt;
+      C2D_TextParse(
+          &emptyTxt, m_textBuf,
+          "No consoles found in RomM library.\nCheck connection or refresh (X).");
+      C2D_TextOptimize(&emptyTxt);
+      C2D_DrawText(&emptyTxt, C2D_WithColor, 24.0f, 80.0f, 0.5f, 0.45f, 0.45f,
+                   CLR_TEXT_MUTED);
+    }
   }
 
-  drawButton(16.0f, 194.0f, 138.0f, 30.0f, "[ Open Console (A) ]", false);
+  drawButton(16.0f, 194.0f, 138.0f, 30.0f, "[ Open Console (A) ]", false, 0, 0.5f, consoleTotal == 0);
   drawButton(166.0f, 194.0f, 138.0f, 30.0f, "[ Back (B) ]", false);
 }
 
@@ -3114,6 +3340,18 @@ void UIManager::renderMatchingGamesTop() {
   C2D_TextOptimize(&headerText);
   C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 7.0f, 0.5f, 0.58f, 0.58f,
                CLR_TEXT_PRIMARY);
+
+  bool isOnline = m_syncMgr && m_syncMgr->isServerReachable();
+  const char *connText = isOnline ? "ONLINE" : "OFFLINE";
+  u32 connBg = isOnline ? 0xFF1B4D2E : 0xFF5A1E1E;
+  u32 connFg = isOnline ? CLR_GREEN : CLR_DANGER;
+  C2D_Text cbMeasure;
+  C2D_TextParse(&cbMeasure, m_textBuf, connText);
+  C2D_TextOptimize(&cbMeasure);
+  float cbW = 0.0f, cbH = 0.0f;
+  C2D_TextGetDimensions(&cbMeasure, 0.36f, 0.36f, &cbW, &cbH);
+  float connX = RomM3DS::SCREEN_TOP_WIDTH - (cbW + 12.0f) - 10.0f;
+  drawPillBadge(connX, 6.0f, connText, connBg, connFg, 0.36f);
 
   C2D_DrawRectSolid(12.0f, 40.0f, 0.5f, 376.0f, 168.0f, CLR_BORDER_SUBTLE);
   C2D_DrawRectSolid(13.0f, 41.0f, 0.5f, 374.0f, 166.0f, CLR_SURFACE_CARD);
@@ -3263,7 +3501,7 @@ void UIManager::renderMatchingGamesBottom() {
                  CLR_TEXT_MUTED);
   }
 
-  drawButton(16.0f, 194.0f, 138.0f, 30.0f, "[ Pair Game (A) ]", false);
+  drawButton(16.0f, 194.0f, 138.0f, 30.0f, "[ Pair Game (A) ]", false, 0, 0.5f, remoteTotal == 0);
   drawButton(166.0f, 194.0f, 138.0f, 30.0f, "[ Consoles (B) ]", false);
 }
 
@@ -3278,6 +3516,18 @@ void UIManager::renderConflictTop() {
   C2D_TextOptimize(&headerText);
   C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 7.0f, 0.5f, 0.58f, 0.58f,
                CLR_TEXT_PRIMARY);
+
+  bool isOnline = m_syncMgr && m_syncMgr->isServerReachable();
+  const char *connText = isOnline ? "ONLINE" : "OFFLINE";
+  u32 connBg = isOnline ? 0xFF1B4D2E : 0xFF5A1E1E;
+  u32 connFg = isOnline ? CLR_GREEN : CLR_DANGER;
+  C2D_Text cbMeasure;
+  C2D_TextParse(&cbMeasure, m_textBuf, connText);
+  C2D_TextOptimize(&cbMeasure);
+  float cbW = 0.0f, cbH = 0.0f;
+  C2D_TextGetDimensions(&cbMeasure, 0.36f, 0.36f, &cbW, &cbH);
+  float connX = RomM3DS::SCREEN_TOP_WIDTH - (cbW + 12.0f) - 10.0f;
+  drawPillBadge(connX, 6.0f, connText, connBg, connFg, 0.36f);
 
   if (!m_syncMgr || m_conflictGameIndex >= m_syncMgr->getItems().size()) {
     return;
@@ -3532,6 +3782,10 @@ void UIManager::renderBottomScreen() {
     renderOperationLogOverlay();
   } else if (!m_loadingMessage.empty()) {
     drawLoadingOverlay(m_loadingMessage);
+  }
+
+  if (m_showNotification) {
+    renderNotificationModal();
   }
 }
 
@@ -4186,6 +4440,18 @@ void UIManager::renderFilterPickerTop() {
   C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 7.0f, 0.5f, 0.58f, 0.58f,
                CLR_TEXT_PRIMARY);
 
+  bool isOnline = m_syncMgr && m_syncMgr->isServerReachable();
+  const char *connText = isOnline ? "ONLINE" : "OFFLINE";
+  u32 connBg = isOnline ? 0xFF1B4D2E : 0xFF5A1E1E;
+  u32 connFg = isOnline ? CLR_GREEN : CLR_DANGER;
+  C2D_Text cbMeasure;
+  C2D_TextParse(&cbMeasure, m_textBuf, connText);
+  C2D_TextOptimize(&cbMeasure);
+  float cbW = 0.0f, cbH = 0.0f;
+  C2D_TextGetDimensions(&cbMeasure, 0.36f, 0.36f, &cbW, &cbH);
+  float connX = RomM3DS::SCREEN_TOP_WIDTH - (cbW + 12.0f) - 10.0f;
+  drawPillBadge(connX, 6.0f, connText, connBg, connFg, 0.36f);
+
   C2D_DrawRectSolid(12.0f, 40.0f, 0.5f, 376.0f, 168.0f, CLR_BORDER_SUBTLE);
   C2D_DrawRectSolid(13.0f, 41.0f, 0.5f, 374.0f, 166.0f, CLR_SURFACE_CARD);
   C2D_DrawRectSolid(12.0f, 40.0f, 0.5f, 4.0f, 168.0f, CLR_ACCENT_PRIMARY);
@@ -4273,6 +4539,18 @@ void UIManager::renderSortPickerTop() {
   C2D_TextOptimize(&headerText);
   C2D_DrawText(&headerText, C2D_WithColor, 12.0f, 7.0f, 0.5f, 0.58f, 0.58f,
                CLR_TEXT_PRIMARY);
+
+  bool isOnline = m_syncMgr && m_syncMgr->isServerReachable();
+  const char *connText = isOnline ? "ONLINE" : "OFFLINE";
+  u32 connBg = isOnline ? 0xFF1B4D2E : 0xFF5A1E1E;
+  u32 connFg = isOnline ? CLR_GREEN : CLR_DANGER;
+  C2D_Text cbMeasure;
+  C2D_TextParse(&cbMeasure, m_textBuf, connText);
+  C2D_TextOptimize(&cbMeasure);
+  float cbW = 0.0f, cbH = 0.0f;
+  C2D_TextGetDimensions(&cbMeasure, 0.36f, 0.36f, &cbW, &cbH);
+  float connX = RomM3DS::SCREEN_TOP_WIDTH - (cbW + 12.0f) - 10.0f;
+  drawPillBadge(connX, 6.0f, connText, connBg, connFg, 0.36f);
 
   C2D_DrawRectSolid(12.0f, 40.0f, 0.5f, 376.0f, 168.0f, CLR_BORDER_SUBTLE);
   C2D_DrawRectSolid(13.0f, 41.0f, 0.5f, 374.0f, 166.0f, CLR_SURFACE_CARD);

@@ -65,6 +65,12 @@ public:
     bool forceDownload(SyncItem& item, LogCallback log = nullptr);
 
     const std::string& getLastMessage() const { return m_lastMessage; }
+    bool isServerReachable() const { return m_serverReachable; }
+    void setServerReachable(bool reachable, const std::string& error = "") {
+        m_serverReachable = reachable;
+        m_lastNetworkError = error;
+    }
+    const std::string& getLastNetworkError() const { return m_lastNetworkError; }
 
     static std::string getStagingDirectory(uint64_t titleId);
     static std::string getBackupDirectory(uint64_t titleId);
@@ -93,6 +99,8 @@ private:
     std::vector<RommPlatform> m_platforms;
     std::set<std::string> m_loadedPlatforms;
     std::string m_lastMessage;
+    bool m_serverReachable = false;
+    std::string m_lastNetworkError;
 };
 
 } // namespace RomM3DS
