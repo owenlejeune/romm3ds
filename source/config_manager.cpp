@@ -233,7 +233,7 @@ json serializeMappingsArray(const std::vector<GameMapping>& mappings) {
             {"remote_game_id", m.remoteGameId},
             {"remote_title", m.remoteTitle}
         };
-        if (m.customSavePathExplicit && !m.customSavePath.empty()) {
+        if (m.customSavePathExplicit) {
             jItem["custom_save_path"] = m.customSavePath;
             jItem["custom_save_path_explicit"] = true;
         }

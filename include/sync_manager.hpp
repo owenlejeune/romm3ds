@@ -58,6 +58,8 @@ public:
 
     bool manualMatch(size_t itemIndex, const RommGame& remoteGame);
     bool setCustomSavePath(size_t itemIndex, const std::string& savePath);
+    bool unsetSavePath(size_t itemIndex);
+    bool resetSavePathToAuto(size_t itemIndex);
     SyncAction evaluateItem(const SyncItem& item);
 
     bool syncItem(SyncItem& item, ConflictChoice choice = ConflictChoice::OVERWRITE_LOCAL, LogCallback log = nullptr);

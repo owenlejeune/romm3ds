@@ -1473,8 +1473,22 @@ std::string SaveManager::findSaveFileForRom(const std::string& romPath, const st
             if (!found.empty()) return found;
         }
 
-        // 5. Elsewhere on SD card
-        return pickNewestInFilter([](const DiscoveredSaveEntry&) { return true; });
+        // 5. Emulator save directory matching console
+        found = pickNewestInFilter([&](const DiscoveredSaveEntry& e) {
+            std::string d = e.lowerDir;
+            if (d.find("/saves") != std::string::npos || d.find("/save") != std::string::npos) {
+                if (!console.empty()) {
+                    std::string cLower = console;
+                    for (char& ch : cLower) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                    if (d.find(cLower) != std::string::npos) return true;
+                }
+                if (d.find("retroarch") != std::string::npos) return true;
+            }
+            return false;
+        });
+        if (!found.empty()) return found;
+
+        return "";
     }
 
     auto pathEqual = [](const std::string& a, const std::string& b) -> bool {
@@ -1676,7 +1690,12 @@ std::string SaveManager::findSaveForInstalledTitle(const InstalledTitle& title) 
     time_t bestTime = 0;
     bool hasBest = false;
     for (const auto& entry : it->second) {
-        if (!hasBest || entry.mtime > bestTime) {
+        std::string d = entry.lowerDir;
+        bool isForwarderDir = (d.find("mgba") != std::string::npos ||
+                               d.find("retroarch") != std::string::npos ||
+                               d.find("roms") != std::string::npos ||
+                               d.find("saves") != std::string::npos);
+        if (isForwarderDir && (!hasBest || entry.mtime > bestTime)) {
             bestPath = entry.path;
             bestTime = entry.mtime;
             hasBest = true;

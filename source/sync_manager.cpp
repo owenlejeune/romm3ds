@@ -994,15 +994,24 @@ bool SyncManager::refresh(bool forceFullRemoteRefresh) {
 
         if (!item.isIgnored) {
             const GameMapping* mapping = m_configMgr ? m_configMgr->findMappingByTitleId(local.titleIdHex) : nullptr;
-            if (mapping && mapping->customSavePathExplicit && !mapping->customSavePath.empty()) {
-                item.localTitle.savePath = mapping->customSavePath;
-                struct stat st;
-                if (stat(item.localTitle.savePath.c_str(), &st) == 0 && st.st_size > 0) {
-                    item.localTitle.hasSave = true;
-                    item.localTitle.saveTime = st.st_mtime;
-                }
-                if (item.localTitle.console == "3DS" && isPathPointingToMgbaOrGba(mapping->customSavePath)) {
-                    item.localTitle.console = "GBA";
+            if (mapping && mapping->customSavePathExplicit) {
+                if (!mapping->customSavePath.empty()) {
+                    item.localTitle.savePath = mapping->customSavePath;
+                    struct stat st;
+                    if (stat(item.localTitle.savePath.c_str(), &st) == 0 && st.st_size > 0) {
+                        item.localTitle.hasSave = true;
+                        item.localTitle.saveTime = st.st_mtime;
+                    } else {
+                        item.localTitle.hasSave = false;
+                        item.localTitle.saveTime = 0;
+                    }
+                    if (item.localTitle.console == "3DS" && isPathPointingToMgbaOrGba(mapping->customSavePath)) {
+                        item.localTitle.console = "GBA";
+                    }
+                } else {
+                    item.localTitle.savePath.clear();
+                    item.localTitle.hasSave = false;
+                    item.localTitle.saveTime = 0;
                 }
             }
 
@@ -1245,31 +1254,23 @@ bool SyncManager::manualMatch(size_t itemIndex, const RommGame& remoteGame) {
 
 bool SyncManager::setCustomSavePath(size_t itemIndex, const std::string& savePath) {
     if (itemIndex >= m_items.size()) return false;
+    if (savePath.empty()) {
+        return unsetSavePath(itemIndex);
+    }
     SyncItem& item = m_items[itemIndex];
     item.localTitle.savePath = savePath;
 
-    if (!savePath.empty()) {
-        struct stat st;
-        if (stat(savePath.c_str(), &st) == 0 && st.st_size > 0) {
-            item.localTitle.hasSave = true;
-            item.localTitle.saveTime = st.st_mtime;
-        } else {
-            item.localTitle.hasSave = false;
-            item.localTitle.saveTime = 0;
-        }
-
-        if (item.localTitle.console == "3DS" && isPathPointingToMgbaOrGba(savePath)) {
-            item.localTitle.console = "GBA";
-        }
+    struct stat st;
+    if (stat(savePath.c_str(), &st) == 0 && st.st_size > 0) {
+        item.localTitle.hasSave = true;
+        item.localTitle.saveTime = st.st_mtime;
     } else {
-        // Reset to auto-detection
-        if (item.localTitle.isFileRom) {
-            item.localTitle.savePath = m_saveMgr ? m_saveMgr->findSaveFileForRom(item.localTitle.romPath, item.localTitle.console) : "";
-        } else {
-            item.localTitle.savePath = m_saveMgr ? SaveManager::findSaveForInstalledTitle(item.localTitle) : "";
-        }
-        item.localTitle.hasSave = m_saveMgr ? m_saveMgr->checkSaveExists(item.localTitle) : false;
-        item.localTitle.saveTime = m_saveMgr ? m_saveMgr->getSaveTime(item.localTitle) : 0;
+        item.localTitle.hasSave = false;
+        item.localTitle.saveTime = 0;
+    }
+
+    if (item.localTitle.console == "3DS" && isPathPointingToMgbaOrGba(savePath)) {
+        item.localTitle.console = "GBA";
     }
 
     if (m_configMgr) {
@@ -1284,16 +1285,69 @@ bool SyncManager::setCustomSavePath(size_t itemIndex, const std::string& savePat
             map.remoteTitle = item.isMatched ? item.remoteTitle : "";
         }
         map.customSavePath = savePath;
-        map.customSavePathExplicit = !savePath.empty();
+        map.customSavePathExplicit = true;
         m_configMgr->addOrUpdateMapping(map);
         m_configMgr->saveMappings();
     }
 
-    if (!savePath.empty()) {
-        m_lastMessage = "Set save path for " + item.localTitle.name;
-    } else {
-        m_lastMessage = "Reset save path for " + item.localTitle.name;
+    m_lastMessage = "Set save path for " + item.localTitle.name;
+    return true;
+}
+
+bool SyncManager::unsetSavePath(size_t itemIndex) {
+    if (itemIndex >= m_items.size()) return false;
+    SyncItem& item = m_items[itemIndex];
+    item.localTitle.savePath.clear();
+    item.localTitle.hasSave = false;
+    item.localTitle.saveTime = 0;
+
+    if (m_configMgr) {
+        GameMapping map;
+        const GameMapping* existing = m_configMgr->findMappingByTitleId(item.localTitle.titleIdHex);
+        if (existing) {
+            map = *existing;
+        } else {
+            map.titleId = item.localTitle.titleIdHex;
+            map.localName = item.localTitle.name;
+            map.remoteGameId = item.isMatched ? item.remoteGameId : 0;
+            map.remoteTitle = item.isMatched ? item.remoteTitle : "";
+        }
+        map.customSavePath = "";
+        map.customSavePathExplicit = true;
+        m_configMgr->addOrUpdateMapping(map);
+        m_configMgr->saveMappings();
     }
+
+    m_lastMessage = "Unset save location for " + item.localTitle.name;
+    return true;
+}
+
+bool SyncManager::resetSavePathToAuto(size_t itemIndex) {
+    if (itemIndex >= m_items.size()) return false;
+    SyncItem& item = m_items[itemIndex];
+
+    if (m_configMgr) {
+        GameMapping map;
+        const GameMapping* existing = m_configMgr->findMappingByTitleId(item.localTitle.titleIdHex);
+        if (existing) {
+            map = *existing;
+            map.customSavePath = "";
+            map.customSavePathExplicit = false;
+            m_configMgr->addOrUpdateMapping(map);
+            m_configMgr->saveMappings();
+        }
+    }
+
+    // Re-run auto-detection
+    if (item.localTitle.isFileRom) {
+        item.localTitle.savePath = m_saveMgr ? m_saveMgr->findSaveFileForRom(item.localTitle.romPath, item.localTitle.console) : "";
+    } else {
+        item.localTitle.savePath = m_saveMgr ? SaveManager::findSaveForInstalledTitle(item.localTitle) : "";
+    }
+    item.localTitle.hasSave = m_saveMgr ? m_saveMgr->checkSaveExists(item.localTitle) : false;
+    item.localTitle.saveTime = m_saveMgr ? m_saveMgr->getSaveTime(item.localTitle) : 0;
+
+    m_lastMessage = "Reset save path to auto-detect for " + item.localTitle.name;
     return true;
 }
 

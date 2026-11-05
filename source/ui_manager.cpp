@@ -1052,7 +1052,7 @@ void UIManager::openGameActionsSheet() {
     return;
   m_activeSheet = ActiveSheet::GAME_ACTIONS;
   m_sheetSelectedIndex = 0;
-  m_sheetTargetY = 48.0f;
+  m_sheetTargetY = 24.0f;
 }
 
 void UIManager::openAppMenuSheet() {
@@ -1075,7 +1075,7 @@ bool UIManager::handleSheetInput(u32 kDown, const touchPosition &touch) {
 
   int numOptions = 0;
   if (m_activeSheet == ActiveSheet::GAME_ACTIONS) {
-    numOptions = 6;
+    numOptions = 7;
   } else if (m_activeSheet == ActiveSheet::APP_MENU) {
     numOptions = 4;
   } else if (m_activeSheet == ActiveSheet::SORT) {
@@ -1170,7 +1170,34 @@ bool UIManager::handleSheetInput(u32 kDown, const touchPosition &touch) {
     case 4:
       openSavePicker();
       break;
-    case 5:
+    case 5: {
+      if (m_syncMgr && !m_filteredLocalIndices.empty() &&
+          m_selectedGameIndex < m_filteredLocalIndices.size()) {
+        size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
+        const auto &item = m_syncMgr->getItems()[actualIdx];
+        const GameMapping *mapping =
+            m_configMgr ? m_configMgr->findMappingByTitleId(item.localTitle.titleIdHex)
+                        : nullptr;
+        bool isExplicitlyUnset =
+            (mapping && mapping->customSavePathExplicit &&
+             mapping->customSavePath.empty());
+        bool hasAnySavePath =
+            item.localTitle.hasSave || !item.localTitle.savePath.empty();
+        if (isExplicitlyUnset) {
+          m_syncMgr->resetSavePathToAuto(actualIdx);
+          m_statusMessage = m_syncMgr->getLastMessage();
+          updateLocalFilteredList();
+        } else if (hasAnySavePath) {
+          m_syncMgr->unsetSavePath(actualIdx);
+          m_statusMessage = m_syncMgr->getLastMessage();
+          updateLocalFilteredList();
+        } else {
+          m_statusMessage = "Save path is already unset.";
+        }
+      }
+      break;
+    }
+    case 6:
       toggleIgnoreSelected();
       break;
     }
@@ -1350,6 +1377,8 @@ void UIManager::renderBottomSheet() {
     bool hasSaves = false;
     bool hasLocalSave = false;
     bool hasRemoteSave = false;
+    bool hasAnySavePath = false;
+    bool isExplicitlyUnset = false;
     if (m_syncMgr && !m_filteredLocalIndices.empty() &&
         m_selectedGameIndex < m_filteredLocalIndices.size()) {
       const auto &item =
@@ -1358,6 +1387,12 @@ void UIManager::renderBottomSheet() {
       hasRemoteSave = !item.isIgnored && item.isMatched && item.remoteHasSave;
       hasSaves = !item.isIgnored && item.isMatched &&
                  (item.localTitle.hasSave || item.remoteHasSave);
+      hasAnySavePath = item.localTitle.hasSave || !item.localTitle.savePath.empty();
+      const GameMapping *mapping =
+          m_configMgr ? m_configMgr->findMappingByTitleId(item.localTitle.titleIdHex)
+                      : nullptr;
+      isExplicitlyUnset = (mapping && mapping->customSavePathExplicit &&
+                           mapping->customSavePath.empty());
     }
 
     bool isMatched = false;
@@ -1370,16 +1405,20 @@ void UIManager::renderBottomSheet() {
     const char *matchOptionLabel =
         isMatched ? "Rematch RomM Game" : "Match RomM Game";
 
-    const char *options[6] = {
+    const char *unsetOptionLabel =
+        isExplicitlyUnset ? "Reset Save Path to Auto" : "Unset Save Location";
+
+    const char *options[7] = {
         "Sync Save Now (A)",
         "Force Upload Local Save (L)",
         "Force Download Remote Save (R)",
         matchOptionLabel,
         "Set Custom Save Path",
+        unsetOptionLabel,
         isIgnored ? "Unhide Title" : "Hide Title"};
 
     float startY = m_sheetCurrentY + 28.0f;
-    for (int i = 0; i < 6; ++i) {
+    for (int i = 0; i < 7; ++i) {
       float itemY = startY + static_cast<float>(i) * 26.0f;
       bool selected = (i == m_sheetSelectedIndex);
       bool isOptionDisabled = false;
@@ -1388,6 +1427,8 @@ void UIManager::renderBottomSheet() {
       } else if (i == 1 && !hasLocalSave) {
         isOptionDisabled = true;
       } else if (i == 2 && (!hasLocalSave || !hasRemoteSave)) {
+        isOptionDisabled = true;
+      } else if (i == 5 && !isExplicitlyUnset && !hasAnySavePath) {
         isOptionDisabled = true;
       }
 
@@ -3958,7 +3999,11 @@ void UIManager::applyCustomSavePath(const std::string &path) {
     return;
 
   size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
-  m_syncMgr->setCustomSavePath(actualIdx, path);
+  if (path.empty()) {
+    m_syncMgr->unsetSavePath(actualIdx);
+  } else {
+    m_syncMgr->setCustomSavePath(actualIdx, path);
+  }
   m_statusMessage = m_syncMgr->getLastMessage();
   updateLocalFilteredList();
   closeSheet();
@@ -4039,6 +4084,16 @@ void UIManager::handleSavePickerInput(u32 kDown, const touchPosition &touch) {
     }
   } else if (kDown & KEY_Y) {
     applyCustomSavePath("");
+  } else if (kDown & KEY_L) {
+    if (m_syncMgr && !m_filteredLocalIndices.empty() &&
+        m_selectedGameIndex < m_filteredLocalIndices.size()) {
+      size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
+      m_syncMgr->resetSavePathToAuto(actualIdx);
+      m_statusMessage = m_syncMgr->getLastMessage();
+      updateLocalFilteredList();
+      closeSheet();
+      m_state = UIState::MAIN_MENU;
+    }
   } else if (kDown & KEY_B) {
     closeSheet();
     m_state = UIState::MAIN_MENU;
@@ -4075,7 +4130,7 @@ void UIManager::handleSavePickerInput(u32 kDown, const touchPosition &touch) {
           applyCustomSavePath(fullPath);
         }
       }
-    } else if (isTouchInside(touch, 84.0f, 206.0f, 82.0f, 26.0f)) {
+    } else if (isTouchInside(touch, 84.0f, 206.0f, 76.0f, 26.0f)) {
       std::string initText = m_browserCurrentDir;
       if (!m_filteredLocalIndices.empty() &&
           m_selectedGameIndex < m_filteredLocalIndices.size()) {
@@ -4095,7 +4150,7 @@ void UIManager::handleSavePickerInput(u32 kDown, const touchPosition &touch) {
         }
         applyCustomSavePath(entered);
       }
-    } else if (isTouchInside(touch, 170.0f, 206.0f, 68.0f, 26.0f)) {
+    } else if (isTouchInside(touch, 164.0f, 206.0f, 74.0f, 26.0f)) {
       applyCustomSavePath("");
     } else if (isTouchInside(touch, 242.0f, 206.0f, 70.0f, 26.0f)) {
       closeSheet();
@@ -4160,13 +4215,21 @@ void UIManager::renderSavePickerTop() {
   std::string gameName = "Unknown Title";
   std::string curSavePath = "(None / Auto-detect)";
   bool hasSave = false;
+  bool isExplicitlyUnset = false;
 
   if (m_syncMgr && !m_filteredLocalIndices.empty() &&
       m_selectedGameIndex < m_filteredLocalIndices.size()) {
     size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
     const auto &item = m_syncMgr->getItems()[actualIdx];
     gameName = item.localTitle.name;
-    if (!item.localTitle.savePath.empty()) {
+    const GameMapping *mapping =
+        m_configMgr ? m_configMgr->findMappingByTitleId(item.localTitle.titleIdHex)
+                    : nullptr;
+    isExplicitlyUnset = (mapping && mapping->customSavePathExplicit &&
+                         mapping->customSavePath.empty());
+    if (isExplicitlyUnset) {
+      curSavePath = "(Explicitly Unset - No Save)";
+    } else if (!item.localTitle.savePath.empty()) {
       curSavePath = item.localTitle.savePath;
     }
     hasSave = item.localTitle.hasSave;
@@ -4175,7 +4238,7 @@ void UIManager::renderSavePickerTop() {
   C2D_DrawRectSolid(12.0f, 40.0f, 0.5f, 376.0f, 82.0f, CLR_BORDER_SUBTLE);
   C2D_DrawRectSolid(13.0f, 41.0f, 0.5f, 374.0f, 80.0f, CLR_SURFACE_CARD);
   C2D_DrawRectSolid(12.0f, 40.0f, 0.5f, 4.0f, 82.0f,
-                    hasSave ? CLR_GREEN : CLR_YELLOW);
+                    isExplicitlyUnset ? CLR_TEXT_MUTED : (hasSave ? CLR_GREEN : CLR_YELLOW));
 
   C2D_Text nameText;
   C2D_TextParse(&nameText, m_textBuf, gameName.c_str());
@@ -4200,9 +4263,18 @@ void UIManager::renderSavePickerTop() {
   C2D_DrawText(&pathText, C2D_WithColor, 24.0f, 68.0f, 0.5f, pScale, pScale,
                CLR_TEXT_SECONDARY);
 
-  std::string statusLine = hasSave ? "Save file verified on SD (Ready for sync)"
-                                   : "No save file found at active path";
-  u32 statusColor = hasSave ? CLR_GREEN : CLR_YELLOW;
+  std::string statusLine;
+  u32 statusColor = CLR_GREEN;
+  if (isExplicitlyUnset) {
+    statusLine = "Save unset for this title (Auto-detection bypassed)";
+    statusColor = CLR_TEXT_MUTED;
+  } else if (hasSave) {
+    statusLine = "Save file verified on SD (Ready for sync)";
+    statusColor = CLR_GREEN;
+  } else {
+    statusLine = "No save file found at active path";
+    statusColor = CLR_YELLOW;
+  }
   C2D_Text stText;
   C2D_TextParse(&stText, m_textBuf, statusLine.c_str());
   C2D_TextOptimize(&stText);
@@ -4216,11 +4288,12 @@ void UIManager::renderSavePickerTop() {
   std::string inst = "File Browser Controls:\n"
                      "- (A) Select highlighted .sav/.srm file or open folder\n"
                      "- (X) Manual keyboard path entry (sdmc:/...)\n"
-                     "- (Y) Reset override to auto-detected save path";
+                     "- (Y) Unset save location (no save for this game)\n"
+                     "- (L) Reset override to auto-detected save path";
   C2D_Text instText;
   C2D_TextParse(&instText, m_textBuf, inst.c_str());
   C2D_TextOptimize(&instText);
-  C2D_DrawText(&instText, C2D_WithColor, 24.0f, 134.0f, 0.5f, 0.40f, 0.40f,
+  C2D_DrawText(&instText, C2D_WithColor, 24.0f, 134.0f, 0.5f, 0.38f, 0.38f,
                CLR_TEXT_SECONDARY);
 
   C2D_DrawRectSolid(0.0f, 216.0f, 0.5f, RomM3DS::SCREEN_TOP_WIDTH, 24.0f,
@@ -4230,9 +4303,9 @@ void UIManager::renderSavePickerTop() {
 
   C2D_Text hudText;
   C2D_TextParse(&hudText, m_textBuf,
-                "(A) Select/Open   (X) Keyboard   (Y) Reset Auto   (B) Back");
+                "(A) Select   (X) Keyboard   (Y) Unset   (L) Reset Auto   (B) Back");
   C2D_TextOptimize(&hudText);
-  C2D_DrawText(&hudText, C2D_WithColor, 12.0f, 221.0f, 0.5f, 0.40f, 0.40f,
+  C2D_DrawText(&hudText, C2D_WithColor, 12.0f, 221.0f, 0.5f, 0.38f, 0.38f,
                CLR_TEXT_SECONDARY);
 }
 
@@ -4330,8 +4403,8 @@ void UIManager::renderSavePickerBottom() {
   }
 
   drawButton(8.0f, 206.0f, 72.0f, 26.0f, "[ Select ]", false);
-  drawButton(84.0f, 206.0f, 82.0f, 26.0f, "[ Keyboard ]", false);
-  drawButton(170.0f, 206.0f, 68.0f, 26.0f, "[ Reset ]", false);
+  drawButton(84.0f, 206.0f, 76.0f, 26.0f, "[ Keyboard ]", false);
+  drawButton(164.0f, 206.0f, 74.0f, 26.0f, "[ Unset (Y) ]", false);
   drawButton(242.0f, 206.0f, 70.0f, 26.0f, "[ Back ]", false);
 }
 
