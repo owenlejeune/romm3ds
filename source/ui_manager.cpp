@@ -49,14 +49,16 @@ constexpr u32 CLR_ERROR = CLR_DANGER;
 bool containsIgnoreCase(const std::string &str, const std::string &sub) {
   if (sub.empty())
     return true;
-  if (str.length() < sub.length())
+  std::string s1 = SyncManager::stripAccents(str);
+  std::string s2 = SyncManager::stripAccents(sub);
+  if (s1.length() < s2.length())
     return false;
   auto it = std::search(
-      str.begin(), str.end(), sub.begin(), sub.end(), [](char ch1, char ch2) {
+      s1.begin(), s1.end(), s2.begin(), s2.end(), [](char ch1, char ch2) {
         return std::tolower(static_cast<unsigned char>(ch1)) ==
                std::tolower(static_cast<unsigned char>(ch2));
       });
-  return (it != str.end());
+  return (it != s1.end());
 }
 
 const char *getFilterModeName(LocalFilterMode mode) {
@@ -931,6 +933,21 @@ void UIManager::selectConsole(size_t index) {
   m_remoteFilterText.clear();
   updateRemoteFilteredList();
   m_selectedRemoteIndex = 0;
+  if (m_syncMgr && !m_filteredLocalIndices.empty() &&
+      m_selectedGameIndex < m_filteredLocalIndices.size()) {
+    size_t localActualIdx = m_filteredLocalIndices[m_selectedGameIndex];
+    const auto &localItem = m_syncMgr->getItems()[localActualIdx];
+    const auto &remote = m_syncMgr->getRemoteLibrary();
+    for (size_t i = 0; i < m_filteredRemoteIndices.size(); ++i) {
+      size_t actualRemoteIdx = m_filteredRemoteIndices[i];
+      if (actualRemoteIdx < remote.size()) {
+        if (SyncManager::matchesFuzzy(localItem.localTitle.name, remote[actualRemoteIdx].title)) {
+          m_selectedRemoteIndex = i;
+          break;
+        }
+      }
+    }
+  }
   m_matchingSubState = MatchingSubState::SELECT_GAME;
 }
 

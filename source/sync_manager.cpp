@@ -289,9 +289,124 @@ time_t SyncManager::parseIsoTimestamp(const std::string& iso) {
     return utcEpoch + localOffset;
 }
 
-std::string SyncManager::normalizeName(const std::string& str) {
+std::string SyncManager::stripAccents(const std::string& str) {
     std::string out;
+    size_t i = 0;
+    while (i < str.size()) {
+        unsigned char c1 = static_cast<unsigned char>(str[i]);
+        if (c1 < 0x80) {
+            out.push_back(static_cast<char>(c1));
+            i++;
+        } else if ((c1 == 0xC3 || c1 == 0xC4 || c1 == 0xC5 || c1 == 0xCC || c1 == 0xCD) && i + 1 < str.size()) {
+            unsigned char c2 = static_cast<unsigned char>(str[i + 1]);
+            if (c1 == 0xC3) {
+                if ((c2 >= 0x80 && c2 <= 0x85) || (c2 >= 0xA0 && c2 <= 0xA5)) out.push_back('a');
+                else if (c2 == 0x86 || c2 == 0xA6) { out.push_back('a'); out.push_back('e'); }
+                else if (c2 == 0x87 || c2 == 0xA7) out.push_back('c');
+                else if ((c2 >= 0x88 && c2 <= 0x8B) || (c2 >= 0xA8 && c2 <= 0xAB)) out.push_back('e');
+                else if ((c2 >= 0x8C && c2 <= 0x8F) || (c2 >= 0xAC && c2 <= 0xAF)) out.push_back('i');
+                else if (c2 == 0x90 || c2 == 0xB0) out.push_back('d');
+                else if (c2 == 0x91 || c2 == 0xB1) out.push_back('n');
+                else if ((c2 >= 0x92 && c2 <= 0x96) || (c2 >= 0xB2 && c2 <= 0xB6) || c2 == 0x98 || c2 == 0xB8) out.push_back('o');
+                else if ((c2 >= 0x99 && c2 <= 0x9C) || (c2 >= 0xB9 && c2 <= 0xBC)) out.push_back('u');
+                else if (c2 == 0x9D || c2 == 0xBD || c2 == 0xBF) out.push_back('y');
+                else if (c2 == 0x9E || c2 == 0xBE) out.push_back('t');
+                else if (c2 == 0x9F) { out.push_back('s'); out.push_back('s'); }
+            } else if (c1 == 0xC4) {
+                if (c2 >= 0x80 && c2 <= 0x85) out.push_back('a');
+                else if (c2 >= 0x86 && c2 <= 0x8D) out.push_back('c');
+                else if (c2 >= 0x8E && c2 <= 0x91) out.push_back('d');
+                else if (c2 >= 0x92 && c2 <= 0x9B) out.push_back('e');
+                else if (c2 >= 0x9C && c2 <= 0xA3) out.push_back('g');
+                else if (c2 >= 0xA4 && c2 <= 0xA7) out.push_back('h');
+                else if (c2 >= 0xA8 && c2 <= 0xB1) out.push_back('i');
+                else if (c2 == 0xB2 || c2 == 0xB3) { out.push_back('i'); out.push_back('j'); }
+                else if (c2 == 0xB4 || c2 == 0xB5) out.push_back('j');
+                else if (c2 >= 0xB6 && c2 <= 0xB8) out.push_back('k');
+                else if (c2 >= 0xB9 && c2 <= 0xBF) out.push_back('l');
+            } else if (c1 == 0xC5) {
+                if (c2 >= 0x80 && c2 <= 0x82) out.push_back('l');
+                else if (c2 >= 0x83 && c2 <= 0x8B) out.push_back('n');
+                else if (c2 >= 0x8C && c2 <= 0x91) out.push_back('o');
+                else if (c2 == 0x92 || c2 == 0x93) { out.push_back('o'); out.push_back('e'); }
+                else if (c2 >= 0x94 && c2 <= 0x99) out.push_back('r');
+                else if (c2 >= 0x9A && c2 <= 0xA3) out.push_back('s');
+                else if (c2 >= 0xA4 && c2 <= 0xAB) out.push_back('t');
+                else if (c2 >= 0xAC && c2 <= 0xB3) out.push_back('u');
+                else if (c2 == 0xB4 || c2 == 0xB5) out.push_back('w');
+                else if (c2 >= 0xB6 && c2 <= 0xB8) out.push_back('y');
+                else if (c2 >= 0xB9 && c2 <= 0xBE) out.push_back('z');
+            }
+            i += 2;
+        } else if (c1 == 0xE2 && i + 2 < str.size()) {
+            unsigned char c2 = static_cast<unsigned char>(str[i + 1]);
+            unsigned char c3 = static_cast<unsigned char>(str[i + 2]);
+            if (c2 == 0x80) {
+                if (c3 == 0x98 || c3 == 0x99) out.push_back('\'');
+                else if (c3 == 0x9C || c3 == 0x9D) out.push_back('"');
+                else if (c3 == 0x93 || c3 == 0x94) out.push_back('-');
+                else if (c3 == 0xA6) out.push_back(' ');
+            }
+            i += 3;
+        } else if (c1 == 0xEF && i + 2 < str.size()) {
+            unsigned char c2 = static_cast<unsigned char>(str[i + 1]);
+            unsigned char c3 = static_cast<unsigned char>(str[i + 2]);
+            if (c2 == 0xBC && c3 >= 0x81 && c3 <= 0xBF) {
+                out.push_back(static_cast<char>(c3 - 0x81 + 0x21));
+            } else if (c2 == 0xBD && c3 >= 0x80 && c3 <= 0x9E) {
+                out.push_back(static_cast<char>(c3 - 0x80 + 0x5F));
+            }
+            i += 3;
+        } else if (c1 >= 0xC0) {
+            if ((c1 >= 0xC0 && c1 <= 0xC5) || (c1 >= 0xE0 && c1 <= 0xE5)) out.push_back('a');
+            else if (c1 == 0xC6 || c1 == 0xE6) { out.push_back('a'); out.push_back('e'); }
+            else if (c1 == 0xC7 || c1 == 0xE7) out.push_back('c');
+            else if ((c1 >= 0xC8 && c1 <= 0xCB) || (c1 >= 0xE8 && c1 <= 0xEB)) out.push_back('e');
+            else if ((c1 >= 0xCC && c1 <= 0xCF) || (c1 >= 0xEC && c1 <= 0xEF)) out.push_back('i');
+            else if (c1 == 0xD0 || c1 == 0xF0) out.push_back('d');
+            else if (c1 == 0xD1 || c1 == 0xF1) out.push_back('n');
+            else if ((c1 >= 0xD2 && c1 <= 0xD6) || (c1 >= 0xF2 && c1 <= 0xF6) || c1 == 0xD8 || c1 == 0xF8) out.push_back('o');
+            else if ((c1 >= 0xD9 && c1 <= 0xDC) || (c1 >= 0xF9 && c1 <= 0xFC)) out.push_back('u');
+            else if (c1 == 0xDD || c1 == 0xFD || c1 == 0xFF) out.push_back('y');
+            else if (c1 == 0xDF) { out.push_back('s'); out.push_back('s'); }
+            i++;
+        } else {
+            i++;
+        }
+    }
+    return out;
+}
+
+std::string SyncManager::stripRomTags(const std::string& str) {
+    std::string out;
+    int parenDepth = 0;
+    int bracketDepth = 0;
     for (char c : str) {
+        if (c == '(') parenDepth++;
+        else if (c == ')') { if (parenDepth > 0) parenDepth--; }
+        else if (c == '[') bracketDepth++;
+        else if (c == ']') { if (bracketDepth > 0) bracketDepth--; }
+        else if (parenDepth == 0 && bracketDepth == 0) {
+            out.push_back(c);
+        }
+    }
+    size_t start = 0;
+    while (start < out.size() && (out[start] == ' ' || out[start] == '\t')) start++;
+    size_t digits = start;
+    while (digits < out.size() && std::isdigit(static_cast<unsigned char>(out[digits]))) digits++;
+    if (digits > start && digits + 3 <= out.size() && out.substr(digits, 3) == " - ") {
+        out = out.substr(digits + 3);
+    }
+    size_t first = out.find_first_not_of(" \t\r\n-_");
+    if (first == std::string::npos) return str;
+    size_t last = out.find_last_not_of(" \t\r\n-_");
+    return out.substr(first, last - first + 1);
+}
+
+std::string SyncManager::normalizeName(const std::string& str) {
+    std::string unaccented = stripAccents(str);
+    std::string out;
+    for (char c : unaccented) {
         if (std::isalnum(static_cast<unsigned char>(c))) {
             out.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
         }
@@ -305,7 +420,27 @@ bool SyncManager::matchesFuzzy(const std::string& s1, const std::string& s2) {
     if (n1.empty() || n2.empty()) {
         return false;
     }
-    return (n1 == n2) || (n1.find(n2) != std::string::npos) || (n2.find(n1) != std::string::npos);
+    if (n1 == n2) {
+        return true;
+    }
+    std::string t1 = normalizeName(stripRomTags(s1));
+    std::string t2 = normalizeName(stripRomTags(s2));
+    if (!t1.empty() && !t2.empty() && t1 == t2) {
+        return true;
+    }
+    size_t minLen = std::min(n1.length(), n2.length());
+    if (minLen >= 3) {
+        if (n1.find(n2) != std::string::npos || n2.find(n1) != std::string::npos) {
+            return true;
+        }
+    }
+    size_t minTLen = std::min(t1.length(), t2.length());
+    if (minTLen >= 3) {
+        if (t1.find(t2) != std::string::npos || t2.find(t1) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
 }
 
 std::string SyncManager::getFriendlyPlatformName(const std::string& slug) {
@@ -900,18 +1035,84 @@ bool SyncManager::refresh(bool forceFullRemoteRefresh) {
                     }
                 }
             } else {
-                // First attempt match with platform-compatible games
+                // Automatch with remote games using prioritized multi-pass matching
                 const RommGame* matchTarget = nullptr;
+
+                std::string localNorm = normalizeName(local.name);
+                std::string localTagStrippedNorm = normalizeName(stripRomTags(local.name));
+                std::string localFileNorm;
+                if (local.isFileRom && !local.romPath.empty()) {
+                    size_t slash = local.romPath.find_last_of("/\\");
+                    std::string fn = (slash != std::string::npos) ? local.romPath.substr(slash + 1) : local.romPath;
+                    size_t dot = fn.find_last_of('.');
+                    if (dot != std::string::npos) fn = fn.substr(0, dot);
+                    localFileNorm = normalizeName(stripRomTags(fn));
+                }
+
+                // Pass 1: Exact normalized title match with platform-compatible games
                 for (const auto& r : m_remoteGames) {
-                    if (isPlatformCompatible(local.console, r.platform) && matchesFuzzy(local.name, r.title)) {
-                        matchTarget = &r;
-                        break;
+                    if (isPlatformCompatible(local.console, r.platform)) {
+                        std::string rNorm = normalizeName(r.title);
+                        std::string rTagStrippedNorm = normalizeName(stripRomTags(r.title));
+                        if ((!localNorm.empty() && localNorm == rNorm) ||
+                            (!localTagStrippedNorm.empty() && localTagStrippedNorm == rTagStrippedNorm) ||
+                            (!localFileNorm.empty() && localFileNorm == rNorm)) {
+                            matchTarget = &r;
+                            break;
+                        }
+                        if (!r.romPath.empty()) {
+                            size_t slash = r.romPath.find_last_of("/\\");
+                            std::string rFn = (slash != std::string::npos) ? r.romPath.substr(slash + 1) : r.romPath;
+                            size_t dot = rFn.find_last_of('.');
+                            if (dot != std::string::npos) rFn = rFn.substr(0, dot);
+                            std::string rFileNorm = normalizeName(stripRomTags(rFn));
+                            if ((!localNorm.empty() && localNorm == rFileNorm) ||
+                                (!localTagStrippedNorm.empty() && localTagStrippedNorm == rFileNorm)) {
+                                matchTarget = &r;
+                                break;
+                            }
+                        }
                     }
                 }
-                // Fallback: match any title
+
+                // Pass 2: Fuzzy / substring match with platform-compatible games
+                if (!matchTarget) {
+                    for (const auto& r : m_remoteGames) {
+                        if (isPlatformCompatible(local.console, r.platform)) {
+                            if (matchesFuzzy(local.name, r.title)) {
+                                matchTarget = &r;
+                                break;
+                            }
+                            if (!r.romPath.empty() && matchesFuzzy(local.name, r.romPath)) {
+                                matchTarget = &r;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // Pass 3: Exact normalized title match across any platform
+                if (!matchTarget) {
+                    for (const auto& r : m_remoteGames) {
+                        std::string rNorm = normalizeName(r.title);
+                        std::string rTagStrippedNorm = normalizeName(stripRomTags(r.title));
+                        if ((!localNorm.empty() && localNorm == rNorm) ||
+                            (!localTagStrippedNorm.empty() && localTagStrippedNorm == rTagStrippedNorm) ||
+                            (!localFileNorm.empty() && localFileNorm == rNorm)) {
+                            matchTarget = &r;
+                            break;
+                        }
+                    }
+                }
+
+                // Pass 4: Fuzzy / substring match across any platform
                 if (!matchTarget) {
                     for (const auto& r : m_remoteGames) {
                         if (matchesFuzzy(local.name, r.title)) {
+                            matchTarget = &r;
+                            break;
+                        }
+                        if (!r.romPath.empty() && matchesFuzzy(local.name, r.romPath)) {
                             matchTarget = &r;
                             break;
                         }

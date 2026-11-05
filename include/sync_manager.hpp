@@ -83,12 +83,13 @@ public:
     static long getLocalTimezoneOffset();
     static void setManualTimezoneOffsetMinutes(int minutes);
     static bool hasDetectedTimezoneOffset();
-
-private:
-    void autoMatchTitles();
-    void consolidatePlatforms();
+    static std::string stripAccents(const std::string& str);
+    static std::string stripRomTags(const std::string& str);
     static std::string normalizeName(const std::string& str);
     static bool matchesFuzzy(const std::string& s1, const std::string& s2);
+
+private:
+    void consolidatePlatforms();
 
     ConfigManager* m_configMgr = nullptr;
     NetworkManager* m_netMgr = nullptr;
