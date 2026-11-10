@@ -37,6 +37,7 @@ struct RommSave {
     uint64_t romId = 0;
     std::string fileName;
     std::string updatedAt;
+    std::string slot;
 };
 
 class NetworkManager {
@@ -54,7 +55,7 @@ public:
     NetworkResult fetchPlatforms(std::vector<RommPlatform>& outPlatforms);
     NetworkResult fetchLibrary(std::vector<RommGame>& outGames, uint64_t platformId = 0, const std::string& platformSlug = "");
     NetworkResult fetchSaves(std::vector<RommSave>& outSaves, uint64_t romId = 0);
-    NetworkResult uploadSave(uint64_t gameId, const std::string& filePath, const std::string& remoteFileName = "");
+    NetworkResult uploadSave(uint64_t gameId, const std::string& filePath, const std::string& remoteFileName = "", const std::string& slot = "autosave");
     NetworkResult downloadSave(uint64_t gameId, const std::string& destPath);
     NetworkResult downloadSaveById(uint64_t saveId, const std::string& destPath);
 

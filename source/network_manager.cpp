@@ -568,7 +568,8 @@ NetworkResult NetworkManager::fetchSaves(std::vector<RommSave>& outSaves, uint64
                         return (k == "items" || k == "id" || k == "rom_id" || k == "romId" ||
                                 k == "file_name" || k == "filename" ||
                                 k == "updated_at" || k == "updatedAt" ||
-                                k == "created_at" || k == "createdAt");
+                                k == "created_at" || k == "createdAt" ||
+                                k == "slot");
                     }
                     return false;
                 }
@@ -590,6 +591,7 @@ NetworkResult NetworkManager::fetchSaves(std::vector<RommSave>& outSaves, uint64
                     if (up.empty()) up = getSafeString(item, "created_at");
                     if (up.empty()) up = getSafeString(item, "createdAt");
                     s.updatedAt = up;
+                    s.slot = getSafeString(item, "slot");
                     outSaves.push_back(s);
                 }
             } else {
@@ -609,7 +611,7 @@ NetworkResult NetworkManager::fetchSaves(std::vector<RommSave>& outSaves, uint64
     return result;
 }
 
-NetworkResult NetworkManager::uploadSave(uint64_t gameId, const std::string& filePath, const std::string& remoteFileName) {
+NetworkResult NetworkManager::uploadSave(uint64_t gameId, const std::string& filePath, const std::string& remoteFileName, const std::string& slot) {
     NetworkResult result;
 
     if (!s_networkInitialized) {
@@ -629,8 +631,10 @@ NetworkResult NetworkManager::uploadSave(uint64_t gameId, const std::string& fil
         return result;
     }
 
-    // RomM endpoint: POST /api/saves?rom_id={gameId}
-    std::string url = buildUrl("/api/saves?rom_id=" + std::to_string(gameId));
+    std::string targetSlot = slot.empty() ? "autosave" : slot;
+
+    // RomM endpoint: POST /api/saves?rom_id={gameId}&slot={targetSlot}
+    std::string url = buildUrl("/api/saves?rom_id=" + std::to_string(gameId) + "&slot=" + targetSlot);
     std::string responseData;
 
     struct curl_slist* headers = nullptr;
@@ -652,7 +656,7 @@ NetworkResult NetworkManager::uploadSave(uint64_t gameId, const std::string& fil
     // Form field: slot
     curl_mimepart* partSlot = curl_mime_addpart(mime);
     curl_mime_name(partSlot, "slot");
-    curl_mime_data(partSlot, "0", CURL_ZERO_TERMINATED);
+    curl_mime_data(partSlot, targetSlot.c_str(), CURL_ZERO_TERMINATED);
 
     // File field: saveFile (required by RomM FastAPI backend)
     curl_mimepart* partFile = curl_mime_addpart(mime);
@@ -717,6 +721,12 @@ NetworkResult NetworkManager::downloadSave(uint64_t gameId, const std::string& d
         err.errorMessage = "No remote save found in RomM for game ID " + std::to_string(gameId);
         return err;
     }
+    std::sort(saves.begin(), saves.end(), [](const RommSave& a, const RommSave& b) {
+        bool aAuto = (a.slot == "autosave");
+        bool bAuto = (b.slot == "autosave");
+        if (aAuto != bAuto) return aAuto > bAuto;
+        return a.updatedAt > b.updatedAt;
+    });
     return downloadSaveById(saves[0].id, destPath);
 }
 

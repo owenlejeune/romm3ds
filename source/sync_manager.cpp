@@ -967,10 +967,19 @@ bool SyncManager::refresh(bool forceFullRemoteRefresh) {
                 if (remoteSaveMap.find(s.romId) == remoteSaveMap.end()) {
                     remoteSaveMap[s.romId] = s;
                 } else {
-                    time_t existingTime = parseIsoTimestamp(remoteSaveMap[s.romId].updatedAt);
-                    time_t newTime = parseIsoTimestamp(s.updatedAt);
-                    if (newTime > existingTime || (newTime == existingTime && (s.updatedAt > remoteSaveMap[s.romId].updatedAt || s.id > remoteSaveMap[s.romId].id))) {
-                        remoteSaveMap[s.romId] = s;
+                    const auto& current = remoteSaveMap[s.romId];
+                    bool sAuto = (s.slot == "autosave");
+                    bool curAuto = (current.slot == "autosave");
+                    if (sAuto != curAuto) {
+                        if (sAuto) {
+                            remoteSaveMap[s.romId] = s;
+                        }
+                    } else {
+                        time_t existingTime = parseIsoTimestamp(current.updatedAt);
+                        time_t newTime = parseIsoTimestamp(s.updatedAt);
+                        if (newTime > existingTime || (newTime == existingTime && (s.updatedAt > current.updatedAt || s.id > current.id))) {
+                            remoteSaveMap[s.romId] = s;
+                        }
                     }
                 }
             }
@@ -1210,6 +1219,9 @@ bool SyncManager::manualMatch(size_t itemIndex, const RommGame& remoteGame) {
     std::vector<RommSave> existingSaves;
     if (m_netMgr && m_netMgr->fetchSaves(existingSaves, remoteGame.id).success && !existingSaves.empty()) {
         std::sort(existingSaves.begin(), existingSaves.end(), [](const RommSave& a, const RommSave& b) {
+            bool aAuto = (a.slot == "autosave");
+            bool bAuto = (b.slot == "autosave");
+            if (aAuto != bAuto) return aAuto > bAuto;
             time_t ta = SyncManager::parseIsoTimestamp(a.updatedAt);
             time_t tb = SyncManager::parseIsoTimestamp(b.updatedAt);
             if (ta != tb) return ta > tb;
@@ -1420,6 +1432,9 @@ bool SyncManager::forceUpload(SyncItem& item, LogCallback log) {
     m_netMgr->fetchSaves(existingSaves, item.remoteGameId);
     if (!existingSaves.empty()) {
         std::sort(existingSaves.begin(), existingSaves.end(), [](const RommSave& a, const RommSave& b) {
+            bool aAuto = (a.slot == "autosave");
+            bool bAuto = (b.slot == "autosave");
+            if (aAuto != bAuto) return aAuto > bAuto;
             time_t ta = SyncManager::parseIsoTimestamp(a.updatedAt);
             time_t tb = SyncManager::parseIsoTimestamp(b.updatedAt);
             if (ta != tb) return ta > tb;
@@ -1503,8 +1518,8 @@ bool SyncManager::forceUpload(SyncItem& item, LogCallback log) {
     }
 
     emit("Target remote file: " + remoteFileName);
-    emit("Uploading to RomM (Game ID: " + std::to_string(item.remoteGameId) + ")...");
-    NetworkResult res = m_netMgr->uploadSave(item.remoteGameId, targetFile, remoteFileName);
+    emit("Uploading to RomM (Game ID: " + std::to_string(item.remoteGameId) + ", slot: autosave)...");
+    NetworkResult res = m_netMgr->uploadSave(item.remoteGameId, targetFile, remoteFileName, "autosave");
     clearDirectory(stagingDir);
 
     if (res.success) {
@@ -1512,6 +1527,9 @@ bool SyncManager::forceUpload(SyncItem& item, LogCallback log) {
         std::vector<RommSave> updatedSaves;
         if (m_netMgr->fetchSaves(updatedSaves, item.remoteGameId).success && !updatedSaves.empty()) {
             std::sort(updatedSaves.begin(), updatedSaves.end(), [](const RommSave& a, const RommSave& b) {
+                bool aAuto = (a.slot == "autosave");
+                bool bAuto = (b.slot == "autosave");
+                if (aAuto != bAuto) return aAuto > bAuto;
                 time_t ta = SyncManager::parseIsoTimestamp(a.updatedAt);
                 time_t tb = SyncManager::parseIsoTimestamp(b.updatedAt);
                 if (ta != tb) return ta > tb;
@@ -1595,8 +1613,11 @@ bool SyncManager::forceDownload(SyncItem& item, LogCallback log) {
         return false;
     }
 
-    // Sort descending by timestamp and ID so the most recent save (.srm, .sav, etc.) is selected
+    // Sort descending by autosave slot first, then timestamp and ID so the most recent save (.srm, .sav, etc.) is selected
     std::sort(saves.begin(), saves.end(), [](const RommSave& a, const RommSave& b) {
+        bool aAuto = (a.slot == "autosave");
+        bool bAuto = (b.slot == "autosave");
+        if (aAuto != bAuto) return aAuto > bAuto;
         time_t ta = SyncManager::parseIsoTimestamp(a.updatedAt);
         time_t tb = SyncManager::parseIsoTimestamp(b.updatedAt);
         if (ta != tb) return ta > tb;
