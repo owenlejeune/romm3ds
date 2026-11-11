@@ -570,6 +570,11 @@ void UIManager::syncSelectedGame() {
     return;
   }
 
+  if (SaveManager::isUnsupportedGbaVcTitle(item.localTitle)) {
+    showGbaVcUnsupportedNotice();
+    return;
+  }
+
   if (!item.isMatched) {
     m_statusMessage = "Cannot sync: Unmatched game. Open Actions (SEL) to match.";
     return;
@@ -630,6 +635,7 @@ void UIManager::syncAllGames() {
     if (idx < m_syncMgr->getItems().size()) {
       const auto &item = m_syncMgr->getItems()[idx];
       if (!item.isIgnored && item.isMatched &&
+          !SaveManager::isUnsupportedGbaVcTitle(item.localTitle) &&
           (item.localTitle.hasSave || item.remoteHasSave)) {
         m_batchSyncTargetIndices.push_back(idx);
       }
@@ -737,6 +743,10 @@ void UIManager::forceUploadSelected() {
   size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
   SyncItem &item = m_syncMgr->getItems()[actualIdx];
 
+  if (SaveManager::isUnsupportedGbaVcTitle(item.localTitle)) {
+    showGbaVcUnsupportedNotice();
+    return;
+  }
   if (!item.isMatched) {
     m_statusMessage = "Cannot upload: Unmatched game.";
     return;
@@ -784,6 +794,10 @@ void UIManager::forceDownloadSelected() {
   size_t actualIdx = m_filteredLocalIndices[m_selectedGameIndex];
   SyncItem &item = m_syncMgr->getItems()[actualIdx];
 
+  if (SaveManager::isUnsupportedGbaVcTitle(item.localTitle)) {
+    showGbaVcUnsupportedNotice();
+    return;
+  }
   if (!item.isMatched) {
     m_statusMessage = "Cannot download: Unmatched game.";
     return;
@@ -1110,15 +1124,19 @@ bool UIManager::handleSheetInput(u32 kDown, const touchPosition &touch) {
     switch (index) {
     case 0: {
       bool canSync = false;
+      bool gbaVcUnsupported = false;
       if (m_syncMgr && !m_filteredLocalIndices.empty() &&
           m_selectedGameIndex < m_filteredLocalIndices.size()) {
         const auto &item =
             m_syncMgr->getItems()[m_filteredLocalIndices[m_selectedGameIndex]];
-        canSync = !item.isIgnored && item.isMatched &&
+        gbaVcUnsupported = SaveManager::isUnsupportedGbaVcTitle(item.localTitle);
+        canSync = !item.isIgnored && item.isMatched && !gbaVcUnsupported &&
                   (item.localTitle.hasSave || item.remoteHasSave);
       }
       if (canSync) {
         syncSelectedGame();
+      } else if (gbaVcUnsupported) {
+        showGbaVcUnsupportedNotice();
       } else {
         m_statusMessage = "Cannot sync: No local or remote save exists.";
       }
@@ -1126,14 +1144,18 @@ bool UIManager::handleSheetInput(u32 kDown, const touchPosition &touch) {
     }
     case 1: {
       bool canUpload = false;
+      bool gbaVcUnsupported = false;
       if (m_syncMgr && !m_filteredLocalIndices.empty() &&
           m_selectedGameIndex < m_filteredLocalIndices.size()) {
         const auto &item =
             m_syncMgr->getItems()[m_filteredLocalIndices[m_selectedGameIndex]];
-        canUpload = !item.isIgnored && item.isMatched && item.localTitle.hasSave;
+        gbaVcUnsupported = SaveManager::isUnsupportedGbaVcTitle(item.localTitle);
+        canUpload = !item.isIgnored && item.isMatched && !gbaVcUnsupported && item.localTitle.hasSave;
       }
       if (canUpload) {
         forceUploadSelected();
+      } else if (gbaVcUnsupported) {
+        showGbaVcUnsupportedNotice();
       } else {
         m_statusMessage = "Cannot upload: No local save file found.";
       }
@@ -1141,15 +1163,19 @@ bool UIManager::handleSheetInput(u32 kDown, const touchPosition &touch) {
     }
     case 2: {
       bool canDownload = false;
+      bool gbaVcUnsupported = false;
       if (m_syncMgr && !m_filteredLocalIndices.empty() &&
           m_selectedGameIndex < m_filteredLocalIndices.size()) {
         const auto &item =
             m_syncMgr->getItems()[m_filteredLocalIndices[m_selectedGameIndex]];
-        canDownload = !item.isIgnored && item.isMatched &&
+        gbaVcUnsupported = SaveManager::isUnsupportedGbaVcTitle(item.localTitle);
+        canDownload = !item.isIgnored && item.isMatched && !gbaVcUnsupported &&
                       item.localTitle.hasSave && item.remoteHasSave;
       }
       if (canDownload) {
         forceDownloadSelected();
+      } else if (gbaVcUnsupported) {
+        showGbaVcUnsupportedNotice();
       } else {
         if (m_syncMgr && !m_filteredLocalIndices.empty() &&
             m_selectedGameIndex < m_filteredLocalIndices.size()) {
@@ -1383,9 +1409,10 @@ void UIManager::renderBottomSheet() {
         m_selectedGameIndex < m_filteredLocalIndices.size()) {
       const auto &item =
           m_syncMgr->getItems()[m_filteredLocalIndices[m_selectedGameIndex]];
-      hasLocalSave = !item.isIgnored && item.isMatched && item.localTitle.hasSave;
-      hasRemoteSave = !item.isIgnored && item.isMatched && item.remoteHasSave;
-      hasSaves = !item.isIgnored && item.isMatched &&
+      bool gbaVcUnsupported = SaveManager::isUnsupportedGbaVcTitle(item.localTitle);
+      hasLocalSave = !item.isIgnored && item.isMatched && !gbaVcUnsupported && item.localTitle.hasSave;
+      hasRemoteSave = !item.isIgnored && item.isMatched && !gbaVcUnsupported && item.remoteHasSave;
+      hasSaves = !item.isIgnored && item.isMatched && !gbaVcUnsupported &&
                  (item.localTitle.hasSave || item.remoteHasSave);
       hasAnySavePath = item.localTitle.hasSave || !item.localTitle.savePath.empty();
       const GameMapping *mapping =
@@ -2459,6 +2486,15 @@ void UIManager::showNotification(const std::string &title, const std::string &me
   m_notificationAccent = accentColor;
 }
 
+void UIManager::showGbaVcUnsupportedNotice() {
+  showNotification(
+      "GBA VC Saves Not Supported",
+      "GBA Virtual Console (AGB_FIRM) saves are stored in SysNAND/encrypted SD formats that 3DS homebrew cannot access.\n\n"
+      "To sync saves, dump a .sav via GodMode9 (agbsave.bin) or play via mGBA / open_agb_firm, then assign it via Set Custom Save Path.",
+      CLR_YELLOW);
+  m_statusMessage = "GBA VC (AGB_FIRM) saves are unsupported without Custom Save Path.";
+}
+
 void UIManager::dismissNotification() {
   m_showNotification = false;
   m_notificationTitle.clear();
@@ -2742,8 +2778,9 @@ void UIManager::renderMainMenuTop() {
     }
 
     // Pill 3: Sync / Save Status Badge
-    const char *syncBadge = "NO SAVES";
-    u32 syncFg = CLR_TEXT_DIM;
+    bool gbaVcUnsupported = SaveManager::isUnsupportedGbaVcTitle(item.localTitle);
+    const char *syncBadge = gbaVcUnsupported ? "GBA VC N/A" : "NO SAVES";
+    u32 syncFg = gbaVcUnsupported ? CLR_YELLOW : CLR_TEXT_DIM;
     if (item.localTitle.hasSave && item.remoteHasSave) {
       if (remoteIsNewer) {
         syncBadge = "OUTDATED [v]";
@@ -2890,13 +2927,13 @@ void UIManager::renderMainMenuTop() {
     std::string localVal =
         item.localTitle.hasSave
             ? SyncManager::formatTimestamp(item.localTitle.saveTime)
-            : "No local save found";
+            : (gbaVcUnsupported ? "GBA VC (AGB_FIRM) unsupported" : "No local save found");
     if (item.localTitle.hasSave && item.remoteHasSave && localIsNewer) {
       localVal += "  [NEWER]";
     }
     u32 localColor =
         !item.localTitle.hasSave
-            ? CLR_TEXT_DIM
+            ? (gbaVcUnsupported ? CLR_YELLOW : CLR_TEXT_DIM)
             : (localIsNewer ? CLR_YELLOW : CLR_TEXT_PRIMARY);
     drawMetaRow(rightY + 72.0f, "Local Save:", localVal, localColor);
 
@@ -2926,7 +2963,7 @@ void UIManager::renderMainMenuTop() {
                  0.36f, 0.36f, CLR_TEXT_DIM);
 
     std::string savePathStr = item.localTitle.savePath.empty()
-                                  ? "(Auto-detect default location)"
+                                  ? (gbaVcUnsupported ? "AGB_FIRM locked (use GodMode9 dump + Custom Save Path)" : "(Auto-detect default location)")
                                   : item.localTitle.savePath;
     C2D_Text pathVal;
     C2D_TextParse(&pathVal, m_textBuf, savePathStr.c_str());
@@ -2938,7 +2975,7 @@ void UIManager::renderMainMenuTop() {
       pScale *= (maxContentW / pW);
     }
     C2D_DrawText(&pathVal, C2D_WithColor, contentX, rightY + 138.0f, 0.5f,
-                 pScale, pScale, CLR_TEXT_SECONDARY);
+                 pScale, pScale, gbaVcUnsupported ? CLR_YELLOW : CLR_TEXT_SECONDARY);
   } else {
     // Empty filter state card
     C2D_DrawRectSolid(12.0f, 40.0f, 0.5f, 376.0f, 168.0f, CLR_BORDER_SUBTLE);
@@ -3109,6 +3146,10 @@ void UIManager::renderMainMenuBottom() {
         pillRightX -= 18.0f;
         drawPillBadge(pillRightX, rowY + 6.5f, "S", CLR_SURFACE_HEADER,
                       CLR_TEXT_SECONDARY, 0.34f, 0.43f);
+      } else if (SaveManager::isUnsupportedGbaVcTitle(item.localTitle)) {
+        pillRightX -= 28.0f;
+        drawPillBadge(pillRightX, rowY + 6.5f, "N/A", CLR_SURFACE_HEADER,
+                      CLR_YELLOW, 0.32f, 0.43f);
       }
 
       // Title text (positioned between console badge and right pills)
@@ -4216,6 +4257,7 @@ void UIManager::renderSavePickerTop() {
   std::string curSavePath = "(None / Auto-detect)";
   bool hasSave = false;
   bool isExplicitlyUnset = false;
+  bool isGbaVcUnsupported = false;
 
   if (m_syncMgr && !m_filteredLocalIndices.empty() &&
       m_selectedGameIndex < m_filteredLocalIndices.size()) {
@@ -4227,10 +4269,13 @@ void UIManager::renderSavePickerTop() {
                     : nullptr;
     isExplicitlyUnset = (mapping && mapping->customSavePathExplicit &&
                          mapping->customSavePath.empty());
+    isGbaVcUnsupported = SaveManager::isUnsupportedGbaVcTitle(item.localTitle);
     if (isExplicitlyUnset) {
       curSavePath = "(Explicitly Unset - No Save)";
     } else if (!item.localTitle.savePath.empty()) {
       curSavePath = item.localTitle.savePath;
+    } else if (isGbaVcUnsupported) {
+      curSavePath = "(AGB_FIRM locked - Select GodMode9/mGBA .sav)";
     }
     hasSave = item.localTitle.hasSave;
   }
@@ -4271,6 +4316,9 @@ void UIManager::renderSavePickerTop() {
   } else if (hasSave) {
     statusLine = "Save file verified on SD (Ready for sync)";
     statusColor = CLR_GREEN;
+  } else if (isGbaVcUnsupported) {
+    statusLine = "GBA VC (AGB_FIRM) unsupported; choose GodMode9/mGBA .sav";
+    statusColor = CLR_YELLOW;
   } else {
     statusLine = "No save file found at active path";
     statusColor = CLR_YELLOW;

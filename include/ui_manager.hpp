@@ -127,6 +127,7 @@ private:
     void finishOperationLog();
     void renderOperationLogOverlay();
     void showNotification(const std::string& title, const std::string& message, u32 accentColor = 0xFF5B45F6);
+    void showGbaVcUnsupportedNotice();
     void dismissNotification();
     void renderNotificationModal();
 

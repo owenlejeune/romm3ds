@@ -1369,7 +1369,7 @@ bool SyncManager::resetSavePathToAuto(size_t itemIndex) {
 }
 
 SyncAction SyncManager::evaluateItem(const SyncItem& item) {
-    if (item.isIgnored || !item.isMatched) {
+    if (item.isIgnored || !item.isMatched || SaveManager::isUnsupportedGbaVcTitle(item.localTitle)) {
         return SyncAction::NO_SAVES;
     }
 
@@ -1399,6 +1399,12 @@ bool SyncManager::forceUpload(SyncItem& item, LogCallback log) {
     if (!item.isMatched || !m_saveMgr || !m_netMgr) {
         emit("[ERROR] Cannot upload: Unmatched game or subsystems missing.");
         m_lastMessage = "Cannot upload: Unmatched or subsystems missing.";
+        return false;
+    }
+    if (SaveManager::isUnsupportedGbaVcTitle(item.localTitle)) {
+        emit("[ERROR] GBA VC (AGB_FIRM) saves cannot be read directly by 3DS homebrew.");
+        emit("Tip: Dump .sav with GodMode9 (agbsave.bin) and assign it via Set Custom Save Path.");
+        m_lastMessage = "GBA VC saves unsupported without Custom Save Path.";
         return false;
     }
 
@@ -1581,6 +1587,12 @@ bool SyncManager::forceDownload(SyncItem& item, LogCallback log) {
     if (!item.isMatched || !m_saveMgr || !m_netMgr) {
         emit("[ERROR] Cannot download: Unmatched game or subsystems missing.");
         m_lastMessage = "Cannot download: Unmatched or subsystems missing.";
+        return false;
+    }
+    if (SaveManager::isUnsupportedGbaVcTitle(item.localTitle)) {
+        emit("[ERROR] GBA VC (AGB_FIRM) saves cannot be written directly by 3DS homebrew.");
+        emit("Tip: Map a .sav via Set Custom Save Path (or use mGBA / open_agb_firm).");
+        m_lastMessage = "GBA VC saves unsupported without Custom Save Path.";
         return false;
     }
 

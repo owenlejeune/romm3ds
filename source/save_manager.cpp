@@ -2052,6 +2052,12 @@ std::vector<InstalledTitle> SaveManager::scanRomFiles(const std::vector<std::str
     return titles;
 }
 
+static bool hasRawSdAgbSave(uint64_t titleId, uint8_t mediaType);
+
+bool SaveManager::isUnsupportedGbaVcTitle(const InstalledTitle& title) {
+    return !title.isFileRom && title.console == "GBA" && !title.hasSave && title.savePath.empty();
+}
+
 std::vector<InstalledTitle> SaveManager::scanInstalledTitles(const std::vector<std::string>& customRomDirs) {
     loadMetadataCache();
 
@@ -2118,6 +2124,9 @@ std::vector<InstalledTitle> SaveManager::scanInstalledTitles(const std::vector<s
             title.console = determineConsole(title.productCode, tid);
 
             title.hasSave = checkSaveExists(tid, mediaType);
+            if (!title.hasSave && title.console == "3DS" && hasRawSdAgbSave(tid, mediaType)) {
+                title.console = "GBA";
+            }
             if (title.hasSave) {
                 title.saveTime = getSaveTime(title);
                 if (title.saveTime == 0) {
@@ -2300,6 +2309,28 @@ static const std::vector<std::string>& getNintendo3dsTitleDirs() {
     }
     closedir(root);
     return s_titleDirs;
+}
+
+static bool hasRawSdAgbSave(uint64_t titleId, uint8_t mediaType) {
+    if (mediaType != 1) { // MEDIATYPE_SD
+        return false;
+    }
+    uint32_t tidHigh = static_cast<uint32_t>((titleId >> 32) & 0xFFFFFFFF);
+    if (tidHigh != 0x00040000) {
+        return false;
+    }
+    char lowHex[16];
+    snprintf(lowHex, sizeof(lowHex), "%08lx", static_cast<unsigned long>(titleId & 0xFFFFFFFF));
+
+    const auto& titleDirs = getNintendo3dsTitleDirs();
+    for (const auto& baseTitleDir : titleDirs) {
+        std::string savPath = baseTitleDir + "/00040000/" + lowHex + "/data/00000001.sav";
+        struct stat st;
+        if (stat(savPath.c_str(), &st) == 0 && st.st_size > 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 time_t SaveManager::getRawSaveMtime(const InstalledTitle& title) {
@@ -2618,7 +2649,11 @@ bool SaveManager::backupSave(uint64_t titleId, const std::string& outDirectory, 
         if (hasExtArch) {
             FSUSER_CloseArchive(extArchive);
         }
-        emit("[ERROR] Failed to open 3DS save or extdata archive: " + formatResultHex(resSave));
+        if (hasRawSdAgbSave(titleId, mediaType)) {
+            emit("[ERROR] GBA Virtual Console (AGB_FIRM) saves are locked in SysNAND/encrypted SD format and cannot be accessed by 3DS homebrew.");
+        } else {
+            emit("[ERROR] Failed to open 3DS save or extdata archive: " + formatResultHex(resSave));
+        }
         return false;
     }
 
@@ -2789,7 +2824,11 @@ bool SaveManager::injectSave(uint64_t titleId, const std::string& inDirectory, u
     bool hasExtArch = R_SUCCEEDED(resExt);
 
     if (!hasSaveArch && !hasExtArch) {
-        emit("[ERROR] Failed to open 3DS save or extdata archive for injection: " + formatResultHex(resSave));
+        if (hasRawSdAgbSave(titleId, mediaType)) {
+            emit("[ERROR] GBA Virtual Console (AGB_FIRM) saves are locked in SysNAND/encrypted SD format and cannot be injected by 3DS homebrew.");
+        } else {
+            emit("[ERROR] Failed to open 3DS save or extdata archive for injection: " + formatResultHex(resSave));
+        }
         return false;
     }
 
