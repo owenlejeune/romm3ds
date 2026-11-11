@@ -53,11 +53,12 @@ public:
     static uint64_t hashRomPath(const std::string& path);
 
     time_t getRawSaveMtime(const InstalledTitle& title);
+    std::string computeSaveHash(const InstalledTitle& title);
 
     static void loadTimestampCache(const std::string& path = "");
     static void saveTimestampCache(const std::string& path = "");
     static time_t getCachedSaveTime(const std::string& titleIdHex);
-    static void setCachedSaveTime(const std::string& titleIdHex, time_t t, time_t fsMtime = 0);
+    static void setCachedSaveTime(const std::string& titleIdHex, time_t t, time_t fsMtime = 0, const std::string& saveHash = "");
 
 private:
 #if defined(__3DS__) || defined(_3DS)

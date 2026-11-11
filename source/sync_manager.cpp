@@ -1009,7 +1009,7 @@ bool SyncManager::refresh(bool forceFullRemoteRefresh) {
                     struct stat st;
                     if (stat(item.localTitle.savePath.c_str(), &st) == 0 && st.st_size > 0) {
                         item.localTitle.hasSave = true;
-                        item.localTitle.saveTime = st.st_mtime;
+                        item.localTitle.saveTime = m_saveMgr ? m_saveMgr->getSaveTime(item.localTitle) : st.st_mtime;
                     } else {
                         item.localTitle.hasSave = false;
                         item.localTitle.saveTime = 0;
@@ -1276,6 +1276,11 @@ bool SyncManager::setCustomSavePath(size_t itemIndex, const std::string& savePat
     if (stat(savePath.c_str(), &st) == 0 && st.st_size > 0) {
         item.localTitle.hasSave = true;
         item.localTitle.saveTime = st.st_mtime;
+        if (m_saveMgr) {
+            std::string saveHash = m_saveMgr->computeSaveHash(item.localTitle);
+            m_saveMgr->setCachedSaveTime(item.localTitle.titleIdHex, st.st_mtime, st.st_mtime, saveHash);
+            m_saveMgr->saveTimestampCache();
+        }
     } else {
         item.localTitle.hasSave = false;
         item.localTitle.saveTime = 0;
@@ -1550,7 +1555,8 @@ bool SyncManager::forceUpload(SyncItem& item, LogCallback log) {
         item.localTitle.saveTime = now;
         if (m_saveMgr) {
             time_t rawFsMtime = m_saveMgr->getRawSaveMtime(item.localTitle);
-            m_saveMgr->setCachedSaveTime(item.localTitle.titleIdHex, now, rawFsMtime);
+            std::string saveHash = m_saveMgr->computeSaveHash(item.localTitle);
+            m_saveMgr->setCachedSaveTime(item.localTitle.titleIdHex, now, rawFsMtime, saveHash);
             m_saveMgr->saveTimestampCache();
         }
         emit("[SUCCESS] Successfully uploaded save to RomM!");
@@ -1741,7 +1747,8 @@ bool SyncManager::forceDownload(SyncItem& item, LogCallback log) {
 
     if (m_saveMgr) {
         time_t rawFsMtime = m_saveMgr->getRawSaveMtime(item.localTitle);
-        m_saveMgr->setCachedSaveTime(item.localTitle.titleIdHex, targetTime, rawFsMtime);
+        std::string saveHash = m_saveMgr->computeSaveHash(item.localTitle);
+        m_saveMgr->setCachedSaveTime(item.localTitle.titleIdHex, targetTime, rawFsMtime, saveHash);
         m_saveMgr->saveTimestampCache();
     }
     emit("Local save time updated to: " + formatTimestamp(item.localTitle.saveTime));

@@ -117,6 +117,7 @@ std::string extractTitleString(const smdh_title_s& titleEntry) {
 struct TimestampCacheEntry {
     time_t saveTime = 0;
     time_t fsMtime = 0;
+    std::string saveHash;
 };
 static std::map<std::string, TimestampCacheEntry> s_timestampCache;
 static bool s_timestampCacheLoaded = false;
@@ -136,12 +137,13 @@ static void parseTimestampsObject(const nlohmann::json& j) {
     if (!j.is_object()) return;
     for (auto it = j.begin(); it != j.end(); ++it) {
         if (it.value().is_number()) {
-            s_timestampCache[it.key()] = { it.value().get<time_t>(), 0 };
+            s_timestampCache[it.key()] = { it.value().get<time_t>(), 0, "" };
         } else if (it.value().is_object()) {
             const auto& obj = it.value();
             time_t st = (obj.contains("save_time") && obj["save_time"].is_number()) ? obj["save_time"].get<time_t>() : 0;
             time_t fm = (obj.contains("fs_mtime") && obj["fs_mtime"].is_number()) ? obj["fs_mtime"].get<time_t>() : 0;
-            s_timestampCache[it.key()] = { st, fm };
+            std::string sh = (obj.contains("save_hash") && obj["save_hash"].is_string()) ? obj["save_hash"].get<std::string>() : "";
+            s_timestampCache[it.key()] = { st, fm, sh };
         }
     }
 }
@@ -237,10 +239,14 @@ static void saveUnifiedLocalCaches(const std::string& customPath = "") {
 
     nlohmann::json jTs = nlohmann::json::object();
     for (const auto& pair : s_timestampCache) {
-        jTs[pair.first] = {
+        nlohmann::json entryObj = {
             {"save_time", pair.second.saveTime},
             {"fs_mtime", pair.second.fsMtime}
         };
+        if (!pair.second.saveHash.empty()) {
+            entryObj["save_hash"] = pair.second.saveHash;
+        }
+        jTs[pair.first] = std::move(entryObj);
     }
     root["timestamps"] = std::move(jTs);
 
@@ -301,15 +307,16 @@ time_t SaveManager::getCachedSaveTime(const std::string& titleIdHex) {
     return 0;
 }
 
-void SaveManager::setCachedSaveTime(const std::string& titleIdHex, time_t t, time_t fsMtime) {
+void SaveManager::setCachedSaveTime(const std::string& titleIdHex, time_t t, time_t fsMtime, const std::string& saveHash) {
     if (titleIdHex.empty() || t <= 0) return;
     if (!s_timestampCacheLoaded) {
         loadTimestampCache();
     }
     auto it = s_timestampCache.find(titleIdHex);
-    if (it == s_timestampCache.end() || it->second.saveTime != t || (fsMtime > 0 && it->second.fsMtime != fsMtime)) {
-        time_t keepFsMtime = (fsMtime > 0) ? fsMtime : (it != s_timestampCache.end() ? it->second.fsMtime : 0);
-        s_timestampCache[titleIdHex] = { t, keepFsMtime };
+    time_t keepFsMtime = (fsMtime > 0) ? fsMtime : (it != s_timestampCache.end() ? it->second.fsMtime : 0);
+    std::string keepHash = !saveHash.empty() ? saveHash : (it != s_timestampCache.end() ? it->second.saveHash : "");
+    if (it == s_timestampCache.end() || it->second.saveTime != t || it->second.fsMtime != keepFsMtime || it->second.saveHash != keepHash) {
+        s_timestampCache[titleIdHex] = { t, keepFsMtime, keepHash };
         s_timestampCacheDirty = true;
     }
 }
@@ -2017,30 +2024,9 @@ std::vector<InstalledTitle> SaveManager::scanRomFiles(const std::vector<std::str
         if (!foundSave.empty()) {
             title.savePath = foundSave;
             title.hasSave = true;
-
-            time_t matchedMtime = 0;
-            std::string lowerBase = title.name;
-            for (char& c : lowerBase) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            auto it = s_savesByBaseName.find(lowerBase);
-            if (it != s_savesByBaseName.end()) {
-                for (const auto& e : it->second) {
-                    if (e.path == foundSave) {
-                        matchedMtime = e.mtime;
-                        break;
-                    }
-                }
-            }
-            if (matchedMtime > 0) {
-                title.saveTime = matchedMtime;
-                setCachedSaveTime(title.titleIdHex, matchedMtime);
-            } else {
-                struct stat st;
-                if (stat(foundSave.c_str(), &st) == 0 && st.st_size > 0 && st.st_mtime > 0) {
-                    title.saveTime = st.st_mtime;
-                    setCachedSaveTime(title.titleIdHex, st.st_mtime);
-                } else {
-                    title.saveTime = getCachedSaveTime(title.titleIdHex);
-                }
+            title.saveTime = getSaveTime(title);
+            if (title.saveTime == 0) {
+                title.saveTime = getCachedSaveTime(title.titleIdHex);
             }
         } else {
             title.hasSave = false;
@@ -2128,33 +2114,9 @@ std::vector<InstalledTitle> SaveManager::scanInstalledTitles(const std::vector<s
                 if (!sdSave.empty()) {
                     title.savePath = sdSave;
                     title.hasSave = true;
-
-                    time_t matchedMtime = 0;
-                    std::string lowerTitleName;
-                    for (char c : title.name) {
-                        lowerTitleName += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-                    }
-                    auto sIt = s_savesByBaseName.find(lowerTitleName);
-                    if (sIt != s_savesByBaseName.end()) {
-                        for (const auto& e : sIt->second) {
-                            if (e.path == sdSave) {
-                                matchedMtime = e.mtime;
-                                break;
-                            }
-                        }
-                    }
-
-                    if (matchedMtime > 0) {
-                        title.saveTime = matchedMtime;
-                        setCachedSaveTime(title.titleIdHex, matchedMtime);
-                    } else {
-                        struct stat st;
-                        if (stat(sdSave.c_str(), &st) == 0 && st.st_size > 0 && st.st_mtime > 0) {
-                            title.saveTime = st.st_mtime;
-                            setCachedSaveTime(title.titleIdHex, st.st_mtime);
-                        } else {
-                            title.saveTime = getCachedSaveTime(title.titleIdHex);
-                        }
+                    title.saveTime = getSaveTime(title);
+                    if (title.saveTime == 0) {
+                        title.saveTime = getCachedSaveTime(title.titleIdHex);
                     }
                 }
             }
@@ -2344,26 +2306,175 @@ time_t SaveManager::getRawSaveMtime(const InstalledTitle& title) {
     return newestData;
 }
 
+namespace {
+struct DualHashState {
+    uint64_t h1 = 14695981039346656037ULL;
+    uint64_t h2 = 0x9e3779b97f4a7c15ULL;
+    uint64_t totalBytes = 0;
+
+    void feedBytes(const uint8_t* data, size_t len) {
+        for (size_t i = 0; i < len; ++i) {
+            uint64_t b = data[i];
+            h1 ^= b;
+            h1 *= 1099511628211ULL;
+
+            h2 ^= b + (i & 0xFF);
+            h2 *= 0x100000001b3ULL;
+            h2 ^= (h2 >> 31);
+        }
+        totalBytes += len;
+    }
+
+    void feedMetadata(const std::string& s, uint64_t val) {
+        feedBytes(reinterpret_cast<const uint8_t*>(s.data()), s.size());
+        uint8_t sep = '|';
+        feedBytes(&sep, 1);
+        uint8_t valBytes[8];
+        for (int i = 0; i < 8; ++i) {
+            valBytes[i] = static_cast<uint8_t>((val >> (i * 8)) & 0xFF);
+        }
+        feedBytes(valBytes, 8);
+    }
+
+    std::string finish() const {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%llx:%016llx%016llx",
+                      static_cast<unsigned long long>(totalBytes),
+                      static_cast<unsigned long long>(h1),
+                      static_cast<unsigned long long>(h2));
+        return std::string(buf);
+    }
+};
+} // namespace
+
+std::string SaveManager::computeSaveHash(const InstalledTitle& title) {
+    if (title.isFileRom || !title.savePath.empty()) {
+        std::string savePath = title.savePath;
+        if (savePath.empty() && title.isFileRom) {
+            savePath = findSaveFileForRom(title.romPath, title.console);
+        }
+        if (savePath.empty()) {
+            return "";
+        }
+
+        FILE* fp = fopen(savePath.c_str(), "rb");
+        if (!fp) {
+            return "";
+        }
+
+        DualHashState hasher;
+        constexpr size_t CHUNK_SIZE = 32768;
+        std::vector<uint8_t> buf(CHUNK_SIZE);
+        size_t n = 0;
+        while ((n = fread(buf.data(), 1, buf.size(), fp)) > 0) {
+            hasher.feedBytes(buf.data(), n);
+        }
+        fclose(fp);
+        return hasher.finish();
+    }
+
+#if defined(__3DS__) || defined(_3DS)
+    FS_Archive archive = 0;
+    Result res = openSaveArchive(&archive, title.titleId, title.mediaType);
+    if (R_FAILED(res)) {
+        return "";
+    }
+
+    auto files = listArchiveFiles(archive, "/");
+    std::sort(files.begin(), files.end(),
+              [](const std::pair<std::string, u64>& a, const std::pair<std::string, u64>& b) {
+                  return a.first < b.first;
+              });
+
+    DualHashState hasher;
+    constexpr u32 BUFFER_SIZE = 0x8000;
+    std::vector<u8> buffer(BUFFER_SIZE);
+
+    for (const auto& f : files) {
+        hasher.feedMetadata(f.first, f.second);
+
+        Handle srcFile = 0;
+        FS_Path fPath = fsMakePath(PATH_ASCII, f.first.c_str());
+        if (R_SUCCEEDED(FSUSER_OpenFile(&srcFile, archive, fPath, FS_OPEN_READ, 0))) {
+            u64 offset = 0;
+            u32 bytesRead = 0;
+            while (R_SUCCEEDED(FSFILE_Read(srcFile, &bytesRead, offset, buffer.data(), BUFFER_SIZE)) && bytesRead > 0) {
+                hasher.feedBytes(buffer.data(), bytesRead);
+                offset += bytesRead;
+            }
+            FSFILE_Close(srcFile);
+        }
+    }
+
+    FSUSER_CloseArchive(archive);
+    return hasher.finish();
+#else
+    return "";
+#endif
+}
+
 time_t SaveManager::getSaveTime(const InstalledTitle& title) {
     time_t rawMtime = getRawSaveMtime(title);
+    std::string currentHash = computeSaveHash(title);
 
     if (!s_timestampCacheLoaded) {
         loadTimestampCache();
     }
     auto it = s_timestampCache.find(title.titleIdHex);
     if (it != s_timestampCache.end() && it->second.saveTime > 0) {
-        // If the save file on disk was modified by user playing and saving after our last sync
-        if (rawMtime > 0 && it->second.fsMtime > 0 && rawMtime > it->second.fsMtime + 2) {
-            it->second = { rawMtime, rawMtime };
+        bool hashChanged = (!currentHash.empty() && !it->second.saveHash.empty() && currentHash != it->second.saveHash);
+        bool mtimeChanged = (rawMtime > 0 && it->second.fsMtime > 0 && rawMtime > it->second.fsMtime + 2);
+
+        if (hashChanged) {
+            // Content inside save archive or save file changed since last sync/scan
+            time_t now = time(nullptr);
+            time_t newTime = std::max(now, rawMtime);
+            if (newTime <= it->second.saveTime + 5) {
+                newTime = it->second.saveTime + 10;
+            }
+            it->second.saveTime = newTime;
+            if (rawMtime > 0) {
+                it->second.fsMtime = rawMtime;
+            }
+            it->second.saveHash = currentHash;
+            s_timestampCacheDirty = true;
+            return newTime;
+        }
+
+        if (!currentHash.empty() && it->second.saveHash.empty()) {
+            // Upgrade legacy cache entry to store baseline content hash
+            it->second.saveHash = currentHash;
+            if (mtimeChanged) {
+                time_t now = time(nullptr);
+                time_t newTime = std::max(now, rawMtime);
+                if (newTime <= it->second.saveTime + 5) {
+                    newTime = it->second.saveTime + 10;
+                }
+                it->second.saveTime = newTime;
+                it->second.fsMtime = rawMtime;
+            }
+            s_timestampCacheDirty = true;
+            return it->second.saveTime;
+        }
+
+        if (currentHash.empty() && mtimeChanged) {
+            it->second.saveTime = rawMtime;
+            it->second.fsMtime = rawMtime;
             s_timestampCacheDirty = true;
             return rawMtime;
+        }
+
+        if (rawMtime > 0 && it->second.fsMtime != rawMtime) {
+            it->second.fsMtime = rawMtime;
+            s_timestampCacheDirty = true;
         }
         return it->second.saveTime;
     }
 
-    if (rawMtime > 0) {
-        setCachedSaveTime(title.titleIdHex, rawMtime, rawMtime);
-        return rawMtime;
+    time_t initialTime = (rawMtime > 0) ? rawMtime : (!currentHash.empty() ? time(nullptr) : 0);
+    if (initialTime > 0) {
+        setCachedSaveTime(title.titleIdHex, initialTime, rawMtime, currentHash);
+        return initialTime;
     }
 
     return 0;
