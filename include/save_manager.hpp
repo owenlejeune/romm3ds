@@ -63,7 +63,8 @@ public:
 private:
 #if defined(__3DS__) || defined(_3DS)
     bool copyArchiveDirToFs(uint64_t archiveHandle, const std::string& archivePath, const std::string& fsDestPath);
-    bool copyFsDirToArchive(uint64_t archiveHandle, const std::string& fsSrcPath, const std::string& archiveDestPath, LogCallback log = nullptr);
+    bool copyFsDirToArchive(uint64_t archiveHandle, const std::string& fsSrcPath, const std::string& archiveDestPath,
+                            LogCallback log = nullptr, bool isExtData = false, const std::string& skipEntry = "");
     std::string getTitleNameFromSmdh(uint64_t titleId, uint8_t mediaType);
 #endif
 };

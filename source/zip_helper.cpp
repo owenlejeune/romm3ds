@@ -92,6 +92,11 @@ void ZipHelper::unnestDirectoryIfSingle(const std::string& destDir, LogCallback 
         closedir(d);
 
         if (files == 0 && dirs == 1 && !singleSubdir.empty()) {
+            size_t slash = singleSubdir.find_last_of("/\\");
+            std::string dirName = (slash != std::string::npos) ? singleSubdir.substr(slash + 1) : singleSubdir;
+            if (dirName == "_extdata") {
+                break;
+            }
             emit("Flattening nested save directory: " + singleSubdir);
             DIR* sd = opendir(singleSubdir.c_str());
             if (!sd) break;

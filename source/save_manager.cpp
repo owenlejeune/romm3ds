@@ -1035,7 +1035,8 @@ bool SaveManager::copyArchiveDirToFs(uint64_t archiveHandle, const std::string& 
     return success;
 }
 
-bool SaveManager::copyFsDirToArchive(uint64_t archiveHandle, const std::string& fsSrcPath, const std::string& archiveDestPath, LogCallback log) {
+bool SaveManager::copyFsDirToArchive(uint64_t archiveHandle, const std::string& fsSrcPath, const std::string& archiveDestPath,
+                                     LogCallback log, bool isExtData, const std::string& skipEntry) {
     auto emit = [&](const std::string& m) { if (log) log(m); };
     FS_Archive archive = static_cast<FS_Archive>(archiveHandle);
     DIR* dir = opendir(fsSrcPath.c_str());
@@ -1061,6 +1062,10 @@ bool SaveManager::copyFsDirToArchive(uint64_t archiveHandle, const std::string& 
             continue;
         }
 
+        if (!skipEntry.empty() && name == skipEntry) {
+            continue;
+        }
+
         itemsFound++;
         std::string srcItem = fsSrcPath + "/" + name;
         std::string dstItem = (archiveDestPath == "/") ? ("/" + name) : (archiveDestPath + "/" + name);
@@ -1079,7 +1084,7 @@ bool SaveManager::copyFsDirToArchive(uint64_t archiveHandle, const std::string& 
                 // If directory already exists, it is not fatal
                 emit("[DEBUG] FSUSER_CreateDirectory returned " + formatResultHex(resDir) + " for " + dstItem);
             }
-            if (!copyFsDirToArchive(archiveHandle, srcItem, dstItem, log)) {
+            if (!copyFsDirToArchive(archiveHandle, srcItem, dstItem, log, isExtData, "")) {
                 success = false;
             }
         } else {
@@ -1099,19 +1104,28 @@ bool SaveManager::copyFsDirToArchive(uint64_t archiveHandle, const std::string& 
             FS_Path fPath = fsMakePath(PATH_ASCII, dstItem.c_str());
 
             Handle dstFile = 0;
-            // First attempt: Open existing file with write privileges (preserves DISA container file entry)
-            Result resOpen = FSUSER_OpenFile(&dstFile, archive, fPath, FS_OPEN_WRITE, 0);
-            if (R_SUCCEEDED(resOpen)) {
-                // Truncate / adjust to target file size
-                Result resSize = FSFILE_SetSize(dstFile, fileSize);
-                if (R_FAILED(resSize)) {
-                    emit("[DEBUG] FSFILE_SetSize returned " + formatResultHex(resSize) + " for " + dstItem);
+            bool needCreate = isExtData;
+            Result resOpen = -1;
+            if (!isExtData) {
+                // First attempt: Open existing file with write privileges (preserves DISA container file entry)
+                resOpen = FSUSER_OpenFile(&dstFile, archive, fPath, FS_OPEN_WRITE, 0);
+                if (R_SUCCEEDED(resOpen)) {
+                    Result resSize = FSFILE_SetSize(dstFile, fileSize);
+                    if (R_FAILED(resSize)) {
+                        emit("[DEBUG] FSFILE_SetSize returned " + formatResultHex(resSize) + " for " + dstItem);
+                    }
+                } else {
+                    needCreate = true;
                 }
-            } else {
-                // File does not exist yet; create it
+            }
+
+            if (needCreate) {
+                if (isExtData) {
+                    // ARCHIVE_EXTDATA requires explicit delete + sized create rather than FSFILE_SetSize
+                    FSUSER_DeleteFile(archive, fPath);
+                }
                 Result resCreate = FSUSER_CreateFile(archive, fPath, 0, fileSize);
-                if (R_FAILED(resCreate)) {
-                    // If creation failed because file already exists, attempt delete and recreate
+                if (R_FAILED(resCreate) && !isExtData) {
                     FSUSER_DeleteFile(archive, fPath);
                     resCreate = FSUSER_CreateFile(archive, fPath, 0, fileSize);
                 }
@@ -2161,6 +2175,14 @@ std::vector<InstalledTitle> SaveManager::scanInstalledTitles(const std::vector<s
     return outTitles;
 }
 
+static uint32_t getExtDataId(uint64_t titleId) {
+    uint32_t tidHigh = static_cast<uint32_t>((titleId >> 32) & 0xFFFFFFFF);
+    if ((tidHigh & 0xFFFF0000) == 0x00048000 || tidHigh == 0x0004000E || tidHigh == 0x0004008C) {
+        return 0;
+    }
+    return static_cast<uint32_t>((titleId >> 8) & 0xFFFFF);
+}
+
 #if defined(__3DS__) || defined(_3DS)
 static Result openSaveArchive(FS_Archive* archive, uint64_t titleId, uint8_t mediaType) {
     if (mediaType == MEDIATYPE_NAND) {
@@ -2180,6 +2202,23 @@ static Result openSaveArchive(FS_Archive* archive, uint64_t titleId, uint8_t med
         return FSUSER_OpenArchive(archive, ARCHIVE_USER_SAVEDATA, path);
     }
 }
+
+static Result openExtDataArchive(FS_Archive* archive, uint64_t titleId, uint8_t mediaType) {
+    if (mediaType == MEDIATYPE_NAND) {
+        return -1;
+    }
+    uint32_t extId = getExtDataId(titleId);
+    if (extId == 0) {
+        return -1;
+    }
+    u32 pathData[3] = {
+        MEDIATYPE_SD,
+        extId,
+        0
+    };
+    FS_Path path = { PATH_BINARY, 12, pathData };
+    return FSUSER_OpenArchive(archive, ARCHIVE_EXTDATA, path);
+}
 #endif
 
 bool SaveManager::checkSaveExists(uint64_t titleId, uint8_t mediaType) {
@@ -2189,6 +2228,12 @@ bool SaveManager::checkSaveExists(uint64_t titleId, uint8_t mediaType) {
     if (R_SUCCEEDED(res)) {
         FSUSER_CloseArchive(archive);
         return true;
+    }
+    Result extRes = openExtDataArchive(&archive, titleId, mediaType);
+    if (R_SUCCEEDED(extRes)) {
+        bool hasFiles = !listArchiveFiles(archive, "/").empty();
+        FSUSER_CloseArchive(archive);
+        return hasFiles;
     }
     return false;
 #else
@@ -2277,6 +2322,44 @@ time_t SaveManager::getRawSaveMtime(const InstalledTitle& title) {
     snprintf(highHex, sizeof(highHex), "%08lx", (unsigned long)((title.titleId >> 32) & 0xFFFFFFFF));
     snprintf(lowHex, sizeof(lowHex), "%08lx", (unsigned long)(title.titleId & 0xFFFFFFFF));
 
+    uint32_t extId = (title.mediaType != MEDIATYPE_NAND) ? getExtDataId(title.titleId) : 0;
+    char extLowHex[16] = {0};
+    if (extId != 0) {
+        snprintf(extLowHex, sizeof(extLowHex), "%08lx", static_cast<unsigned long>(extId));
+    }
+
+    auto scanNewestInDir = [](const std::string& dirPath, bool recurseOneLevel, time_t& newest) {
+        DIR* dd = opendir(dirPath.c_str());
+        if (!dd) return;
+        struct dirent* de = nullptr;
+        struct stat dst;
+        while ((de = readdir(dd)) != nullptr) {
+            if (de->d_name[0] == '.') continue;
+            std::string df = dirPath + "/" + de->d_name;
+            if (stat(df.c_str(), &dst) == 0) {
+                if (dst.st_mtime > newest) {
+                    newest = dst.st_mtime;
+                }
+                if (recurseOneLevel && S_ISDIR(dst.st_mode)) {
+                    DIR* sub = opendir(df.c_str());
+                    if (sub) {
+                        struct dirent* sde = nullptr;
+                        while ((sde = readdir(sub)) != nullptr) {
+                            if (sde->d_name[0] == '.') continue;
+                            std::string sdf = df + "/" + sde->d_name;
+                            struct stat sdst;
+                            if (stat(sdf.c_str(), &sdst) == 0 && sdst.st_mtime > newest) {
+                                newest = sdst.st_mtime;
+                            }
+                        }
+                        closedir(sub);
+                    }
+                }
+            }
+        }
+        closedir(dd);
+    };
+
     const auto& titleDirs = getNintendo3dsTitleDirs();
     time_t newestData = 0;
     for (const auto& baseTitleDir : titleDirs) {
@@ -2287,20 +2370,15 @@ time_t SaveManager::getRawSaveMtime(const InstalledTitle& title) {
             if (dst.st_mtime > newestData) {
                 newestData = dst.st_mtime;
             }
-            continue;
+        } else {
+            scanNewestInDir(dataDir, false, newestData);
         }
 
-        DIR* dd = opendir(dataDir.c_str());
-        if (dd) {
-            struct dirent* de = nullptr;
-            while ((de = readdir(dd)) != nullptr) {
-                if (de->d_name[0] == '.') continue;
-                std::string df = dataDir + "/" + de->d_name;
-                if (stat(df.c_str(), &dst) == 0 && dst.st_mtime > newestData) {
-                    newestData = dst.st_mtime;
-                }
-            }
-            closedir(dd);
+        if (extId != 0 && baseTitleDir.size() >= 6 &&
+            baseTitleDir.compare(baseTitleDir.size() - 6, 6, "/title") == 0) {
+            std::string extDir = baseTitleDir.substr(0, baseTitleDir.size() - 6) +
+                                 "/extdata/00000000/" + extLowHex;
+            scanNewestInDir(extDir, true, newestData);
         }
     }
     return newestData;
@@ -2347,6 +2425,35 @@ struct DualHashState {
 };
 } // namespace
 
+#if defined(__3DS__) || defined(_3DS)
+static void hashArchiveFiles(FS_Archive archive,
+                             std::vector<std::pair<std::string, u64>>& files,
+                             const std::string& metaPrefix,
+                             DualHashState& hasher,
+                             std::vector<u8>& buffer) {
+    std::sort(files.begin(), files.end(),
+              [](const std::pair<std::string, u64>& a, const std::pair<std::string, u64>& b) {
+                  return a.first < b.first;
+              });
+
+    for (const auto& f : files) {
+        hasher.feedMetadata(metaPrefix.empty() ? f.first : (metaPrefix + f.first), f.second);
+
+        Handle srcFile = 0;
+        FS_Path fPath = fsMakePath(PATH_ASCII, f.first.c_str());
+        if (R_SUCCEEDED(FSUSER_OpenFile(&srcFile, archive, fPath, FS_OPEN_READ, 0))) {
+            u64 offset = 0;
+            u32 bytesRead = 0;
+            while (R_SUCCEEDED(FSFILE_Read(srcFile, &bytesRead, offset, buffer.data(), buffer.size())) && bytesRead > 0) {
+                hasher.feedBytes(buffer.data(), bytesRead);
+                offset += bytesRead;
+            }
+            FSFILE_Close(srcFile);
+        }
+    }
+}
+#endif
+
 std::string SaveManager::computeSaveHash(const InstalledTitle& title) {
     if (title.isFileRom || !title.savePath.empty()) {
         std::string savePath = title.savePath;
@@ -2374,39 +2481,32 @@ std::string SaveManager::computeSaveHash(const InstalledTitle& title) {
     }
 
 #if defined(__3DS__) || defined(_3DS)
-    FS_Archive archive = 0;
-    Result res = openSaveArchive(&archive, title.titleId, title.mediaType);
-    if (R_FAILED(res)) {
-        return "";
-    }
-
-    auto files = listArchiveFiles(archive, "/");
-    std::sort(files.begin(), files.end(),
-              [](const std::pair<std::string, u64>& a, const std::pair<std::string, u64>& b) {
-                  return a.first < b.first;
-              });
-
     DualHashState hasher;
     constexpr u32 BUFFER_SIZE = 0x8000;
     std::vector<u8> buffer(BUFFER_SIZE);
 
-    for (const auto& f : files) {
-        hasher.feedMetadata(f.first, f.second);
-
-        Handle srcFile = 0;
-        FS_Path fPath = fsMakePath(PATH_ASCII, f.first.c_str());
-        if (R_SUCCEEDED(FSUSER_OpenFile(&srcFile, archive, fPath, FS_OPEN_READ, 0))) {
-            u64 offset = 0;
-            u32 bytesRead = 0;
-            while (R_SUCCEEDED(FSFILE_Read(srcFile, &bytesRead, offset, buffer.data(), BUFFER_SIZE)) && bytesRead > 0) {
-                hasher.feedBytes(buffer.data(), bytesRead);
-                offset += bytesRead;
-            }
-            FSFILE_Close(srcFile);
-        }
+    FS_Archive saveArchive = 0;
+    bool hasSaveArch = R_SUCCEEDED(openSaveArchive(&saveArchive, title.titleId, title.mediaType));
+    if (hasSaveArch) {
+        auto saveFiles = listArchiveFiles(saveArchive, "/");
+        hashArchiveFiles(saveArchive, saveFiles, "", hasher, buffer);
+        FSUSER_CloseArchive(saveArchive);
     }
 
-    FSUSER_CloseArchive(archive);
+    FS_Archive extArchive = 0;
+    bool hasExtFiles = false;
+    if (R_SUCCEEDED(openExtDataArchive(&extArchive, title.titleId, title.mediaType))) {
+        auto extFiles = listArchiveFiles(extArchive, "/");
+        if (!extFiles.empty()) {
+            hasExtFiles = true;
+            hashArchiveFiles(extArchive, extFiles, "ext:", hasher, buffer);
+        }
+        FSUSER_CloseArchive(extArchive);
+    }
+
+    if (!hasSaveArch && !hasExtFiles) {
+        return "";
+    }
     return hasher.finish();
 #else
     return "";
@@ -2505,16 +2605,46 @@ static std::string detectGbaSaveType(const std::string& romPath) {
 bool SaveManager::backupSave(uint64_t titleId, const std::string& outDirectory, uint8_t mediaType, LogCallback log) {
     auto emit = [&](const std::string& m) { if (log) log(m); };
 #if defined(__3DS__) || defined(_3DS)
-    FS_Archive archive = 0;
-    Result res = openSaveArchive(&archive, titleId, mediaType);
-    if (R_FAILED(res)) {
-        emit("[ERROR] Failed to open 3DS save archive: " + formatResultHex(res));
+    FS_Archive saveArchive = 0;
+    Result resSave = openSaveArchive(&saveArchive, titleId, mediaType);
+    bool hasSaveArch = R_SUCCEEDED(resSave);
+
+    FS_Archive extArchive = 0;
+    Result resExt = openExtDataArchive(&extArchive, titleId, mediaType);
+    bool hasExtArch = R_SUCCEEDED(resExt);
+    bool hasExtFiles = hasExtArch && !listArchiveFiles(extArchive, "/").empty();
+
+    if (!hasSaveArch && !hasExtFiles) {
+        if (hasExtArch) {
+            FSUSER_CloseArchive(extArchive);
+        }
+        emit("[ERROR] Failed to open 3DS save or extdata archive: " + formatResultHex(resSave));
         return false;
     }
 
-    emit("Backing up 3DS save archive to: " + outDirectory);
-    bool success = copyArchiveDirToFs(archive, "/", outDirectory);
-    FSUSER_CloseArchive(archive);
+    bool success = true;
+    if (hasSaveArch) {
+        emit("Backing up 3DS save archive to: " + outDirectory);
+        success = copyArchiveDirToFs(saveArchive, "/", outDirectory);
+        FSUSER_CloseArchive(saveArchive);
+
+        if (success && hasExtFiles) {
+            std::string extOutDir = outDirectory + "/_extdata";
+            ConfigManager::ensureDirectories(extOutDir + "/");
+            emit("Backing up 3DS extdata archive to: " + extOutDir);
+            if (!copyArchiveDirToFs(extArchive, "/", extOutDir)) {
+                success = false;
+            }
+        }
+    } else {
+        emit("Backing up 3DS extdata archive to: " + outDirectory);
+        success = copyArchiveDirToFs(extArchive, "/", outDirectory);
+    }
+
+    if (hasExtArch) {
+        FSUSER_CloseArchive(extArchive);
+    }
+
     emit(success ? "[OK] Archive backup completed." : "[ERROR] Failed copying archive files.");
     return success;
 #else
@@ -2633,47 +2763,87 @@ bool SaveManager::injectSave(uint64_t titleId, const std::string& inDirectory, u
         emit("[ERROR] Could not open staging directory: " + inDirectory);
     }
 
-    FS_Archive archive = 0;
-    Result res = openSaveArchive(&archive, titleId, mediaType);
-    if (R_FAILED(res)) {
-        emit("[ERROR] Failed to open 3DS save archive for injection: " + formatResultHex(res));
+    std::string extSubDir = inDirectory + "/_extdata";
+    struct stat extSubSt;
+    bool hasExtSubdir = (stat(extSubDir.c_str(), &extSubSt) == 0 && S_ISDIR(extSubSt.st_mode));
+    bool hasRootEntries = false;
+    if (DIR* checkDir = opendir(inDirectory.c_str())) {
+        struct dirent* de = nullptr;
+        while ((de = readdir(checkDir)) != nullptr) {
+            std::string en = de->d_name;
+            if (en == "." || en == ".." || en[0] == '.' || en == "_extdata") {
+                continue;
+            }
+            hasRootEntries = true;
+            break;
+        }
+        closedir(checkDir);
+    }
+
+    FS_Archive saveArchive = 0;
+    Result resSave = openSaveArchive(&saveArchive, titleId, mediaType);
+    bool hasSaveArch = R_SUCCEEDED(resSave);
+
+    FS_Archive extArchive = 0;
+    Result resExt = openExtDataArchive(&extArchive, titleId, mediaType);
+    bool hasExtArch = R_SUCCEEDED(resExt);
+
+    if (!hasSaveArch && !hasExtArch) {
+        emit("[ERROR] Failed to open 3DS save or extdata archive for injection: " + formatResultHex(resSave));
         return false;
     }
 
-    // Inspect existing files in archive for debugging comparison
-    auto existingFiles = listArchiveFiles(archive, "/");
-    if (!existingFiles.empty()) {
-        std::string existingList;
-        for (size_t i = 0; i < existingFiles.size(); ++i) {
-            if (i > 0) existingList += ", ";
-            existingList += existingFiles[i].first + " (" + std::to_string(existingFiles[i].second) + " B)";
-            if (i >= 5 && existingFiles.size() > 6) {
-                existingList += " ... (" + std::to_string(existingFiles.size() - 6) + " more)";
-                break;
+    if (hasExtSubdir && !hasExtArch) {
+        if (hasSaveArch) {
+            FSUSER_CloseArchive(saveArchive);
+        }
+        emit("[ERROR] Backup contains extdata (_extdata/) but 3DS extdata archive could not be opened: " + formatResultHex(resExt));
+        return false;
+    }
+
+    auto logExistingFiles = [&](FS_Archive arch, const std::string& label) {
+        auto existingFiles = listArchiveFiles(arch, "/");
+        if (!existingFiles.empty()) {
+            std::string existingList;
+            for (size_t i = 0; i < existingFiles.size(); ++i) {
+                if (i > 0) existingList += ", ";
+                existingList += existingFiles[i].first + " (" + std::to_string(existingFiles[i].second) + " B)";
+                if (i >= 5 && existingFiles.size() > 6) {
+                    existingList += " ... (" + std::to_string(existingFiles.size() - 6) + " more)";
+                    break;
+                }
+            }
+            emit("Existing " + label + " files: " + existingList);
+        } else {
+            emit("Existing " + label + " files: (empty or could not enumerate)");
+        }
+    };
+
+    bool success = true;
+    bool injectedSave = false;
+
+    if (hasSaveArch) {
+        if (hasRootEntries) {
+            logExistingFiles(saveArchive, "archive");
+            emit("Writing save files into 3DS archive...");
+            success = copyFsDirToArchive(saveArchive, inDirectory, "/", log, false, "_extdata");
+            if (success) {
+                Result resCommit = FSUSER_ControlArchive(saveArchive, ARCHIVE_ACTION_COMMIT_SAVE_DATA, nullptr, 0, nullptr, 0);
+                if (R_SUCCEEDED(resCommit)) {
+                    emit("[OK] Committed save data to 3DS archive.");
+                    injectedSave = true;
+                } else {
+                    emit("[ERROR] Failed committing save data to 3DS archive: " + formatResultHex(resCommit));
+                    success = false;
+                }
+            } else {
+                emit("[ERROR] Failed writing save files to 3DS archive.");
             }
         }
-        emit("Existing archive files: " + existingList);
-    } else {
-        emit("Existing archive files: (empty or could not enumerate)");
+        FSUSER_CloseArchive(saveArchive);
     }
 
-    emit("Writing save files into 3DS archive...");
-    bool success = copyFsDirToArchive(archive, inDirectory, "/", log);
-    if (success) {
-        Result resCommit = FSUSER_ControlArchive(archive, ARCHIVE_ACTION_COMMIT_SAVE_DATA, nullptr, 0, nullptr, 0);
-        if (R_SUCCEEDED(resCommit)) {
-            emit("[OK] Committed save data to 3DS archive.");
-        } else {
-            emit("[ERROR] Failed committing save data to 3DS archive: " + formatResultHex(resCommit));
-            success = false;
-        }
-    } else {
-        emit("[ERROR] Failed writing save files to 3DS archive.");
-    }
-
-    FSUSER_CloseArchive(archive);
-
-    if (success) {
+    if (success && injectedSave) {
         // Clear Anti-Rollback Secure Value for 3DS titles (Pokémon, Animal Crossing, etc.)
         u64 uniqueId = (titleId >> 8) & 0xFFFFF;
         u8 existed = 0;
@@ -2687,6 +2857,21 @@ bool SaveManager::injectSave(uint64_t titleId, const std::string& inDirectory, u
         } else {
             emit("[DEBUG] FSUSER_ControlSecureSave returned " + formatResultHex(resSec));
         }
+    }
+
+    if (hasExtArch) {
+        if (success && (hasExtSubdir || (!hasSaveArch && hasRootEntries))) {
+            std::string extSrc = hasExtSubdir ? extSubDir : inDirectory;
+            logExistingFiles(extArchive, "extdata");
+            emit("Writing extdata files into 3DS extdata archive...");
+            if (copyFsDirToArchive(extArchive, extSrc, "/", log, true, "")) {
+                emit("[OK] Wrote extdata to 3DS extdata archive.");
+            } else {
+                emit("[ERROR] Failed writing extdata files to 3DS extdata archive.");
+                success = false;
+            }
+        }
+        FSUSER_CloseArchive(extArchive);
     }
 
     return success;

@@ -1496,7 +1496,9 @@ bool SyncManager::forceUpload(SyncItem& item, LogCallback log) {
             // Determine appropriate filename for single regular save file
             size_t slashPos = targetFile.find_last_of("/\\");
             std::string localBaseName = (slashPos != std::string::npos) ? targetFile.substr(slashPos + 1) : targetFile;
-            if (localBaseName.find('.') != std::string::npos && localBaseName != "main") {
+            if (!localBaseName.empty() && localBaseName != "main" &&
+                (localBaseName.find('.') != std::string::npos ||
+                 (item.localTitle.console == "3DS" && item.localTitle.savePath.empty()))) {
                 remoteFileName = localBaseName;
             } else if (item.localTitle.console == "3DS" && item.localTitle.savePath.empty()) {
                 remoteFileName = "main";
