@@ -504,6 +504,24 @@ void UIManager::openServerSettings() {
 }
 
 void UIManager::executeSaveAction() {
+  auto trimStr = [](std::string& s) {
+    size_t start = s.find_first_not_of(" \t\r\n");
+    if (start == std::string::npos) {
+      s.clear();
+      return;
+    }
+    size_t end = s.find_last_not_of(" \t\r\n");
+    s = s.substr(start, end - start + 1);
+  };
+
+  trimStr(m_enteredEndpoint);
+  trimStr(m_enteredApiKey);
+  if (m_enteredApiKey.size() > 7 &&
+      strncasecmp(m_enteredApiKey.c_str(), "Bearer ", 7) == 0) {
+    m_enteredApiKey = m_enteredApiKey.substr(7);
+    trimStr(m_enteredApiKey);
+  }
+
   if (m_enteredEndpoint.empty() || m_enteredEndpoint == "http://") {
     m_statusMessage = "Error: Endpoint cannot be empty!";
     return;
@@ -521,7 +539,7 @@ void UIManager::executeSaveAction() {
     m_configMgr->setApiKey(m_enteredApiKey);
 
     if (m_netMgr) {
-      m_statusMessage = "Testing server connection...";
+      m_statusMessage = "Testing server connection & auth...";
       render();
 
       NetworkResult res = m_netMgr->testConnection();
@@ -529,6 +547,10 @@ void UIManager::executeSaveAction() {
         m_configMgr->setEndpoint(prevEndpoint);
         m_configMgr->setApiKey(prevApiKey);
         m_statusMessage = "Conn Failed: " + res.errorMessage;
+        bool isAuthErr = (res.httpCode == 401 || res.httpCode == 403);
+        showNotification(isAuthErr ? "Authentication Failed" : "Connection Failed",
+                         res.errorMessage + "\n\nEndpoint: " + m_enteredEndpoint,
+                         CLR_DANGER);
         return;
       }
     }
@@ -1259,7 +1281,9 @@ bool UIManager::handleSheetInput(u32 kDown, const touchPosition &touch) {
         showNotification("Server Online", "Successfully connected to RomM server!\n\nEndpoint: " + ep, CLR_GREEN);
       } else {
         std::string ep = m_configMgr ? m_configMgr->getConfig().serverEndpoint : "";
-        showNotification("Server Unreachable", "Failed to connect to RomM server:\n\n" + res.errorMessage + "\n\nEndpoint: " + ep, CLR_DANGER);
+        bool isAuthErr = (res.httpCode == 401 || res.httpCode == 403);
+        showNotification(isAuthErr ? "Authentication Failed" : "Server Unreachable",
+                         "Failed to connect to RomM server:\n\n" + res.errorMessage + "\n\nEndpoint: " + ep, CLR_DANGER);
       }
       break;
     }

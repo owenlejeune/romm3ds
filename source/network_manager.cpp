@@ -187,14 +187,33 @@ void* NetworkManager::acquireCurlHandle() {
 
 std::string NetworkManager::getBaseEndpoint() const {
     if (m_configMgr) {
-        return m_configMgr->getConfig().serverEndpoint;
+        std::string ep = m_configMgr->getConfig().serverEndpoint;
+        size_t start = ep.find_first_not_of(" \t\r\n");
+        if (start == std::string::npos) return "";
+        size_t end = ep.find_last_not_of(" \t\r\n");
+        return ep.substr(start, end - start + 1);
     }
     return "";
 }
 
 std::string NetworkManager::getApiKey() const {
     if (m_configMgr) {
-        return m_configMgr->getConfig().apiKey;
+        std::string key = m_configMgr->getConfig().apiKey;
+        size_t start = key.find_first_not_of(" \t\r\n");
+        if (start == std::string::npos) return "";
+        size_t end = key.find_last_not_of(" \t\r\n");
+        key = key.substr(start, end - start + 1);
+        if (key.size() >= 2 &&
+            ((key.front() == '"' && key.back() == '"') ||
+             (key.front() == '\'' && key.back() == '\''))) {
+            key = key.substr(1, key.size() - 2);
+        }
+        if (key.size() > 7 && strncasecmp(key.c_str(), "Bearer ", 7) == 0) {
+            key = key.substr(7);
+            size_t kStart = key.find_first_not_of(" \t\r\n");
+            key = (kStart == std::string::npos) ? "" : key.substr(kStart);
+        }
+        return key;
     }
     return "";
 }
@@ -224,60 +243,93 @@ NetworkResult NetworkManager::testConnection() {
         return result;
     }
 
-    CURL* curl = static_cast<CURL*>(acquireCurlHandle());
-    if (!curl) {
-        result.errorMessage = "Failed to initialize curl session.";
+    std::string apiKey = getApiKey();
+    if (apiKey.empty()) {
+        result.errorMessage = "API Key is empty.";
         return result;
     }
 
-    std::string url = buildUrl("/api/heartbeat");
-    std::string responseData;
+    auto performGet = [&](const std::string& path, long& outHttpCode, std::string& outBody, std::string& outErr) -> bool {
+        CURL* curl = static_cast<CURL*>(acquireCurlHandle());
+        if (!curl) {
+            outErr = "Failed to initialize curl session.";
+            return false;
+        }
 
-    struct curl_slist* headers = nullptr;
-    headers = curl_slist_append(headers, "Accept: application/json");
+        std::string url = buildUrl(path);
+        outBody.clear();
 
-    std::string apiKey = getApiKey();
-    if (!apiKey.empty()) {
+        struct curl_slist* headers = nullptr;
+        headers = curl_slist_append(headers, "Accept: application/json");
         std::string authHeader = "Authorization: Bearer " + apiKey;
         std::string xApiKeyHeader = "X-API-Key: " + apiKey;
         headers = curl_slist_append(headers, authHeader.c_str());
         headers = curl_slist_append(headers, xApiKeyHeader.c_str());
+
+        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, headerCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, stringWriteCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &outBody);
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 8L);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
+        curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+        curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, curlXferInfoCallback);
+        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+        curl_easy_setopt(curl, CURLOPT_USERAGENT, getUserAgent());
+
+        CURLcode res = curl_easy_perform(curl);
+        curl_slist_free_all(headers);
+
+        if (res != CURLE_OK) {
+            outErr = (res == CURLE_ABORTED_BY_CALLBACK) ? "Operation cancelled." : curl_easy_strerror(res);
+            return false;
+        }
+
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &outHttpCode);
+        return true;
+    };
+
+    long httpCode = 0;
+    std::string responseData;
+    std::string errMsg;
+
+    // 1. Check server reachability via /api/heartbeat
+    if (!performGet("/api/heartbeat", httpCode, responseData, errMsg)) {
+        result.errorMessage = errMsg;
+        return result;
+    }
+    result.httpCode = httpCode;
+    result.responseBody = responseData;
+    if (httpCode < 200 || httpCode >= 300) {
+        if (httpCode == 401 || httpCode == 403) {
+            result.errorMessage = "Authentication failed (HTTP " + std::to_string(httpCode) + ": Invalid API Key).";
+        } else {
+            result.errorMessage = "Server responded with HTTP " + std::to_string(httpCode);
+        }
+        return result;
     }
 
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, headerCallback);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, stringWriteCallback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseData);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 8L);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
-    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
-    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, curlXferInfoCallback);
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, getUserAgent());
-
-    CURLcode res = curl_easy_perform(curl);
-    if (res == CURLE_OK) {
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &result.httpCode);
-        result.responseBody = responseData;
-        if (result.httpCode >= 200 && result.httpCode < 300) {
-            result.success = true;
-        } else if (result.httpCode == 401 || result.httpCode == 403) {
-            result.errorMessage = "Authentication failed (Invalid API Key).";
-        } else {
-            result.errorMessage = "Server responded with HTTP " + std::to_string(result.httpCode);
-        }
+    // 2. Verify API key authentication against a protected endpoint (/api/platforms)
+    // since /api/heartbeat is public on RomM and returns 200 even with invalid credentials.
+    if (!performGet("/api/platforms", httpCode, responseData, errMsg)) {
+        result.errorMessage = errMsg;
+        return result;
+    }
+    result.httpCode = httpCode;
+    result.responseBody = responseData;
+    if (httpCode >= 200 && httpCode < 300) {
+        result.success = true;
+    } else if (httpCode == 401) {
+        result.errorMessage = "Authentication failed (HTTP 401: Invalid or expired API Key).";
+    } else if (httpCode == 403) {
+        result.errorMessage = "Authentication failed (HTTP 403: API Key lacks required permissions).";
     } else {
-        if (res == CURLE_ABORTED_BY_CALLBACK) {
-            result.errorMessage = "Operation cancelled.";
-        } else {
-            result.errorMessage = curl_easy_strerror(res);
-        }
+        result.errorMessage = "Auth check failed with HTTP " + std::to_string(httpCode);
     }
 
-    curl_slist_free_all(headers);
     return result;
 }
 
